@@ -24,6 +24,41 @@ logging.basicConfig(
 # TOKEN
 # ------------------------------------------------------------------
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def load_bot_token_from_env_file():
+    """Read BOT_TOKEN from ENV/.env and return it as a plain string."""
+    env_file = os.path.join(BASE_DIR, "ENV", ".env")
+
+    # Give a clear startup error when the expected ENV/.env file does not exist.
+    if not os.path.isfile(env_file):
+        raise FileNotFoundError(f"Missing environment file: {env_file}")
+
+    with open(env_file, "r", encoding="utf-8") as file:
+        for raw_line in file:
+            line = raw_line.strip()
+
+            # Ignore blank lines and comments so standard .env formatting is supported.
+            if not line or line.startswith("#"):
+                continue
+
+            # Ignore malformed lines that do not contain a key/value pair.
+            if "=" not in line:
+                continue
+
+            key, value = line.split("=", 1)
+            normalized_key = key.strip().removeprefix("export ").strip()
+
+            if normalized_key == "BOT_TOKEN":
+                # Remove optional surrounding quotes from the token value.
+                return value.strip().strip('"').strip("'")
+
+    raise RuntimeError(f"BOT_TOKEN was not found in {env_file}")
+
+
+TOKEN = load_bot_token_from_env_file()
+
 
 
 # ------------------------------------------------------------------
@@ -37,7 +72,6 @@ bot = commands.Bot(command_prefix="RPA ", intents=intents, help_command=None)
 # COG DISCOVERY / LOADING (from ./COGS)
 # ------------------------------------------------------------------
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 COGS_DIR = os.path.join(BASE_DIR, "COGS")
 
 # Ensure imports like "COGS.SomeCog" work regardless of cwd

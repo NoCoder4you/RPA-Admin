@@ -1,0 +1,235 @@
+{
+  "EmployeeRoles": [
+    {
+      "role_id": 1249815084302336050,
+      "role_name": "Foundation",
+      "group_id": "g-hhus-d6d09070173e6b90faf8acb12e920281",
+      "group_name": "[RPA] Foundation",
+      "rpaemployee": "yes",
+      "iC": "yes"
+    },
+    {
+      "role_id": 1249814481622663291,
+      "role_name": "Foundation Rep.",
+      "group_id": "g-hhus-a25758c1650c56e663e2074f1160dd9c",
+      "group_name": "[RPA] Foundation Rep.",
+      "rpaemployee": "yes",
+      "iC": "yes"
+    },
+    {
+      "role_id": 1250835206575886468,
+      "role_name": "Royal Crown",
+      "group_id": "g-hhus-aaffc65de6bf0c718b8730c5699deed7",
+      "group_name": "[RPA] Royal Crown",
+      "rpaemployee": "yes",
+      "iC": "yes"
+    },
+    {
+      "role_id": 1249814946951204874,
+      "role_name": "Crown Directorate",
+      "group_id": "g-hhus-613a6e92551cb1a204b7df6f92a98588",
+      "group_name": "[RPA] Crown Directorate",
+      "rpaemployee": "yes",
+      "iC": "yes"
+    },
+    {
+      "role_id": 1249814886825853008,
+      "role_name": "Royal Command Council",
+      "group_id": "g-hhus-dd58a66160d52f67e6a42294a65b0fc0",
+      "group_name": "[RPA] Royal Command Council",
+      "rpaemployee": "yes",
+      "iC": "yes"
+    },
+    {
+      "role_id": 1249814653006249994,
+      "role_name": "Crown Judiciary",
+      "group_id": "g-hhus-00056a8d56f0a1d4ebac02aa0f8a95fa",
+      "group_name": "[RPA] Crown Judiciary",
+      "rpaemployee": "yes",
+      "iC": "yes"
+    },
+    {
+      "role_id": 1249812768618446961,
+      "role_name": "Trial iC",
+      "group_id": "g-hhus-3d2551c6e619dcb638d985468327312c",
+      "group_name": "[RPA] Trial iC",
+      "rpaemployee": "yes",
+      "iC": "yes"
+    },
+    {
+      "role_id": 1278142154363113522,
+      "role_name": "Crown Executive",
+      "group_id": "g-hhus-bd5d735e465831da8b8b9cc113c856c9",
+      "group_name": "[RPA] Crown Executive",
+      "rpaemployee": "yes"
+    },
+    {
+      "role_id": 1278142090236395613,
+      "role_name": "Royal Administration",
+      "group_id": "g-hhus-379bef85c0c655f21c98b4e845930466",
+      "group_name": "[RPA] Royal Administration",
+      "rpaemployee": "yes"
+    },
+    {
+      "role_id": 1278142129549607016,
+      "role_name": "Leadership",
+      "group_id": "g-hhus-67b001a548de26dbf6d03866fab589bb",
+      "group_name": "[RPA] Leadership",
+      "rpaemployee": "yes"
+    },
+    {
+      "role_id": 1278142014575214696,
+      "role_name": "Crown Council",
+      "group_id": "g-hhus-def4f63d8e35e9905c1290a5514d2403",
+      "group_name": "[RPA] Crown Council",
+      "rpaemployee": "yes"
+    },
+    {
+      "role_id": 1278141969541103690,
+      "role_name": "Executive Command",
+      "group_id": "g-hhus-a7cdef12018f1b1036edabc65816b6fe",
+      "group_name": "[RPA] Executive Command",
+      "rpaemployee": "yes"
+    },
+    {
+      "role_id": 1278141912125014067,
+      "role_name": "High Command",
+      "group_id": "g-hhus-c882e1764fce7c186ebc9deddd67afe7",
+      "group_name": "[RPA] High Command",
+      "rpaemployee": "yes"
+    },
+    {
+      "role_id": 1278141877484523662,
+      "role_name": "Management",
+      "group_id": "g-hhus-ccffd55af2845471879324e1acef7f38",
+      "group_name": "[RPA] Management",
+      "rpaemployee": "yes"
+    },
+    {
+      "role_id": 1278141767597690880,
+      "role_name": "Operations",
+      "group_id": "g-hhus-e2791d1b801d1da4b6f6e82113132e44",
+      "group_name": "[RPA] Operations",
+      "rpaemployee": "yes"
+    },
+    {
+      "role_id": 1278141724299886652,
+      "role_name": "Command",
+      "group_id": "g-hhus-961b819fcbb8ec4ecd485c57c7cb8a04",
+      "group_name": "[RPA] Command",
+      "rpaemployee": "yes"
+    },
+    {
+      "role_id": 1278141699113222205,
+      "role_name": "Training",
+      "group_id": "g-hhus-a5489aea57bbed063bcd83502a0f760f",
+      "group_name": "[RPA] Training",
+      "rpaemployee": "yes"
+    },
+    {
+      "role_id": 1278141568515182622,
+      "role_name": "Security",
+      "group_id": "g-hhus-2b656541b64be8ec7ccf0816d0aab156",
+      "group_name": "[RPA] Security",
+      "rpaemployee": "yes"
+    }
+  ],
+  "SpecialUnits": [
+    {
+      "role_id": 1279211473310191638,
+      "role_name": "Transfer Unit",
+      "group_id": "g-hhus-22224136cf8552a7fd8e7d579b86e9d4",
+      "group_name": "[RPA] Transfer Unit"
+    },
+    {
+      "role_id": 1328499335691767898,
+      "role_name": "Media Team",
+      "group_id": "g-hhus-ddf669f77a807b2175579cd979cfc63c",
+      "group_name": "[RPA] Media Team"
+    },
+    {
+      "role_id": 1288128962634977441,
+      "role_name": "Entertainment Team",
+      "group_id": "g-hhus-b059d505b220ee78fdbe4e9d32f3f01e",
+      "group_name": "[RPA] Entertainment Team"
+    },
+    {
+      "role_id": 1328490933997666346,
+      "role_name": "Internal Affairs",
+      "group_id": "g-hhus-8c64da7f44f28176eadc901ce4ee1c75",
+      "group_name": "[RPA] Internal Affairs"
+    },
+    {
+      "role_id": 1328493632604344340,
+      "role_name": "External Affairs",
+      "group_id": "g-hhus-7b1c3ad53b6cc4a57b85c7ea62e4edfd",
+      "group_name": "[RPA] External Affairs"
+    },
+    {
+      "role_id": 1272297904522006702,
+      "role_name": "Finance Unit",
+      "group_id": "g-hhus-f0d8cd4c746bbc37f6232c9921106c73",
+      "group_name": "[RPA] Finance Unit"
+    }
+  ],
+  "MiscRoles": [
+    {
+      "role_id": 1332731911189303306,
+      "role_name": "Room Rights",
+      "group_id": "g-hhus-e7840633e2297ca1d66bc6932b392779",
+      "group_name": "[RPA] Room Rights",
+      "rpaemployee": "no"
+    },
+    {
+      "role_id": 1346492764396716146,
+      "role_name": "Rank Seller",
+      "group_id": "g-hhus-a32de7b7d55db9c22731405a2564760f",
+      "group_name": "[RPA] Rank Seller",
+      "rpaemployee": "no"
+    },
+    {
+      "role_id": 1249423888677601392,
+      "role_name": "Special Visitor",
+      "group_id": "g-hhus-ab822dbd8ddcf27dd83202d61f17f93f",
+      "group_name": "[RPA] Special Visitor",
+      "rpaemployee": "no"
+    },
+    {
+      "role_id": 1303822085641998346,
+      "role_name": "VIP",
+      "group_id": "g-hhus-10781fbd468226e40776054302fbce5a",
+      "group_name": "[RPA] VIP",
+      "rpaemployee": "no"
+    }
+  ],
+  "Donators": [
+    {
+      "role_id": 1268955216380825620,
+      "role_name": "Ruby Donor",
+      "group_id": "g-hhus-47b7347f0353c2d27a8d4b546b730aac",
+      "group_name": "[RPA] Ruby Donor",
+      "rpaemployee": "no"
+    },
+    {
+      "role_id": 1268954522525630544,
+      "role_name": "Diamond Donor",
+      "group_id": "g-hhus-8fee84c0b8c3ba226f90471b2edfd69b",
+      "group_name": "[RPA] Diamond Donor",
+      "rpaemployee": "no"
+    },
+    {
+      "role_id": 1268954350915682406,
+      "role_name": "Gold Donor",
+      "group_id": "g-hhus-f64edd2156f7739e5d93e4d21a8c8be6",
+      "group_name": "[RPA] Gold Donor",
+      "rpaemployee": "no"
+    },
+    {
+      "role_id": 1268954216295305228,
+      "role_name": "Silver Donor",
+      "group_id": "g-hhus-ecce350f5d8d8f8440c43d994fce0a45",
+      "group_name": "[RPA] Silver Donor",
+      "rpaemployee": "no"
+    }
+  ]
+}

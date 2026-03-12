@@ -28,7 +28,6 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def load_bot_token_from_env_file():
-    """Read BOT_TOKEN from ENV/.env and return it as a plain string."""
     env_file = os.path.join(BASE_DIR, "ENV", ".env")
 
     # Give a clear startup error when the expected ENV/.env file does not exist.

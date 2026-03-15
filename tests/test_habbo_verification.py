@@ -159,6 +159,27 @@ class VerifiedUserStoreTests(unittest.TestCase):
             self.assertFalse(store.is_verified("404"))
             self.assertIsNone(store.get_habbo_username("404"))
 
+    def test_get_all_entries_returns_normalized_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "JSON" / "VerifiedUsers.json"
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(
+                json.dumps([
+                    {"discord_id": 123, "habbo_username": "Siren"},
+                    {"discord_id": "999", "habbo_username": "Other"},
+                ]),
+                encoding="utf-8",
+            )
+
+            store = VerifiedUserStore(file_path=file_path)
+            self.assertEqual(
+                store.get_all_entries(),
+                [
+                    {"discord_id": "123", "habbo_username": "Siren"},
+                    {"discord_id": "999", "habbo_username": "Other"},
+                ],
+            )
+
 
 class ServerConfigStoreTests(unittest.TestCase):
     """Validate single-server audit-channel resolution from serverconfig.json."""

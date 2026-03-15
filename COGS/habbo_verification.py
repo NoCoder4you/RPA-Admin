@@ -55,7 +55,6 @@ class HabboVerificationCog(commands.Cog):
         discord_id = str(interaction.user.id)
 
         # Security: if already verified, always use the stored Habbo account for role sync.
-        # This prevents users from passing another username to /verify and inheriting their roles.
         stored_habbo_name = self.verified_store.get_habbo_username(discord_id)
         if stored_habbo_name:
             try:
@@ -185,7 +184,7 @@ class HabboVerificationCog(commands.Cog):
         )
 
     async def _assign_roles_from_habbo_groups(self, interaction: discord.Interaction, profile: dict) -> tuple[str, list[str]]:
-        """Assign Discord roles using Habbo group memberships and mapping JSON."""
+        """Assign Discord roles from Habbo groups in interaction context."""
 
         if not interaction.guild or not isinstance(interaction.user, discord.Member):
             return "Skipped (roles can only be assigned inside a server).", []
@@ -203,7 +202,7 @@ class HabboVerificationCog(commands.Cog):
         if not role_ids:
             return "No matching roles found from your Habbo groups.", []
 
-        roles_to_add = []
+        roles_to_add: list[discord.Role] = []
         for role_id in role_ids:
             role = interaction.guild.get_role(role_id)
             if role is not None:
@@ -221,7 +220,7 @@ class HabboVerificationCog(commands.Cog):
         return "Assigned: " + ", ".join(role_names), role_names
 
     async def _send_audit_log(self, interaction: discord.Interaction, action: str, details: dict[str, str]) -> None:
-        """Send an audit-style embed to the configured channel from serverconfig.json."""
+        """Send an audit-style embed using the interaction's guild context."""
 
         if not interaction.guild:
             return
@@ -256,7 +255,6 @@ class HabboVerificationCog(commands.Cog):
         if not figure_string:
             return None
 
-        # Habbo imaging endpoint for user avatar previews.
         encoded_figure = quote(figure_string, safe="")
         return (
             "https://www.habbo.com/habbo-imaging/avatarimage"

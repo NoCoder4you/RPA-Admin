@@ -127,6 +127,11 @@ class VerifiedUserStore:
 
         return self.get_habbo_username(discord_id) is not None
 
+    def get_all_entries(self) -> list[dict[str, str]]:
+        """Return all verified Discord-to-Habbo entries for bulk role syncing."""
+
+        return self._read_entries()
+
     def _read_entries(self) -> list[dict[str, str]]:
         """Read JSON file safely and normalize to a list."""
 

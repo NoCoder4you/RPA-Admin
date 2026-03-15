@@ -285,19 +285,18 @@ class HabboVerificationCog(commands.Cog):
 
         embed = discord.Embed(
             title="Habbo Role Sync Update",
-            description="Roles getting added and removed from Habbo role sync.",
             color=discord.Color.green(),
             timestamp=datetime.now(timezone.utc),
         )
-        embed.add_field(name="Source", value=source, inline=False)
-        embed.add_field(name="Discord User", value=f"{member} (`{member.id}`)", inline=False)
-        embed.add_field(name="Habbo Username", value=habbo_username, inline=False)
-        embed.add_field(name="Roles Added", value=", ".join(added_role_names) if added_role_names else "None", inline=False)
-        embed.add_field(
-            name="Roles Removed",
-            value=", ".join(removed_role_names) if removed_role_names else "None",
-            inline=False,
-        )
+
+        # Always mention the user so moderators can jump straight to who was updated.
+        embed.add_field(name="User", value=member.mention, inline=False)
+
+        # Only include role sections when there is an actual role delta to report.
+        if added_role_names:
+            embed.add_field(name="Added Roles", value=", ".join(added_role_names), inline=False)
+        if removed_role_names:
+            embed.add_field(name="Removed Roles", value=", ".join(removed_role_names), inline=False)
 
         try:
             await channel.send(embed=embed)

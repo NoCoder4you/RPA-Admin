@@ -230,7 +230,7 @@ class BadgeRoleMapper:
     def _load_config(self) -> dict:
         """Read role mapping config safely, returning empty categories if unavailable."""
 
-        default = {"EmployeeRoles": [], "SpecialUnits": [], "MiscRoles": [], "Donators": [], "DonationRoles": []}
+        default = {"EmployeeRoles": [], "SpecialUnits": [], "MiscRoles": [], "Donators": []}
         if not self.file_path.exists():
             return default
 

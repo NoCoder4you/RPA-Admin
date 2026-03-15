@@ -167,7 +167,8 @@ class BadgeRoleMapper:
                 break
 
         # Assign all matching roles in other categories.
-        for category in ("SpecialUnits", "MiscRoles", "DonationRoles"):
+        # Support both legacy "DonationRoles" and current "Donators" key names.
+        for category in ("SpecialUnits", "MiscRoles", "Donators", "DonationRoles"):
             for entry in config.get(category, []):
                 group_id = str(entry.get("group_id", ""))
                 if group_id in habbo_group_ids:

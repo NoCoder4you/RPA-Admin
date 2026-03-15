@@ -165,7 +165,7 @@ class BadgeRoleMapperTests(unittest.TestCase):
                         ],
                         "SpecialUnits": [{"role_id": 20, "group_id": "special"}],
                         "MiscRoles": [{"role_id": 30, "group_id": "misc"}],
-                        "DonationRoles": [{"role_id": 40, "group_id": "donor"}],
+                        "Donators": [{"role_id": 40, "group_id": "donor"}],
                     }
                 ),
                 encoding="utf-8",

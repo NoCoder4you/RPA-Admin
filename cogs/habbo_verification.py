@@ -1,0 +1,181 @@
+"""Discord cog implementing slash-command based Habbo motto verification."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+import discord
+from discord import app_commands
+from discord.ext import commands
+
+from habbo_verification_core import (
+    BadgeRoleMapper,
+    HabboApiError,
+    VerificationManager,
+    VerifiedUserStore,
+    fetch_habbo_group_ids,
+    fetch_habbo_profile,
+    motto_contains_code,
+)
+
+
+class HabboVerificationCog(commands.Cog):
+    """Cog for Discord users to verify ownership of a Habbo account via motto code."""
+
+    def __init__(self, bot: commands.Bot) -> None:
+        self.bot = bot
+        # Store one active challenge per Discord user with a fixed 5 minute TTL.
+        self.manager = VerificationManager(ttl_minutes=5)
+        # Persist successful verification links in JSON/VerifiedUsers.json.
+        self.verified_store = VerifiedUserStore()
+        # Resolve Discord roles from Habbo groups using JSON/BadgesToRoles.json.
+        self.badge_role_mapper = BadgeRoleMapper()
+
+    @app_commands.command(
+        name="verify",
+        description="Verify your Habbo account by putting a temporary code in your motto.",
+    )
+    @app_commands.describe(
+        habbo_name="Your Habbo username",
+    )
+    async def verify(
+        self,
+        interaction: discord.Interaction,
+        habbo_name: str,
+    ) -> None:
+        """Create/check a verification challenge and validate against Habbo public API."""
+
+        challenge = self.manager.get_or_create(interaction.user.id, habbo_name)
+
+        # Check the active challenge and validate the Habbo motto in one command call.
+        if challenge.code and self.manager.get_active(interaction.user.id) == challenge:
+            # Attempt the API check immediately so users can run the same command repeatedly
+            # after updating their motto without needing a second command.
+            try:
+                profile = fetch_habbo_profile(habbo_name)
+            except HabboApiError as exc:
+                await interaction.response.send_message(
+                    embed=self._build_embed(
+                        title="Habbo API Error",
+                        description=(
+                            "I could not fetch your Habbo profile right now. "
+                            "Please try again in a moment."
+                        ),
+                        challenge_code=challenge.code,
+                        expires_at=challenge.expires_at,
+                        color=discord.Color.orange(),
+                        extra_field=("Error", str(exc)),
+                    ),
+                    ephemeral=True,
+                )
+                return
+
+            if motto_contains_code(profile, challenge.code):
+                # Save the successful verification mapping as requested:
+                # discord_id (string) + habbo_username (string).
+                self.verified_store.save(
+                    discord_id=str(interaction.user.id),
+                    habbo_username=str(profile.get("name", habbo_name)),
+                )
+
+                # After successful verification, assign roles from Habbo group memberships.
+                role_status = await self._assign_roles_from_habbo_groups(interaction, profile)
+
+                self.manager.clear(interaction.user.id)
+                await interaction.response.send_message(
+                    embed=self._build_embed(
+                        title="Verification Successful",
+                        description=(
+                            "Your Habbo motto includes the verification code. "
+                            "You are now verified and your link has been saved."
+                        ),
+                        challenge_code=challenge.code,
+                        expires_at=challenge.expires_at,
+                        color=discord.Color.green(),
+                        extra_field=("Role Sync", role_status),
+                    ),
+                    ephemeral=True,
+                )
+                return
+
+            await interaction.response.send_message(
+                embed=self._build_embed(
+                    title="Verification Failed",
+                    description=(
+                        "Your Habbo motto does not include the verification code yet. "
+                        "Add the code below, save your motto, and run /verify again."
+                    ),
+                    challenge_code=challenge.code,
+                    expires_at=challenge.expires_at,
+                    color=discord.Color.red(),
+                    extra_field=("Current Motto", str(profile.get("motto", "(empty)"))),
+                ),
+                ephemeral=True,
+            )
+
+    async def _assign_roles_from_habbo_groups(self, interaction: discord.Interaction, profile: dict) -> str:
+        """Assign Discord roles using Habbo group memberships and mapping JSON."""
+
+        # Role assignment only makes sense in a guild where interaction.user is a Member.
+        if not interaction.guild or not isinstance(interaction.user, discord.Member):
+            return "Skipped (roles can only be assigned inside a server)."
+
+        unique_id = str(profile.get("uniqueId", "")).strip()
+        if not unique_id:
+            return "Skipped (Habbo profile has no uniqueId for group lookup)."
+
+        try:
+            habbo_group_ids = fetch_habbo_group_ids(unique_id)
+            role_ids = self.badge_role_mapper.resolve_role_ids(habbo_group_ids)
+        except HabboApiError:
+            return "Skipped (could not fetch Habbo groups right now)."
+
+        if not role_ids:
+            return "No matching roles found from your Habbo groups."
+
+        roles_to_add = []
+        for role_id in role_ids:
+            role = interaction.guild.get_role(role_id)
+            if role is not None:
+                roles_to_add.append(role)
+
+        if not roles_to_add:
+            return "No mapped roles exist in this server."
+
+        try:
+            # atomic=False keeps adding valid roles even if one role becomes invalid.
+            await interaction.user.add_roles(*roles_to_add, reason="Habbo verification role sync", atomic=False)
+        except discord.Forbidden:
+            return "Failed (bot lacks permission to assign one or more roles)."
+
+        return "Assigned: " + ", ".join(role.name for role in roles_to_add)
+
+    @staticmethod
+    def _build_embed(
+        *,
+        title: str,
+        description: str,
+        challenge_code: str,
+        expires_at: datetime,
+        color: discord.Color,
+        extra_field: tuple[str, str] | None = None,
+    ) -> discord.Embed:
+        """Return a consistent, concise embed for all verification states."""
+
+        embed = discord.Embed(title=title, description=description, color=color)
+        embed.add_field(name="Verification Code", value=f"`{challenge_code}`", inline=False)
+        embed.add_field(
+            name="Expires",
+            value=f"<t:{int(expires_at.replace(tzinfo=timezone.utc).timestamp())}:R>",
+            inline=True,
+        )
+        embed.add_field(name="How to Verify", value="1) Put code in motto\n2) Save\n3) Run /verify", inline=False)
+        if extra_field:
+            embed.add_field(name=extra_field[0], value=extra_field[1], inline=False)
+        return embed
+
+
+async def setup(bot: commands.Bot) -> None:
+    """discord.py extension entry point."""
+
+    await bot.add_cog(HabboVerificationCog(bot))

@@ -49,6 +49,9 @@ class HabboVerificationCog(commands.Cog):
     ) -> None:
         """Create/check a verification challenge and validate against Habbo public API."""
 
+        # Defer immediately so slow Habbo API calls do not expire the interaction.
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
         discord_id = str(interaction.user.id)
 
         # Security: if already verified, always use the stored Habbo account for role sync.
@@ -58,7 +61,7 @@ class HabboVerificationCog(commands.Cog):
             try:
                 stored_profile = fetch_habbo_profile(stored_habbo_name)
             except HabboApiError as exc:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     embed=self._build_embed(
                         title="Already Verified",
                         description=(
@@ -86,7 +89,7 @@ class HabboVerificationCog(commands.Cog):
                     "assigned_roles": ", ".join(assigned_role_names) if assigned_role_names else "none",
                 },
             )
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=self._build_embed(
                     title="Already Verified",
                     description=(
@@ -108,7 +111,7 @@ class HabboVerificationCog(commands.Cog):
             profile = fetch_habbo_profile(habbo_name)
         except HabboApiError as exc:
             challenge = self.manager.get_or_create(interaction.user.id, habbo_name)
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=self._build_embed(
                     title="Habbo API Error",
                     description=(
@@ -148,7 +151,7 @@ class HabboVerificationCog(commands.Cog):
             )
 
             self.manager.clear(interaction.user.id)
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=self._build_embed(
                     title="Verification Successful",
                     description=(
@@ -165,7 +168,7 @@ class HabboVerificationCog(commands.Cog):
             )
             return
 
-        await interaction.response.send_message(
+        await interaction.followup.send(
             embed=self._build_embed(
                 title="Verification Failed",
                 description=(

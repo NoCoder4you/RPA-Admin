@@ -33,7 +33,7 @@ class HabboRoleUpdaterCog(commands.Cog):
 
         self.automatic_role_updater.cancel()
 
-    @tasks.loop(minutes=1)
+    @tasks.loop(minutes=10)
     async def automatic_role_updater(self) -> None:
         """Periodically synchronize roles for all users in VerifiedUsers.json."""
 

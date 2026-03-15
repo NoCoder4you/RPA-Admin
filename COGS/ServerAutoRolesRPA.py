@@ -33,7 +33,7 @@ class HabboRoleUpdaterCog(commands.Cog):
 
         self.automatic_role_updater.cancel()
 
-    @tasks.loop(minutes=1)
+    @tasks.loop(minutes=10)
     async def automatic_role_updater(self) -> None:
         """Periodically synchronize roles for all users in VerifiedUsers.json."""
 
@@ -50,7 +50,7 @@ class HabboRoleUpdaterCog(commands.Cog):
         description="Manually run the automatic verified-user role updater now.",
     )
     @app_commands.checks.has_permissions(manage_roles=True)
-    async def update_verified_roles(self, interaction: discord.Interaction) -> None:
+    async def UVA(self, interaction: discord.Interaction) -> None:
         """Manually trigger standalone updater and return a concise summary."""
 
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -69,7 +69,7 @@ class HabboRoleUpdaterCog(commands.Cog):
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @update_verified_roles.error
+    @UVA.error
     async def update_verified_roles_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
         """Provide clear feedback when permission checks fail."""
 

@@ -127,14 +127,8 @@ class HabboRoleUpdaterCog(commands.Cog):
             else:
                 summary["skipped"] += 1
 
-            await self._send_role_change_embed(
-                guild=guild,
-                member=member,
-                habbo_username=habbo_username,
-                source=trigger,
-                added_role_names=added_role_names,
-                removed_role_names=removed_role_names,
-            )
+            # Keep updater logging to a single audit embed per member sync so the audit channel
+            # does not receive duplicate messages for one action.
 
             await self._send_audit_log_for_guild(
                 guild=guild,
@@ -224,47 +218,6 @@ class HabboRoleUpdaterCog(commands.Cog):
             )
 
         return status, added_role_names, removed_role_names
-
-    async def _send_role_change_embed(
-        self,
-        *,
-        guild: discord.Guild,
-        member: discord.Member,
-        habbo_username: str,
-        source: str,
-        added_role_names: list[str],
-        removed_role_names: list[str],
-    ) -> None:
-        """Send a dedicated embed that clearly shows added and removed roles."""
-
-        channel_id = self.server_config_store.get_audit_channel_id()
-        if channel_id is None:
-            return
-
-        channel = guild.get_channel(channel_id)
-        if channel is None:
-            return
-
-        embed = discord.Embed(
-            title="Habbo Role Sync Update",
-            description="Roles getting added and removed from Habbo role sync.",
-            color=discord.Color.green(),
-            timestamp=datetime.now(timezone.utc),
-        )
-        embed.add_field(name="Source", value=source, inline=False)
-        embed.add_field(name="Discord User", value=f"{member} (`{member.id}`)", inline=False)
-        embed.add_field(name="Habbo Username", value=habbo_username, inline=False)
-        embed.add_field(name="Roles Added", value=", ".join(added_role_names) if added_role_names else "None", inline=False)
-        embed.add_field(
-            name="Roles Removed",
-            value=", ".join(removed_role_names) if removed_role_names else "None",
-            inline=False,
-        )
-
-        try:
-            await channel.send(embed=embed)
-        except (discord.Forbidden, discord.HTTPException):
-            return
 
     async def _send_audit_log_for_guild(self, guild: discord.Guild, action: str, details: dict[str, str]) -> None:
         """Send an audit-style embed to the configured channel from serverconfig.json."""

@@ -49,12 +49,69 @@ class HabboVerificationCog(commands.Cog):
     ) -> None:
         """Create/check a verification challenge and validate against Habbo public API."""
 
-        # Fetch profile first so we can also use avatar figure in embeds.
+        # Defer immediately so slow Habbo API calls do not expire the interaction.
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        discord_id = str(interaction.user.id)
+
+        # Security: if already verified, always use the stored Habbo account for role sync.
+        # This prevents users from passing another username to /verify and inheriting their roles.
+        stored_habbo_name = self.verified_store.get_habbo_username(discord_id)
+        if stored_habbo_name:
+            try:
+                stored_profile = fetch_habbo_profile(stored_habbo_name)
+            except HabboApiError as exc:
+                await interaction.followup.send(
+                    embed=self._build_embed(
+                        title="Already Verified",
+                        description=(
+                            "You are already verified, but I could not refresh your stored Habbo profile "
+                            "for role sync right now. Please try again in a moment."
+                        ),
+                        challenge_code="N/A",
+                        expires_at=datetime.now(timezone.utc),
+                        color=discord.Color.orange(),
+                        extra_field=("Error", str(exc)),
+                    ),
+                    ephemeral=True,
+                )
+                return
+
+            role_status, assigned_role_names = await self._assign_roles_from_habbo_groups(interaction, stored_profile)
+            await self._send_audit_log(
+                interaction=interaction,
+                action="habbo_verification_already_verified",
+                details={
+                    "discord_user_id": discord_id,
+                    "discord_user": str(interaction.user),
+                    "habbo_username": stored_habbo_name,
+                    "role_sync_status": role_status,
+                    "assigned_roles": ", ".join(assigned_role_names) if assigned_role_names else "none",
+                },
+            )
+            await interaction.followup.send(
+                embed=self._build_embed(
+                    title="Already Verified",
+                    description=(
+                        "You are already verified, so you do not need to add a new code to your motto. "
+                        "I have synced your roles from your stored verified Habbo account."
+                    ),
+                    challenge_code="N/A",
+                    expires_at=datetime.now(timezone.utc),
+                    color=discord.Color.blue(),
+                    extra_field=("Role Sync", role_status),
+                    thumbnail_url=self._build_avatar_thumbnail_url(stored_profile),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        # First-time verification path: use the currently provided Habbo name.
         try:
             profile = fetch_habbo_profile(habbo_name)
         except HabboApiError as exc:
             challenge = self.manager.get_or_create(interaction.user.id, habbo_name)
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=self._build_embed(
                     title="Habbo API Error",
                     description=(
@@ -70,46 +127,12 @@ class HabboVerificationCog(commands.Cog):
             )
             return
 
-        # If the user is already verified, do not require a new motto code again.
-        if self.verified_store.is_verified(str(interaction.user.id)):
-            verified_habbo_name = self.verified_store.get_habbo_username(str(interaction.user.id)) or str(
-                profile.get("name", habbo_name)
-            )
-            role_status, assigned_role_names = await self._assign_roles_from_habbo_groups(interaction, profile)
-            await self._send_audit_log(
-                interaction=interaction,
-                action="habbo_verification_already_verified",
-                details={
-                    "discord_user_id": str(interaction.user.id),
-                    "discord_user": str(interaction.user),
-                    "habbo_username": verified_habbo_name,
-                    "role_sync_status": role_status,
-                    "assigned_roles": ", ".join(assigned_role_names) if assigned_role_names else "none",
-                },
-            )
-            await interaction.response.send_message(
-                embed=self._build_embed(
-                    title="Already Verified",
-                    description=(
-                        "You are already verified, so you do not need to add a new code to your motto. "
-                        "I have synced your roles based on your Habbo groups."
-                    ),
-                    challenge_code="N/A",
-                    expires_at=datetime.now(timezone.utc),
-                    color=discord.Color.blue(),
-                    extra_field=("Role Sync", role_status),
-                    thumbnail_url=self._build_avatar_thumbnail_url(profile),
-                ),
-                ephemeral=True,
-            )
-            return
-
         challenge = self.manager.get_or_create(interaction.user.id, habbo_name)
 
         if motto_contains_code(profile, challenge.code):
             verified_habbo_name = str(profile.get("name", habbo_name))
             self.verified_store.save(
-                discord_id=str(interaction.user.id),
+                discord_id=discord_id,
                 habbo_username=verified_habbo_name,
             )
 
@@ -118,7 +141,7 @@ class HabboVerificationCog(commands.Cog):
                 interaction=interaction,
                 action="habbo_verification_success",
                 details={
-                    "discord_user_id": str(interaction.user.id),
+                    "discord_user_id": discord_id,
                     "discord_user": str(interaction.user),
                     "habbo_username": verified_habbo_name,
                     "saved_mapping": "yes",
@@ -128,7 +151,7 @@ class HabboVerificationCog(commands.Cog):
             )
 
             self.manager.clear(interaction.user.id)
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=self._build_embed(
                     title="Verification Successful",
                     description=(
@@ -145,7 +168,7 @@ class HabboVerificationCog(commands.Cog):
             )
             return
 
-        await interaction.response.send_message(
+        await interaction.followup.send(
             embed=self._build_embed(
                 title="Verification Failed",
                 description=(

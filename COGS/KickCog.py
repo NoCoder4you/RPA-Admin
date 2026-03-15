@@ -1,3 +1,5 @@
+"""Discord cog that provides a moderation `/kick` slash command."""
+
 from __future__ import annotations
 
 import discord
@@ -54,6 +56,22 @@ class KickCog(commands.Cog):
             )
             return
 
+        # Try to notify the target user first so they understand who initiated the action and why.
+        # If DMs are closed (or Discord rejects the DM), continue with the kick instead of blocking moderation.
+        pre_kick_dm_sent = False
+        try:
+            await mention.send(
+                (
+                    f"You are being kicked from **{interaction.guild.name}**.\n"
+                    f"**Moderator:** {interaction.user}\n"
+                    f"**Reason:** {reason}"
+                )
+            )
+            pre_kick_dm_sent = True
+        except Exception:
+            # DM delivery is best-effort; any error should not prevent the moderation action.
+            pre_kick_dm_sent = False
+
         try:
             await mention.kick(reason=f"{interaction.user} - {reason}")
         except discord.Forbidden:
@@ -70,8 +88,13 @@ class KickCog(commands.Cog):
             return
 
         # Confirm success with a concise moderation message visible to command invoker.
+        dm_status_note = (
+            "I sent them a DM with the reason before kicking."
+            if pre_kick_dm_sent
+            else "I could not DM them first (likely due to their privacy settings)."
+        )
         await interaction.response.send_message(
-            f"✅ Kicked {mention.mention} for reason: {reason}",
+            f"✅ Kicked {mention.mention} for reason: {reason}\n{dm_status_note}",
             ephemeral=True,
         )
 

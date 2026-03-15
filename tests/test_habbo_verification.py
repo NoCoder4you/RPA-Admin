@@ -229,6 +229,28 @@ class BadgeRoleMapperTests(unittest.TestCase):
 
             self.assertEqual(role_ids, [10, 20, 30, 40])
 
+    def test_get_all_mapped_role_ids_includes_all_supported_categories(self) -> None:
+        """Ensure stale-role cleanup can rely on a full managed-role set."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mapping_path = Path(temp_dir) / "BadgesToRoles.json"
+            mapping_path.write_text(
+                json.dumps(
+                    {
+                        "EmployeeRoles": [{"role_id": 10, "group_id": "foundation"}],
+                        "SpecialUnits": [{"role_id": "20", "group_id": "special"}],
+                        "MiscRoles": [{"role_id": 30, "group_id": "misc"}],
+                        "Donators": [{"role_id": 40, "group_id": "donor"}],
+                        # Legacy category is still supported in production configs.
+                        "DonationRoles": [{"role_id": 50, "group_id": "legacy_donor"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            mapper = BadgeRoleMapper(file_path=mapping_path)
+            self.assertEqual(mapper.get_all_mapped_role_ids(), {10, 20, 30, 40, 50})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 try:
     import discord
-    from COGS.habbo_verification import HabboVerificationCog
+    from COGS.ServerVerifyRPA import HabboVerificationCog
 except ModuleNotFoundError as exc:  # pragma: no cover - environment-dependent test skip
     raise unittest.SkipTest(f"discord.py is not installed in this environment: {exc}")
 

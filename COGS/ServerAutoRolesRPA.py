@@ -33,7 +33,7 @@ class HabboRoleUpdaterCog(commands.Cog):
 
         self.automatic_role_updater.cancel()
 
-    @tasks.loop(minutes=10)
+    @tasks.loop(minutes=1)
     async def automatic_role_updater(self) -> None:
         """Periodically synchronize roles for all users in VerifiedUsers.json."""
 
@@ -127,9 +127,6 @@ class HabboRoleUpdaterCog(commands.Cog):
             else:
                 summary["skipped"] += 1
 
-            # Send one dedicated updater embed per member sync. This keeps the feed concise and
-            # avoids noisy metadata fields when moderators only care about who changed and what
-            # roles were affected.
             await self._send_role_change_embed_for_guild(
                 guild=guild,
                 member=member,

@@ -77,8 +77,6 @@ class HabboVerificationCog(commands.Cog):
                 return
 
             role_status, added_role_names, removed_role_names = await self._assign_roles_from_habbo_groups(interaction, stored_profile)
-            # Keep the Discord nickname aligned with the already-verified Habbo username.
-            nickname_status = await self._sync_member_nickname(interaction, stored_habbo_name)
             await self._send_audit_log(
                 interaction=interaction,
                 action="habbo_verification_already_verified",
@@ -87,7 +85,6 @@ class HabboVerificationCog(commands.Cog):
                     "discord_user": str(interaction.user),
                     "habbo_username": stored_habbo_name,
                     "role_sync_status": role_status,
-                    "nickname_sync_status": nickname_status,
                     "roles_added": ", ".join(added_role_names) if added_role_names else "none",
                     "roles_removed": ", ".join(removed_role_names) if removed_role_names else "none",
                 },
@@ -140,8 +137,6 @@ class HabboVerificationCog(commands.Cog):
             )
 
             role_status, added_role_names, removed_role_names = await self._assign_roles_from_habbo_groups(interaction, profile)
-            # On successful verification, set nickname to the confirmed Habbo username.
-            nickname_status = await self._sync_member_nickname(interaction, verified_habbo_name)
             await self._send_audit_log(
                 interaction=interaction,
                 action="habbo_verification_success",
@@ -151,7 +146,6 @@ class HabboVerificationCog(commands.Cog):
                     "habbo_username": verified_habbo_name,
                     "saved_mapping": "yes",
                     "role_sync_status": role_status,
-                    "nickname_sync_status": nickname_status,
                     "roles_added": ", ".join(added_role_names) if added_role_names else "none",
                     "roles_removed": ", ".join(removed_role_names) if removed_role_names else "none",
                 },
@@ -255,7 +249,7 @@ class HabboVerificationCog(commands.Cog):
         else:
             status = (
                 f"Added: {', '.join(added_role_names) if added_role_names else 'none'} | "
-                f"Removed: {', '.join(removed_role_names) if removed_role_names else 'none'}"
+                f"Removed: {' '.join(removed_role_names) if removed_role_names else 'none'} "
             )
 
         await self._send_role_change_embed(
@@ -268,31 +262,6 @@ class HabboVerificationCog(commands.Cog):
         )
 
         return status, added_role_names, removed_role_names
-
-    async def _sync_member_nickname(self, interaction: discord.Interaction, habbo_username: str) -> str:
-        """Set a verified member nickname to their Habbo username when possible."""
-
-        if not interaction.guild or not hasattr(interaction.user, "edit"):
-            return "Skipped (nickname can only be changed inside a server)."
-
-        desired_nickname = habbo_username.strip()
-        if not desired_nickname:
-            return "Skipped (no Habbo username available for nickname update)."
-
-        if interaction.user.nick == desired_nickname:
-            return "No nickname changes were required."
-
-        try:
-            await interaction.user.edit(
-                nick=desired_nickname,
-                reason="Habbo verification nickname sync",
-            )
-        except discord.Forbidden:
-            return "Failed (bot lacks permission to manage this nickname)."
-        except discord.HTTPException:
-            return "Failed (Discord rejected the nickname update)."
-
-        return "Nickname updated to verified Habbo username."
 
     async def _send_role_change_embed(
         self,

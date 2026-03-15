@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 try:
-    from COGS.habbo_role_updater import HabboRoleUpdaterCog
+    from COGS.ServerAutoRolesRPA import HabboRoleUpdaterCog
 except ModuleNotFoundError as import_error:  # pragma: no cover - environment-dependent test skip
     HabboRoleUpdaterCog = None
 

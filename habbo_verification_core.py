@@ -48,11 +48,7 @@ class VerificationManager:
         self._challenges: dict[int, VerificationChallenge] = {}
 
     def get_or_create(self, discord_user_id: int, habbo_name: str) -> VerificationChallenge:
-        """Get an active challenge or generate a new one when expired/missing.
-
-        A challenge is tied to both the Discord user and Habbo name. If the user submits
-        a different Habbo name, a new challenge is created to avoid cross-account confusion.
-        """
+        """Get an active challenge or generate a new one when expired/missing."""
 
         current = self._challenges.get(discord_user_id)
         now = self._now_fn()
@@ -94,13 +90,7 @@ class VerificationManager:
 
 
 class VerifiedUserStore:
-    """Persist verified Discord-to-Habbo mappings in JSON/VerifiedUsers.json.
-
-    The JSON shape is a list of objects:
-    [
-      {"discord_id": "123", "habbo_username": "Siren"}
-    ]
-    """
+    """Persist verified Discord-to-Habbo mappings in JSON/VerifiedUsers.json."""
 
     def __init__(self, file_path: Path | None = None) -> None:
         root_path = Path(__file__).resolve().parent
@@ -110,8 +100,6 @@ class VerifiedUserStore:
         """Create/update one verified mapping and write it to disk."""
 
         entries = self._read_entries()
-
-        # Update the existing entry for this Discord account, otherwise append a new one.
         updated = False
         for entry in entries:
             if entry.get("discord_id") == discord_id:
@@ -134,7 +122,6 @@ class VerifiedUserStore:
         try:
             data = json.loads(self.file_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
-            # Corrupted JSON should not crash verification; start from a clean list.
             return []
 
         if not isinstance(data, list):
@@ -152,18 +139,74 @@ class VerifiedUserStore:
         return normalized
 
 
+class BadgeRoleMapper:
+    """Map Habbo group memberships to Discord role IDs via JSON/BadgesToRoles.json."""
+
+    def __init__(self, file_path: Path | None = None) -> None:
+        root_path = Path(__file__).resolve().parent
+        self.file_path = file_path or (root_path / "JSON" / "BadgesToRoles.json")
+
+    def resolve_role_ids(self, habbo_group_ids: set[str]) -> list[int]:
+        """Return role IDs for matching groups with employee-role hierarchy rules.
+
+        Employee roles are mutually exclusive: assign only the *highest* role the user
+        qualifies for. Highest-to-lowest priority follows the order in EmployeeRoles in
+        BadgesToRoles.json, where Foundation should appear before Security.
+        """
+
+        config = self._load_config()
+        role_ids: list[int] = []
+
+        # Assign one highest employee role based on file order (top = highest rank).
+        for entry in config.get("EmployeeRoles", []):
+            group_id = str(entry.get("group_id", ""))
+            if group_id in habbo_group_ids:
+                role_id = self._safe_int(entry.get("role_id"))
+                if role_id is not None:
+                    role_ids.append(role_id)
+                break
+
+        # Assign all matching roles in other categories.
+        for category in ("SpecialUnits", "MiscRoles", "DonationRoles"):
+            for entry in config.get(category, []):
+                group_id = str(entry.get("group_id", ""))
+                if group_id in habbo_group_ids:
+                    role_id = self._safe_int(entry.get("role_id"))
+                    if role_id is not None:
+                        role_ids.append(role_id)
+
+        return role_ids
+
+    def _load_config(self) -> dict:
+        """Read role mapping config safely, returning empty categories if unavailable."""
+
+        default = {"EmployeeRoles": [], "SpecialUnits": [], "MiscRoles": [], "DonationRoles": []}
+        if not self.file_path.exists():
+            return default
+
+        try:
+            data = json.loads(self.file_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return default
+
+        if not isinstance(data, dict):
+            return default
+        return data
+
+    @staticmethod
+    def _safe_int(value: object) -> int | None:
+        """Convert supported role-id values to int, returning None for invalid values."""
+
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+
 def fetch_habbo_profile(habbo_name: str) -> dict:
-    """Fetch a Habbo public user profile JSON document.
-
-    Args:
-        habbo_name: Habbo username to query.
-
-    Raises:
-        HabboApiError: if the API call fails or data is malformed.
-    """
+    """Fetch a Habbo public user profile JSON document."""
 
     encoded_name = parse.quote(habbo_name)
-    # This project verifies against the main .com hotel API only.
     url = f"https://www.habbo.com/api/public/users?name={encoded_name}"
 
     try:
@@ -181,6 +224,36 @@ def fetch_habbo_profile(habbo_name: str) -> dict:
         raise HabboApiError("Habbo API response is missing expected profile fields.")
 
     return data
+
+
+def fetch_habbo_group_ids(habbo_unique_id: str) -> set[str]:
+    """Fetch public Habbo groups for a user and return normalized group IDs."""
+
+    encoded_id = parse.quote(habbo_unique_id)
+    url = f"https://www.habbo.com/api/public/users/{encoded_id}/groups"
+
+    try:
+        with request.urlopen(url, timeout=10) as response:
+            payload = response.read().decode("utf-8")
+    except (HTTPError, URLError, TimeoutError) as exc:
+        raise HabboApiError(f"Failed to fetch Habbo groups: {exc}") from exc
+
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise HabboApiError("Habbo groups API returned invalid JSON.") from exc
+
+    if not isinstance(data, list):
+        raise HabboApiError("Habbo groups API response is missing expected list format.")
+
+    group_ids: set[str] = set()
+    for group in data:
+        if isinstance(group, dict):
+            # Group identifiers can be exposed under different keys; keep extraction tolerant.
+            group_id = group.get("groupId") or group.get("id") or group.get("uniqueId")
+            if group_id:
+                group_ids.add(str(group_id))
+    return group_ids
 
 
 def motto_contains_code(profile: dict, challenge_code: str) -> bool:

@@ -10,9 +10,11 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from habbo_verification_core import (
+    BadgeRoleMapper,
     HabboApiError,
     VerificationManager,
     VerifiedUserStore,
+    fetch_habbo_group_ids,
     fetch_habbo_profile,
     motto_contains_code,
 )
@@ -56,7 +58,7 @@ class VerificationManagerTests(unittest.TestCase):
 
 
 class HabboApiTests(unittest.TestCase):
-    """Validate Habbo API parsing and motto code checks."""
+    """Validate Habbo API parsing and motto/group checks."""
 
     @patch("habbo_verification_core.request.urlopen")
     def test_fetch_habbo_profile_parses_json(self, mock_urlopen: MagicMock) -> None:
@@ -90,6 +92,20 @@ class HabboApiTests(unittest.TestCase):
 
         called_url = mock_urlopen.call_args.args[0]
         self.assertIn("https://www.habbo.com/api/public/users?name=Siren", called_url)
+
+    @patch("habbo_verification_core.request.urlopen")
+    def test_fetch_habbo_group_ids_extracts_multiple_id_shapes(self, mock_urlopen: MagicMock) -> None:
+        """Accept different group ID field names from Habbo groups API payloads."""
+
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps(
+            [{"groupId": "g-1"}, {"id": "g-2"}, {"uniqueId": "g-3"}, {"other": 1}]
+        ).encode("utf-8")
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        group_ids = fetch_habbo_group_ids("hhus-abc")
+
+        self.assertEqual(group_ids, {"g-1", "g-2", "g-3"})
 
     def test_motto_contains_code(self) -> None:
         profile = {"motto": "Hello CODE42 world"}
@@ -131,6 +147,34 @@ class VerifiedUserStoreTests(unittest.TestCase):
                     {"discord_id": "999", "habbo_username": "Other"},
                 ],
             )
+
+
+class BadgeRoleMapperTests(unittest.TestCase):
+    """Validate role mapping and employee-role hierarchy behavior."""
+
+    def test_resolve_role_ids_selects_highest_employee_plus_other_categories(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mapping_path = Path(temp_dir) / "BadgesToRoles.json"
+            mapping_path.write_text(
+                json.dumps(
+                    {
+                        # Order is highest-to-lowest and must choose only one employee role.
+                        "EmployeeRoles": [
+                            {"role_id": 10, "group_id": "foundation"},
+                            {"role_id": 11, "group_id": "security"},
+                        ],
+                        "SpecialUnits": [{"role_id": 20, "group_id": "special"}],
+                        "MiscRoles": [{"role_id": 30, "group_id": "misc"}],
+                        "DonationRoles": [{"role_id": 40, "group_id": "donor"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            mapper = BadgeRoleMapper(file_path=mapping_path)
+            role_ids = mapper.resolve_role_ids({"foundation", "security", "special", "misc", "donor"})
+
+            self.assertEqual(role_ids, [10, 20, 30, 40])
 
 
 if __name__ == "__main__":

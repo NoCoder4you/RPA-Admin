@@ -9,9 +9,11 @@ from discord import app_commands
 from discord.ext import commands
 
 from habbo_verification_core import (
+    BadgeRoleMapper,
     HabboApiError,
     VerificationManager,
     VerifiedUserStore,
+    fetch_habbo_group_ids,
     fetch_habbo_profile,
     motto_contains_code,
 )
@@ -26,6 +28,8 @@ class HabboVerificationCog(commands.Cog):
         self.manager = VerificationManager(ttl_minutes=5)
         # Persist successful verification links in JSON/VerifiedUsers.json.
         self.verified_store = VerifiedUserStore()
+        # Resolve Discord roles from Habbo groups using JSON/BadgesToRoles.json.
+        self.badge_role_mapper = BadgeRoleMapper()
 
     @app_commands.command(
         name="verify",
@@ -73,6 +77,10 @@ class HabboVerificationCog(commands.Cog):
                     discord_id=str(interaction.user.id),
                     habbo_username=str(profile.get("name", habbo_name)),
                 )
+
+                # After successful verification, assign roles from Habbo group memberships.
+                role_status = await self._assign_roles_from_habbo_groups(interaction, profile)
+
                 self.manager.clear(interaction.user.id)
                 await interaction.response.send_message(
                     embed=self._build_embed(
@@ -84,7 +92,7 @@ class HabboVerificationCog(commands.Cog):
                         challenge_code=challenge.code,
                         expires_at=challenge.expires_at,
                         color=discord.Color.green(),
-                        extra_field=("Habbo", profile.get("name", habbo_name)),
+                        extra_field=("Role Sync", role_status),
                     ),
                     ephemeral=True,
                 )
@@ -104,6 +112,43 @@ class HabboVerificationCog(commands.Cog):
                 ),
                 ephemeral=True,
             )
+
+    async def _assign_roles_from_habbo_groups(self, interaction: discord.Interaction, profile: dict) -> str:
+        """Assign Discord roles using Habbo group memberships and mapping JSON."""
+
+        # Role assignment only makes sense in a guild where interaction.user is a Member.
+        if not interaction.guild or not isinstance(interaction.user, discord.Member):
+            return "Skipped (roles can only be assigned inside a server)."
+
+        unique_id = str(profile.get("uniqueId", "")).strip()
+        if not unique_id:
+            return "Skipped (Habbo profile has no uniqueId for group lookup)."
+
+        try:
+            habbo_group_ids = fetch_habbo_group_ids(unique_id)
+            role_ids = self.badge_role_mapper.resolve_role_ids(habbo_group_ids)
+        except HabboApiError:
+            return "Skipped (could not fetch Habbo groups right now)."
+
+        if not role_ids:
+            return "No matching roles found from your Habbo groups."
+
+        roles_to_add = []
+        for role_id in role_ids:
+            role = interaction.guild.get_role(role_id)
+            if role is not None:
+                roles_to_add.append(role)
+
+        if not roles_to_add:
+            return "No mapped roles exist in this server."
+
+        try:
+            # atomic=False keeps adding valid roles even if one role becomes invalid.
+            await interaction.user.add_roles(*roles_to_add, reason="Habbo verification role sync", atomic=False)
+        except discord.Forbidden:
+            return "Failed (bot lacks permission to assign one or more roles)."
+
+        return "Assigned: " + ", ".join(role.name for role in roles_to_add)
 
     @staticmethod
     def _build_embed(

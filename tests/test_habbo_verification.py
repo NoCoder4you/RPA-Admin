@@ -14,6 +14,7 @@ from habbo_verification_core import (
     HabboApiError,
     VerificationManager,
     VerifiedUserStore,
+    ServerConfigStore,
     fetch_habbo_group_ids,
     fetch_habbo_profile,
     motto_contains_code,
@@ -147,6 +148,27 @@ class VerifiedUserStoreTests(unittest.TestCase):
                     {"discord_id": "999", "habbo_username": "Other"},
                 ],
             )
+
+
+class ServerConfigStoreTests(unittest.TestCase):
+    """Validate single-server audit-channel resolution from serverconfig.json."""
+
+    def test_get_audit_channel_id_from_single_server_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "serverconfig.json"
+            file_path.write_text(json.dumps({"audit_log_channel_id": "456"}), encoding="utf-8")
+
+            store = ServerConfigStore(file_path=file_path)
+            self.assertEqual(store.get_audit_channel_id(), 456)
+
+    def test_get_audit_channel_id_returns_none_when_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "serverconfig.json"
+            file_path.write_text(json.dumps({}), encoding="utf-8")
+
+            store = ServerConfigStore(file_path=file_path)
+            self.assertIsNone(store.get_audit_channel_id())
+
 
 
 class BadgeRoleMapperTests(unittest.TestCase):

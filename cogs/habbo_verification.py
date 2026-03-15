@@ -11,6 +11,7 @@ from discord.ext import commands
 from habbo_verification_core import (
     BadgeRoleMapper,
     HabboApiError,
+    ServerConfigStore,
     VerificationManager,
     VerifiedUserStore,
     fetch_habbo_group_ids,
@@ -30,6 +31,8 @@ class HabboVerificationCog(commands.Cog):
         self.verified_store = VerifiedUserStore()
         # Resolve Discord roles from Habbo groups using JSON/BadgesToRoles.json.
         self.badge_role_mapper = BadgeRoleMapper()
+        # Resolve audit-log destination from serverconfig.json.
+        self.server_config_store = ServerConfigStore()
 
     @app_commands.command(
         name="verify",
@@ -49,8 +52,6 @@ class HabboVerificationCog(commands.Cog):
 
         # Check the active challenge and validate the Habbo motto in one command call.
         if challenge.code and self.manager.get_active(interaction.user.id) == challenge:
-            # Attempt the API check immediately so users can run the same command repeatedly
-            # after updating their motto without needing a second command.
             try:
                 profile = fetch_habbo_profile(habbo_name)
             except HabboApiError as exc:
@@ -71,15 +72,30 @@ class HabboVerificationCog(commands.Cog):
                 return
 
             if motto_contains_code(profile, challenge.code):
-                # Save the successful verification mapping as requested:
-                # discord_id (string) + habbo_username (string).
+                verified_habbo_name = str(profile.get("name", habbo_name))
+
+                # Change #1: persist verified Discord<->Habbo mapping.
                 self.verified_store.save(
                     discord_id=str(interaction.user.id),
-                    habbo_username=str(profile.get("name", habbo_name)),
+                    habbo_username=verified_habbo_name,
                 )
 
-                # After successful verification, assign roles from Habbo group memberships.
-                role_status = await self._assign_roles_from_habbo_groups(interaction, profile)
+                # Change #2: synchronize guild roles based on Habbo groups.
+                role_status, assigned_role_names = await self._assign_roles_from_habbo_groups(interaction, profile)
+
+                # Audit the changes made by the bot (mapping save + role sync result).
+                await self._send_audit_log(
+                    interaction=interaction,
+                    action="habbo_verification_success",
+                    details={
+                        "discord_user_id": str(interaction.user.id),
+                        "discord_user": str(interaction.user),
+                        "habbo_username": verified_habbo_name,
+                        "saved_mapping": "yes",
+                        "role_sync_status": role_status,
+                        "assigned_roles": ", ".join(assigned_role_names) if assigned_role_names else "none",
+                    },
+                )
 
                 self.manager.clear(interaction.user.id)
                 await interaction.response.send_message(
@@ -113,25 +129,30 @@ class HabboVerificationCog(commands.Cog):
                 ephemeral=True,
             )
 
-    async def _assign_roles_from_habbo_groups(self, interaction: discord.Interaction, profile: dict) -> str:
-        """Assign Discord roles using Habbo group memberships and mapping JSON."""
+    async def _assign_roles_from_habbo_groups(self, interaction: discord.Interaction, profile: dict) -> tuple[str, list[str]]:
+        """Assign Discord roles using Habbo group memberships and mapping JSON.
 
-        # Role assignment only makes sense in a guild where interaction.user is a Member.
+        Returns:
+            A tuple of:
+            - human-readable status text
+            - list of assigned role names (for audit logging)
+        """
+
         if not interaction.guild or not isinstance(interaction.user, discord.Member):
-            return "Skipped (roles can only be assigned inside a server)."
+            return "Skipped (roles can only be assigned inside a server).", []
 
         unique_id = str(profile.get("uniqueId", "")).strip()
         if not unique_id:
-            return "Skipped (Habbo profile has no uniqueId for group lookup)."
+            return "Skipped (Habbo profile has no uniqueId for group lookup).", []
 
         try:
             habbo_group_ids = fetch_habbo_group_ids(unique_id)
             role_ids = self.badge_role_mapper.resolve_role_ids(habbo_group_ids)
         except HabboApiError:
-            return "Skipped (could not fetch Habbo groups right now)."
+            return "Skipped (could not fetch Habbo groups right now).", []
 
         if not role_ids:
-            return "No matching roles found from your Habbo groups."
+            return "No matching roles found from your Habbo groups.", []
 
         roles_to_add = []
         for role_id in role_ids:
@@ -140,15 +161,44 @@ class HabboVerificationCog(commands.Cog):
                 roles_to_add.append(role)
 
         if not roles_to_add:
-            return "No mapped roles exist in this server."
+            return "No mapped roles exist in this server.", []
 
         try:
-            # atomic=False keeps adding valid roles even if one role becomes invalid.
             await interaction.user.add_roles(*roles_to_add, reason="Habbo verification role sync", atomic=False)
         except discord.Forbidden:
-            return "Failed (bot lacks permission to assign one or more roles)."
+            return "Failed (bot lacks permission to assign one or more roles).", []
 
-        return "Assigned: " + ", ".join(role.name for role in roles_to_add)
+        role_names = [role.name for role in roles_to_add]
+        return "Assigned: " + ", ".join(role_names), role_names
+
+    async def _send_audit_log(self, interaction: discord.Interaction, action: str, details: dict[str, str]) -> None:
+        """Send an audit-style embed to the configured channel from serverconfig.json."""
+
+        if not interaction.guild:
+            return
+
+        channel_id = self.server_config_store.get_audit_channel_id()
+        if channel_id is None:
+            return
+
+        channel = interaction.guild.get_channel(channel_id)
+        if channel is None:
+            return
+
+        embed = discord.Embed(
+            title="Habbo Verification Audit",
+            color=discord.Color.blurple(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(name="Action", value=action, inline=False)
+        for key, value in details.items():
+            embed.add_field(name=key.replace("_", " ").title(), value=value, inline=False)
+
+        try:
+            await channel.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            # Audit logging should never block verification UX.
+            return
 
     @staticmethod
     def _build_embed(

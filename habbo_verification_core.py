@@ -139,6 +139,46 @@ class VerifiedUserStore:
         return normalized
 
 
+class ServerConfigStore:
+    """Read single-server audit channel configuration from serverconfig.json.
+
+    Expected file shape:
+    {"audit_log_channel_id": "123"}
+    """
+
+    def __init__(self, file_path: Path | None = None) -> None:
+        root_path = Path(__file__).resolve().parent
+        self.file_path = file_path or (root_path / "serverconfig.json")
+
+    def get_audit_channel_id(self) -> int | None:
+        """Return configured audit log channel ID for this single-server bot."""
+
+        config = self._read_config()
+        return self._safe_int(config.get("audit_log_channel_id"))
+
+    def _read_config(self) -> dict:
+        """Load config JSON with safe fallback for missing/corrupted files."""
+
+        if not self.file_path.exists():
+            return {}
+
+        try:
+            data = json.loads(self.file_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
+
+        return data if isinstance(data, dict) else {}
+
+    @staticmethod
+    def _safe_int(value: object) -> int | None:
+        """Convert supported ID values to int, returning None for invalid values."""
+
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+
 class BadgeRoleMapper:
     """Map Habbo group memberships to Discord role IDs via JSON/BadgesToRoles.json."""
 
@@ -147,12 +187,7 @@ class BadgeRoleMapper:
         self.file_path = file_path or (root_path / "JSON" / "BadgesToRoles.json")
 
     def resolve_role_ids(self, habbo_group_ids: set[str]) -> list[int]:
-        """Return role IDs for matching groups with employee-role hierarchy rules.
-
-        Employee roles are mutually exclusive: assign only the *highest* role the user
-        qualifies for. Highest-to-lowest priority follows the order in EmployeeRoles in
-        BadgesToRoles.json, where Foundation should appear before Security.
-        """
+        """Return role IDs for matching groups with employee-role hierarchy rules."""
 
         config = self._load_config()
         role_ids: list[int] = []
@@ -250,7 +285,6 @@ def fetch_habbo_group_ids(habbo_unique_id: str) -> set[str]:
     group_ids: set[str] = set()
     for group in data:
         if isinstance(group, dict):
-            # Group identifiers can be exposed under different keys; keep extraction tolerant.
             group_id = group.get("groupId") or group.get("id") or group.get("uniqueId")
             if group_id:
                 group_ids.add(str(group_id))

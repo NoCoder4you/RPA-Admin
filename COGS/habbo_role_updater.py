@@ -1,5 +1,3 @@
-"""Discord cog dedicated to standalone automatic verified-user role updates."""
-
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -35,7 +33,7 @@ class HabboRoleUpdaterCog(commands.Cog):
 
         self.automatic_role_updater.cancel()
 
-    @tasks.loop(minutes=30)
+    @tasks.loop(minutes=10)
     async def automatic_role_updater(self) -> None:
         """Periodically synchronize roles for all users in VerifiedUsers.json."""
 

@@ -240,9 +240,9 @@ class HabboRoleUpdaterCog(commands.Cog):
 
         # Only show sections for categories that actually changed to keep the updater output brief.
         if added_role_names:
-            embed.add_field(name="Added Roles", value=", ".join(added_role_names), inline=False)
+            embed.add_field(name="Added Roles", value="\n".join(added_role_names), inline=False)
         if removed_role_names:
-            embed.add_field(name="Removed Roles", value=", ".join(removed_role_names), inline=False)
+            embed.add_field(name="Removed Roles", value="\n".join(removed_role_names), inline=False)
 
         try:
             await channel.send(embed=embed)

@@ -249,7 +249,7 @@ class HabboVerificationCog(commands.Cog):
         else:
             status = (
                 f"Added: {', '.join(added_role_names) if added_role_names else 'none'} | "
-                f"Removed: {', '.join(removed_role_names) if removed_role_names else 'none'}"
+                f"Removed: {' '.join(removed_role_names) if removed_role_names else 'none'}"
             )
 
         await self._send_role_change_embed(

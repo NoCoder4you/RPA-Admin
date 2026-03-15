@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 import discord
 from discord import app_commands
@@ -48,95 +49,120 @@ class HabboVerificationCog(commands.Cog):
     ) -> None:
         """Create/check a verification challenge and validate against Habbo public API."""
 
-        challenge = self.manager.get_or_create(interaction.user.id, habbo_name)
-
-        # Check the active challenge and validate the Habbo motto in one command call.
-        if challenge.code and self.manager.get_active(interaction.user.id) == challenge:
-            try:
-                profile = fetch_habbo_profile(habbo_name)
-            except HabboApiError as exc:
-                await interaction.response.send_message(
-                    embed=self._build_embed(
-                        title="Habbo API Error",
-                        description=(
-                            "I could not fetch your Habbo profile right now. "
-                            "Please try again in a moment."
-                        ),
-                        challenge_code=challenge.code,
-                        expires_at=challenge.expires_at,
-                        color=discord.Color.orange(),
-                        extra_field=("Error", str(exc)),
-                    ),
-                    ephemeral=True,
-                )
-                return
-
-            if motto_contains_code(profile, challenge.code):
-                verified_habbo_name = str(profile.get("name", habbo_name))
-
-                # Change #1: persist verified Discord<->Habbo mapping.
-                self.verified_store.save(
-                    discord_id=str(interaction.user.id),
-                    habbo_username=verified_habbo_name,
-                )
-
-                # Change #2: synchronize guild roles based on Habbo groups.
-                role_status, assigned_role_names = await self._assign_roles_from_habbo_groups(interaction, profile)
-
-                # Audit the changes made by the bot (mapping save + role sync result).
-                await self._send_audit_log(
-                    interaction=interaction,
-                    action="habbo_verification_success",
-                    details={
-                        "discord_user_id": str(interaction.user.id),
-                        "discord_user": str(interaction.user),
-                        "habbo_username": verified_habbo_name,
-                        "saved_mapping": "yes",
-                        "role_sync_status": role_status,
-                        "assigned_roles": ", ".join(assigned_role_names) if assigned_role_names else "none",
-                    },
-                )
-
-                self.manager.clear(interaction.user.id)
-                await interaction.response.send_message(
-                    embed=self._build_embed(
-                        title="Verification Successful",
-                        description=(
-                            "Your Habbo motto includes the verification code. "
-                            "You are now verified and your link has been saved."
-                        ),
-                        challenge_code=challenge.code,
-                        expires_at=challenge.expires_at,
-                        color=discord.Color.green(),
-                        extra_field=("Role Sync", role_status),
-                    ),
-                    ephemeral=True,
-                )
-                return
-
+        # Fetch profile first so we can also use avatar figure in embeds.
+        try:
+            profile = fetch_habbo_profile(habbo_name)
+        except HabboApiError as exc:
+            challenge = self.manager.get_or_create(interaction.user.id, habbo_name)
             await interaction.response.send_message(
                 embed=self._build_embed(
-                    title="Verification Failed",
+                    title="Habbo API Error",
                     description=(
-                        "Your Habbo motto does not include the verification code yet. "
-                        "Add the code below, save your motto, and run /verify again."
+                        "I could not fetch your Habbo profile right now. "
+                        "Please try again in a moment."
                     ),
                     challenge_code=challenge.code,
                     expires_at=challenge.expires_at,
-                    color=discord.Color.red(),
-                    extra_field=("Current Motto", str(profile.get("motto", "(empty)"))),
+                    color=discord.Color.orange(),
+                    extra_field=("Error", str(exc)),
                 ),
                 ephemeral=True,
             )
+            return
+
+        # If the user is already verified, do not require a new motto code again.
+        if self.verified_store.is_verified(str(interaction.user.id)):
+            verified_habbo_name = self.verified_store.get_habbo_username(str(interaction.user.id)) or str(
+                profile.get("name", habbo_name)
+            )
+            role_status, assigned_role_names = await self._assign_roles_from_habbo_groups(interaction, profile)
+            await self._send_audit_log(
+                interaction=interaction,
+                action="habbo_verification_already_verified",
+                details={
+                    "discord_user_id": str(interaction.user.id),
+                    "discord_user": str(interaction.user),
+                    "habbo_username": verified_habbo_name,
+                    "role_sync_status": role_status,
+                    "assigned_roles": ", ".join(assigned_role_names) if assigned_role_names else "none",
+                },
+            )
+            await interaction.response.send_message(
+                embed=self._build_embed(
+                    title="Already Verified",
+                    description=(
+                        "You are already verified, so you do not need to add a new code to your motto. "
+                        "I have synced your roles based on your Habbo groups."
+                    ),
+                    challenge_code="N/A",
+                    expires_at=datetime.now(timezone.utc),
+                    color=discord.Color.blue(),
+                    extra_field=("Role Sync", role_status),
+                    thumbnail_url=self._build_avatar_thumbnail_url(profile),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        challenge = self.manager.get_or_create(interaction.user.id, habbo_name)
+
+        if motto_contains_code(profile, challenge.code):
+            verified_habbo_name = str(profile.get("name", habbo_name))
+            self.verified_store.save(
+                discord_id=str(interaction.user.id),
+                habbo_username=verified_habbo_name,
+            )
+
+            role_status, assigned_role_names = await self._assign_roles_from_habbo_groups(interaction, profile)
+            await self._send_audit_log(
+                interaction=interaction,
+                action="habbo_verification_success",
+                details={
+                    "discord_user_id": str(interaction.user.id),
+                    "discord_user": str(interaction.user),
+                    "habbo_username": verified_habbo_name,
+                    "saved_mapping": "yes",
+                    "role_sync_status": role_status,
+                    "assigned_roles": ", ".join(assigned_role_names) if assigned_role_names else "none",
+                },
+            )
+
+            self.manager.clear(interaction.user.id)
+            await interaction.response.send_message(
+                embed=self._build_embed(
+                    title="Verification Successful",
+                    description=(
+                        "Your Habbo motto includes the verification code. "
+                        "You are now verified and your link has been saved."
+                    ),
+                    challenge_code=challenge.code,
+                    expires_at=challenge.expires_at,
+                    color=discord.Color.green(),
+                    extra_field=("Role Sync", role_status),
+                    thumbnail_url=self._build_avatar_thumbnail_url(profile),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            embed=self._build_embed(
+                title="Verification Failed",
+                description=(
+                    "Your Habbo motto does not include the verification code yet. "
+                    "Add the code below, save your motto, and run /verify again."
+                ),
+                challenge_code=challenge.code,
+                expires_at=challenge.expires_at,
+                color=discord.Color.red(),
+                extra_field=("Current Motto", str(profile.get("motto", "(empty)"))),
+                thumbnail_url=self._build_avatar_thumbnail_url(profile),
+            ),
+            ephemeral=True,
+        )
 
     async def _assign_roles_from_habbo_groups(self, interaction: discord.Interaction, profile: dict) -> tuple[str, list[str]]:
-        """Assign Discord roles using Habbo group memberships and mapping JSON.
-
-        Returns:
-            A tuple of:
-            - human-readable status text
-            - list of assigned role names (for audit logging)
-        """
+        """Assign Discord roles using Habbo group memberships and mapping JSON."""
 
         if not interaction.guild or not isinstance(interaction.user, discord.Member):
             return "Skipped (roles can only be assigned inside a server).", []
@@ -197,8 +223,22 @@ class HabboVerificationCog(commands.Cog):
         try:
             await channel.send(embed=embed)
         except (discord.Forbidden, discord.HTTPException):
-            # Audit logging should never block verification UX.
             return
+
+    @staticmethod
+    def _build_avatar_thumbnail_url(profile: dict) -> str | None:
+        """Build Habbo avatar thumbnail URL from profile figure string."""
+
+        figure_string = str(profile.get("figureString", "")).strip()
+        if not figure_string:
+            return None
+
+        # Habbo imaging endpoint for user avatar previews.
+        encoded_figure = quote(figure_string, safe="")
+        return (
+            "https://www.habbo.com/habbo-imaging/avatarimage"
+            f"?figure={encoded_figure}&size=l&direction=2&head_direction=3&gesture=sml"
+        )
 
     @staticmethod
     def _build_embed(
@@ -209,6 +249,7 @@ class HabboVerificationCog(commands.Cog):
         expires_at: datetime,
         color: discord.Color,
         extra_field: tuple[str, str] | None = None,
+        thumbnail_url: str | None = None,
     ) -> discord.Embed:
         """Return a consistent, concise embed for all verification states."""
 
@@ -222,6 +263,8 @@ class HabboVerificationCog(commands.Cog):
         embed.add_field(name="How to Verify", value="1) Put code in motto\n2) Save\n3) Run /verify", inline=False)
         if extra_field:
             embed.add_field(name=extra_field[0], value=extra_field[1], inline=False)
+        if thumbnail_url:
+            embed.set_thumbnail(url=thumbnail_url)
         return embed
 
 

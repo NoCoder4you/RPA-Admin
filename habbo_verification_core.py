@@ -113,6 +113,20 @@ class VerifiedUserStore:
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
         self.file_path.write_text(json.dumps(entries, indent=2), encoding="utf-8")
 
+    def get_habbo_username(self, discord_id: str) -> str | None:
+        """Return the stored Habbo username for a Discord user, if present."""
+
+        for entry in self._read_entries():
+            if entry.get("discord_id") == discord_id:
+                username = str(entry.get("habbo_username", "")).strip()
+                return username or None
+        return None
+
+    def is_verified(self, discord_id: str) -> bool:
+        """Check whether a Discord user already has a saved verification mapping."""
+
+        return self.get_habbo_username(discord_id) is not None
+
     def _read_entries(self) -> list[dict[str, str]]:
         """Read JSON file safely and normalize to a list."""
 
@@ -216,7 +230,7 @@ class BadgeRoleMapper:
     def _load_config(self) -> dict:
         """Read role mapping config safely, returning empty categories if unavailable."""
 
-        default = {"EmployeeRoles": [], "SpecialUnits": [], "MiscRoles": [], "DonationRoles": []}
+        default = {"EmployeeRoles": [], "SpecialUnits": [], "MiscRoles": [], "Donators": []}
         if not self.file_path.exists():
             return default
 

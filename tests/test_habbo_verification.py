@@ -149,6 +149,16 @@ class VerifiedUserStoreTests(unittest.TestCase):
                 ],
             )
 
+    def test_is_verified_and_get_habbo_username(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = VerifiedUserStore(file_path=Path(temp_dir) / "JSON" / "VerifiedUsers.json")
+            store.save(discord_id="123456", habbo_username="Siren")
+
+            self.assertTrue(store.is_verified("123456"))
+            self.assertEqual(store.get_habbo_username("123456"), "Siren")
+            self.assertFalse(store.is_verified("404"))
+            self.assertIsNone(store.get_habbo_username("404"))
+
 
 class ServerConfigStoreTests(unittest.TestCase):
     """Validate single-server audit-channel resolution from serverconfig.json."""

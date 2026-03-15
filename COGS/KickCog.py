@@ -1,5 +1,3 @@
-"""Discord cog that provides a moderation `/kick` slash command."""
-
 from __future__ import annotations
 
 import discord

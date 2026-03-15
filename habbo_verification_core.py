@@ -232,6 +232,24 @@ class BadgeRoleMapper:
 
         return role_ids
 
+    def get_all_mapped_role_ids(self) -> set[int]:
+        """Return every role ID managed by the Habbo mapping configuration.
+
+        This helps sync flows remove stale mapped roles when a user no longer
+        belongs to the backing Habbo groups.
+        """
+
+        config = self._load_config()
+        managed_role_ids: set[int] = set()
+
+        for category in ("EmployeeRoles", "SpecialUnits", "MiscRoles", "Donators", "DonationRoles"):
+            for entry in config.get(category, []):
+                role_id = self._safe_int(entry.get("role_id"))
+                if role_id is not None:
+                    managed_role_ids.add(role_id)
+
+        return managed_role_ids
+
     def _load_config(self) -> dict:
         """Read role mapping config safely, returning empty categories if unavailable."""
 

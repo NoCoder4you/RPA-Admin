@@ -76,7 +76,7 @@ class HabboVerificationCog(commands.Cog):
                 )
                 return
 
-            role_status, assigned_role_names = await self._assign_roles_from_habbo_groups(interaction, stored_profile)
+            role_status, added_role_names, removed_role_names = await self._assign_roles_from_habbo_groups(interaction, stored_profile)
             await self._send_audit_log(
                 interaction=interaction,
                 action="habbo_verification_already_verified",
@@ -85,7 +85,8 @@ class HabboVerificationCog(commands.Cog):
                     "discord_user": str(interaction.user),
                     "habbo_username": stored_habbo_name,
                     "role_sync_status": role_status,
-                    "assigned_roles": ", ".join(assigned_role_names) if assigned_role_names else "none",
+                    "roles_added": ", ".join(added_role_names) if added_role_names else "none",
+                    "roles_removed": ", ".join(removed_role_names) if removed_role_names else "none",
                 },
             )
             await interaction.followup.send(
@@ -135,7 +136,7 @@ class HabboVerificationCog(commands.Cog):
                 habbo_username=verified_habbo_name,
             )
 
-            role_status, assigned_role_names = await self._assign_roles_from_habbo_groups(interaction, profile)
+            role_status, added_role_names, removed_role_names = await self._assign_roles_from_habbo_groups(interaction, profile)
             await self._send_audit_log(
                 interaction=interaction,
                 action="habbo_verification_success",
@@ -145,7 +146,8 @@ class HabboVerificationCog(commands.Cog):
                     "habbo_username": verified_habbo_name,
                     "saved_mapping": "yes",
                     "role_sync_status": role_status,
-                    "assigned_roles": ", ".join(assigned_role_names) if assigned_role_names else "none",
+                    "roles_added": ", ".join(added_role_names) if added_role_names else "none",
+                    "roles_removed": ", ".join(removed_role_names) if removed_role_names else "none",
                 },
             )
 
@@ -183,41 +185,124 @@ class HabboVerificationCog(commands.Cog):
             ephemeral=True,
         )
 
-    async def _assign_roles_from_habbo_groups(self, interaction: discord.Interaction, profile: dict) -> tuple[str, list[str]]:
-        """Assign Discord roles from Habbo groups in interaction context."""
+    async def _assign_roles_from_habbo_groups(
+        self,
+        interaction: discord.Interaction,
+        profile: dict,
+    ) -> tuple[str, list[str], list[str]]:
+        """Synchronize mapped Discord roles from Habbo groups in interaction context."""
 
         if not interaction.guild or not isinstance(interaction.user, discord.Member):
-            return "Skipped (roles can only be assigned inside a server).", []
+            return "Skipped (roles can only be assigned inside a server).", [], []
 
         unique_id = str(profile.get("uniqueId", "")).strip()
         if not unique_id:
-            return "Skipped (Habbo profile has no uniqueId for group lookup).", []
+            return "Skipped (Habbo profile has no uniqueId for group lookup).", [], []
 
         try:
             habbo_group_ids = fetch_habbo_group_ids(unique_id)
             role_ids = self.badge_role_mapper.resolve_role_ids(habbo_group_ids)
         except HabboApiError:
-            return "Skipped (could not fetch Habbo groups right now).", []
+            return "Skipped (could not fetch Habbo groups right now).", [], []
 
-        if not role_ids:
-            return "No matching roles found from your Habbo groups.", []
-
-        roles_to_add: list[discord.Role] = []
+        # Build target role set from current Habbo groups and current guild mappings.
+        target_roles: list[discord.Role] = []
         for role_id in role_ids:
             role = interaction.guild.get_role(role_id)
             if role is not None:
-                roles_to_add.append(role)
+                target_roles.append(role)
 
-        if not roles_to_add:
-            return "No mapped roles exist in this server.", []
+        managed_role_ids = self.badge_role_mapper.get_all_mapped_role_ids()
+        managed_roles: list[discord.Role] = []
+        for role_id in managed_role_ids:
+            role = interaction.guild.get_role(role_id)
+            if role is not None:
+                managed_roles.append(role)
+
+        target_role_ids = {role.id for role in target_roles}
+        current_role_ids = {role.id for role in interaction.user.roles}
+        managed_role_id_set = {role.id for role in managed_roles}
+
+        # Add roles that should now exist; remove mapped roles that are now stale.
+        roles_to_add = [role for role in target_roles if role.id not in current_role_ids]
+        roles_to_remove = [
+            role for role in interaction.user.roles if role.id in managed_role_id_set and role.id not in target_role_ids
+        ]
 
         try:
-            await interaction.user.add_roles(*roles_to_add, reason="Habbo verification role sync", atomic=False)
+            if roles_to_add:
+                await interaction.user.add_roles(*roles_to_add, reason="Habbo verification role sync", atomic=False)
+            if roles_to_remove:
+                await interaction.user.remove_roles(*roles_to_remove, reason="Habbo verification role sync", atomic=False)
         except discord.Forbidden:
-            return "Failed (bot lacks permission to assign one or more roles).", []
+            return "Failed (bot lacks permission to manage one or more roles).", [], []
 
-        role_names = [role.name for role in roles_to_add]
-        return "Assigned: " + ", ".join(role_names), role_names
+        added_role_names = [role.name for role in roles_to_add]
+        removed_role_names = [role.name for role in roles_to_remove]
+
+        if not target_roles and not managed_roles:
+            status = "No mapped roles exist in this server."
+        elif not target_roles and not roles_to_remove:
+            status = "No matching roles found from your Habbo groups."
+        elif not added_role_names and not removed_role_names:
+            status = "No role changes were required."
+        else:
+            status = (
+                f"Added: {', '.join(added_role_names) if added_role_names else 'none'} | "
+                f"Removed: {', '.join(removed_role_names) if removed_role_names else 'none'}"
+            )
+
+        await self._send_role_change_embed(
+            guild=interaction.guild,
+            member=interaction.user,
+            source="verify",
+            habbo_username=str(profile.get("name", "unknown")),
+            added_role_names=added_role_names,
+            removed_role_names=removed_role_names,
+        )
+
+        return status, added_role_names, removed_role_names
+
+    async def _send_role_change_embed(
+        self,
+        *,
+        guild: discord.Guild,
+        member: discord.Member,
+        source: str,
+        habbo_username: str,
+        added_role_names: list[str],
+        removed_role_names: list[str],
+    ) -> None:
+        """Send a dedicated role-change embed for verify and auto-sync actions."""
+
+        channel_id = self.server_config_store.get_audit_channel_id()
+        if channel_id is None:
+            return
+
+        channel = guild.get_channel(channel_id)
+        if channel is None:
+            return
+
+        embed = discord.Embed(
+            title="Habbo Role Sync Update",
+            description="Roles getting added and removed from Habbo role sync.",
+            color=discord.Color.green(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(name="Source", value=source, inline=False)
+        embed.add_field(name="Discord User", value=f"{member} (`{member.id}`)", inline=False)
+        embed.add_field(name="Habbo Username", value=habbo_username, inline=False)
+        embed.add_field(name="Roles Added", value=", ".join(added_role_names) if added_role_names else "None", inline=False)
+        embed.add_field(
+            name="Roles Removed",
+            value=", ".join(removed_role_names) if removed_role_names else "None",
+            inline=False,
+        )
+
+        try:
+            await channel.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            return
 
     async def _send_audit_log(self, interaction: discord.Interaction, action: str, details: dict[str, str]) -> None:
         """Send an audit-style embed using the interaction's guild context."""

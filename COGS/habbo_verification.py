@@ -97,8 +97,7 @@ class HabboVerificationCog(commands.Cog):
                     title="Already Verified",
                     description=(
                         "You are already verified, so you do not need to add a new code to your motto. "
-                        "I have synced your roles from your stored verified Habbo account. "
-                        f"Nickname: {nickname_status}"
+                        "I have synced your roles from your stored verified Habbo account."
                     ),
                     challenge_code="N/A",
                     expires_at=datetime.now(timezone.utc),
@@ -164,8 +163,7 @@ class HabboVerificationCog(commands.Cog):
                     title="Verification Successful",
                     description=(
                         "Your Habbo motto includes the verification code. "
-                        "You are now verified and your link has been saved. "
-                        f"Nickname: {nickname_status}"
+                        "You are now verified and your link has been saved."
                     ),
                     challenge_code=challenge.code,
                     expires_at=challenge.expires_at,

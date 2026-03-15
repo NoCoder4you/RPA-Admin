@@ -127,22 +127,14 @@ class HabboRoleUpdaterCog(commands.Cog):
             else:
                 summary["skipped"] += 1
 
-            # Keep updater logging to a single audit embed per member sync so the audit channel
-            # does not receive duplicate messages for one action.
-
-            await self._send_audit_log_for_guild(
+            # Send one dedicated updater embed per member sync. This keeps the feed concise and
+            # avoids noisy metadata fields when moderators only care about who changed and what
+            # roles were affected.
+            await self._send_role_change_embed_for_guild(
                 guild=guild,
-                action="verified_role_updater_sync",
-                details={
-                    "trigger": trigger,
-                    "triggered_by": triggered_by or "system",
-                    "discord_user_id": discord_id,
-                    "discord_user": str(member),
-                    "habbo_username": habbo_username,
-                    "role_sync_status": role_status,
-                    "roles_added": ", ".join(added_role_names) if added_role_names else "none",
-                    "roles_removed": ", ".join(removed_role_names) if removed_role_names else "none",
-                },
+                member=member,
+                added_role_names=added_role_names,
+                removed_role_names=removed_role_names,
             )
 
         return summary
@@ -219,8 +211,15 @@ class HabboRoleUpdaterCog(commands.Cog):
 
         return status, added_role_names, removed_role_names
 
-    async def _send_audit_log_for_guild(self, guild: discord.Guild, action: str, details: dict[str, str]) -> None:
-        """Send an audit-style embed to the configured channel from serverconfig.json."""
+    async def _send_role_change_embed_for_guild(
+        self,
+        *,
+        guild: discord.Guild,
+        member: discord.Member,
+        added_role_names: list[str],
+        removed_role_names: list[str],
+    ) -> None:
+        """Send a concise updater embed that only includes user + actual role deltas."""
 
         channel_id = self.server_config_store.get_audit_channel_id()
         if channel_id is None:
@@ -231,13 +230,19 @@ class HabboRoleUpdaterCog(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="Habbo Verification Audit",
-            color=discord.Color.blurple(),
+            title="Habbo Role Sync Update",
+            color=discord.Color.green(),
             timestamp=datetime.now(timezone.utc),
         )
-        embed.add_field(name="Action", value=action, inline=False)
-        for key, value in details.items():
-            embed.add_field(name=key.replace("_", " ").title(), value=value, inline=False)
+
+        # Always mention the target user so moderators can open the member profile quickly.
+        embed.add_field(name="User", value=member.mention, inline=False)
+
+        # Only show sections for categories that actually changed to keep the updater output brief.
+        if added_role_names:
+            embed.add_field(name="Added Roles", value=", ".join(added_role_names), inline=False)
+        if removed_role_names:
+            embed.add_field(name="Removed Roles", value=", ".join(removed_role_names), inline=False)
 
         try:
             await channel.send(embed=embed)

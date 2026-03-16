@@ -14,7 +14,8 @@ from habbo_verification_core import ServerConfigStore
 
 _DURATION_PATTERN = re.compile(r"^\s*(\d+)\s*([smhdw])\s*$", re.IGNORECASE)
 _MAX_TIMEOUT = timedelta(days=28)
-_MUTE_LOG_PATH = Path(__file__).resolve().parent.parent / "mute_timeouts.json"
+# Store timeout records alongside the project's other JSON persistence files.
+_MUTE_LOG_PATH = Path(__file__).resolve().parent.parent / "JSON" / "mute_timeouts.json"
 _MUTED_ROLE_NAME = "Muted"
 
 

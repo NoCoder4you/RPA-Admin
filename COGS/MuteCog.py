@@ -248,6 +248,11 @@ class MuteCog(commands.Cog):
     ) -> None:
         """Send a direct-message embed with mute details to the muted member."""
 
+        # Discord's timestamp markdown (`<t:...>`) renders in each viewer's local timezone,
+        # which is far more user-friendly than a raw ISO timestamp string.
+        expiration_unix = int(ends_at.timestamp())
+        expiration_display = f"<t:{expiration_unix}:F> (<t:{expiration_unix}:R>)"
+
         embed = discord.Embed(
             title="You Have Been Muted",
             description="You were muted by a moderator.",
@@ -257,7 +262,7 @@ class MuteCog(commands.Cog):
         # Include the exact moderation details requested for transparency.
         embed.add_field(name="Who Muted", value=getattr(moderator, "mention", str(moderator)), inline=False)
         embed.add_field(name="How Long", value=f"`{requested_length}`", inline=True)
-        embed.add_field(name="Expiration Time", value=f"`{ends_at.isoformat()}`", inline=False)
+        embed.add_field(name="Expiration Time", value=expiration_display, inline=False)
         embed.add_field(name="Why", value=reason, inline=False)
 
         try:

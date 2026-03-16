@@ -22,7 +22,7 @@ class PurgeCog(commands.Cog):
     )
     @app_commands.describe(
         target="Which messages should be deleted: users, bots, or all",
-        amount="How many recent messages to inspect and purge (1-100)",
+        amount="How many recent messages to inspect and purge (1-1000)",
     )
     @app_commands.checks.has_permissions(manage_messages=True)
     @app_commands.checks.bot_has_permissions(manage_messages=True, read_message_history=True)
@@ -30,9 +30,13 @@ class PurgeCog(commands.Cog):
         self,
         interaction: discord.Interaction,
         target: Literal["users", "bots", "all"],
-        amount: app_commands.Range[int, 1, 100],
+        amount: app_commands.Range[int, 1, 1000],
     ) -> None:
-        """Delete recent messages from the current text channel based on sender type."""
+        """Delete recent messages from the current text channel based on sender type.
+
+        The upper bound is intentionally high to support larger moderation cleanups
+        without forcing moderators to run the command repeatedly.
+        """
 
         # Purge must run inside a guild text channel where moderation and history exist.
         if interaction.guild is None or interaction.channel is None:

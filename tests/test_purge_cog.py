@@ -29,10 +29,11 @@ class PurgeCogTests(unittest.IsolatedAsyncioTestCase):
             followup=SimpleNamespace(send=AsyncMock()),
         )
 
-        await cog.purge.callback(cog, interaction, "users", 25)
+        await cog.purge.callback(cog, interaction, "users", 500)
 
         interaction.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
         channel.purge.assert_awaited_once()
+        self.assertEqual(channel.purge.await_args.kwargs["limit"], 500)
         purge_check = channel.purge.await_args.kwargs["check"]
 
         # Regular users should match the `users` filter.
@@ -46,7 +47,7 @@ class PurgeCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(purge_check(webhook_message))
 
         interaction.followup.send.assert_awaited_once_with(
-            "✅ Deleted **2** message(s) using filter **users** from the last **25** message(s).",
+            "✅ Deleted **2** message(s) using filter **users** from the last **500** message(s).",
             ephemeral=True,
         )
 

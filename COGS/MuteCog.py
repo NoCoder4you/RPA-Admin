@@ -390,18 +390,22 @@ class MuteCog(commands.Cog):
             )
             return
 
+        # Acknowledge the interaction immediately so Discord does not mark `/mute` as timed out
+        # while role creation/permission updates and API calls are still running.
+        await interaction.response.defer(ephemeral=True)
+
         try:
             muted_role = await self._ensure_muted_role(interaction.guild)
             # Apply the role so text/voice deny overwrites take effect immediately.
             await mention.add_roles(muted_role, reason=f"{interaction.user} - {reason}")
         except discord.Forbidden:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "Mute failed: I do not have permission to create/apply the Muted role.",
                 ephemeral=True,
             )
             return
         except discord.HTTPException:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "Mute failed while configuring the Muted role. Please try again.",
                 ephemeral=True,
             )
@@ -413,13 +417,13 @@ class MuteCog(commands.Cog):
         try:
             await mention.timeout(timeout_until, reason=f"{interaction.user} - {reason}")
         except discord.Forbidden:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "Mute failed: I do not have permission to mute that member.",
                 ephemeral=True,
             )
             return
         except discord.HTTPException:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "Mute failed due to a Discord API error. Please try again.",
                 ephemeral=True,
             )
@@ -457,7 +461,7 @@ class MuteCog(commands.Cog):
             duration_seconds=duration_seconds,
         )
 
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"🔇 Muted {mention.mention} for `{lengthoftime}`. Reason: {reason}",
             ephemeral=True,
         )

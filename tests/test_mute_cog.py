@@ -56,7 +56,8 @@ class MuteCogTests(unittest.IsolatedAsyncioTestCase):
         interaction = SimpleNamespace(
             user=invoking_member,
             guild=guild,
-            response=SimpleNamespace(send_message=AsyncMock()),
+            response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
         )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -87,7 +88,8 @@ class MuteCogTests(unittest.IsolatedAsyncioTestCase):
             audit_channel.send.assert_awaited_once()
             target_member.send.assert_awaited_once()
 
-            interaction.response.send_message.assert_awaited_once_with(
+            interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+            interaction.followup.send.assert_awaited_once_with(
                 "🔇 Muted <@202> for `10m`. Reason: cool off",
                 ephemeral=True,
             )

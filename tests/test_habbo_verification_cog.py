@@ -49,5 +49,58 @@ class HabboVerificationCogNicknameTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, "Failed (bot lacks permission to manage this nickname).")
 
 
+@unittest.skipIf(HabboVerificationCog is None, "discord.py is not installed in the test environment")
+class HabboVerificationCogReactionRoleTests(unittest.IsolatedAsyncioTestCase):
+    """Validate reaction-based Awaiting Verification role assignment flow."""
+
+    async def test_reaction_add_assigns_awaiting_verification_role(self) -> None:
+        # Build a lightweight cog test double without running full bot startup logic.
+        bot = SimpleNamespace()
+        cog = HabboVerificationCog.__new__(HabboVerificationCog)
+        cog.bot = bot
+        cog.server_config_store = SimpleNamespace(get_verification_reaction_message_id=lambda: 1481010999157981256)
+
+        role = SimpleNamespace(name="Awaiting Verification")
+        member = SimpleNamespace(roles=[], add_roles=AsyncMock())
+        guild = SimpleNamespace(roles=[role], get_member=lambda _uid: member, fetch_member=AsyncMock())
+        bot.user = SimpleNamespace(id=999)
+        bot.get_guild = lambda _gid: guild
+
+        payload = SimpleNamespace(
+            guild_id=123,
+            user_id=555,
+            message_id=1481010999157981256,
+            emoji="✅",
+        )
+
+        await cog.on_raw_reaction_add(payload)
+
+        member.add_roles.assert_awaited_once()
+
+    async def test_reaction_add_skips_when_message_id_does_not_match(self) -> None:
+        # Ensure role assignment is gated to the exact configured verification message ID.
+        bot = SimpleNamespace()
+        cog = HabboVerificationCog.__new__(HabboVerificationCog)
+        cog.bot = bot
+        cog.server_config_store = SimpleNamespace(get_verification_reaction_message_id=lambda: 1481010999157981256)
+
+        role = SimpleNamespace(name="Awaiting Verification")
+        member = SimpleNamespace(roles=[], add_roles=AsyncMock())
+        guild = SimpleNamespace(roles=[role], get_member=lambda _uid: member, fetch_member=AsyncMock())
+        bot.user = SimpleNamespace(id=999)
+        bot.get_guild = lambda _gid: guild
+
+        payload = SimpleNamespace(
+            guild_id=123,
+            user_id=555,
+            message_id=111,
+            emoji="✅",
+        )
+
+        await cog.on_raw_reaction_add(payload)
+
+        member.add_roles.assert_not_awaited()
+
+
 if __name__ == "__main__":
     unittest.main()

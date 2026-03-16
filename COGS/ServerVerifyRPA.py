@@ -336,6 +336,53 @@ class HabboVerificationCog(commands.Cog):
         except (discord.Forbidden, discord.HTTPException):
             return
 
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
+        """Grant Awaiting Verification role when users react with a green check on configured message."""
+
+        # Ignore DM reactions because role assignment only makes sense inside a guild.
+        if payload.guild_id is None:
+            return
+
+        # Prevent bot self-actions and other automation accounts from receiving roles.
+        if self.bot.user is not None and payload.user_id == self.bot.user.id:
+            return
+
+        configured_message_id = self.server_config_store.get_verification_reaction_message_id()
+        if configured_message_id is None:
+            return
+
+        # Gate role assignment to one explicit message ID stored in serverconfig.json.
+        if payload.message_id != configured_message_id:
+            return
+
+        emoji = str(payload.emoji)
+        allowed_green_checks = {"✅", "☑️", "✔️"}
+        if emoji not in allowed_green_checks:
+            return
+
+        guild = self.bot.get_guild(payload.guild_id)
+        if guild is None:
+            return
+
+        member = guild.get_member(payload.user_id)
+        if member is None:
+            try:
+                member = await guild.fetch_member(payload.user_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                return
+
+        role = discord.utils.get(guild.roles, name="Awaiting Verification")
+        if role is None or role in member.roles:
+            return
+
+        try:
+            # Assign the staging role required before moderators complete verification review.
+            await member.add_roles(role, reason="Reacted with green check on verification message")
+        except (discord.Forbidden, discord.HTTPException):
+            return
+
     @staticmethod
     def _build_avatar_thumbnail_url(profile: dict) -> str | None:
         """Build Habbo avatar thumbnail URL from profile figure string."""

@@ -379,6 +379,4 @@ class HabboVerificationCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot) -> None:
-    """discord.py extension entry point."""
-
     await bot.add_cog(HabboVerificationCog(bot))

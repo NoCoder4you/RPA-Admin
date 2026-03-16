@@ -2,20 +2,21 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
-from pathlib import Path
 import re
+import logging
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
+from common_paths import json_file
 from habbo_verification_core import ServerConfigStore
 
 
 _DURATION_PATTERN = re.compile(r"^\s*(\d+)\s*([smhdw])\s*$", re.IGNORECASE)
 _MAX_TIMEOUT = timedelta(days=28)
 # Store timeout records alongside the project's other JSON persistence files.
-_MUTE_LOG_PATH = Path(__file__).resolve().parent.parent / "JSON" / "mute_timeouts.json"
+_MUTE_LOG_PATH = json_file("mute_timeouts.json")
 _MUTED_ROLE_NAME = "Muted"
 
 
@@ -29,6 +30,77 @@ class MuteCog(commands.Cog):
         self.mute_log_path = _MUTE_LOG_PATH
         # Reuse the project's single-server audit channel configuration source.
         self.server_config_store = ServerConfigStore()
+        # Poll once per minute so members are automatically unmuted when timeout expires.
+        self.unmute_expired_members.start()
+
+    def cog_unload(self) -> None:
+        """Stop background jobs when this cog is unloaded."""
+
+        self.unmute_expired_members.cancel()
+
+    @staticmethod
+    def _is_member_currently_timed_out(member: discord.Member, now_utc: datetime) -> bool:
+        """Return True when Discord still considers the member timed out."""
+
+        is_timed_out_method = getattr(member, "is_timed_out", None)
+        if callable(is_timed_out_method):
+            return bool(is_timed_out_method())
+
+        timeout_until = getattr(member, "timed_out_until", None)
+        if timeout_until is None:
+            timeout_until = getattr(member, "communication_disabled_until", None)
+
+        if timeout_until is None:
+            return False
+
+        if timeout_until.tzinfo is None:
+            timeout_until = timeout_until.replace(tzinfo=timezone.utc)
+
+        return timeout_until > now_utc
+
+    async def _remove_expired_mutes_from_guild(self, guild: discord.Guild) -> None:
+        """Remove the muted role from members whose timeout has already expired."""
+
+        configured_role_id = self.server_config_store.get_muted_role_id()
+        muted_role = guild.get_role(configured_role_id) if configured_role_id is not None else None
+        if muted_role is None:
+            muted_role = discord.utils.get(guild.roles, name=_MUTED_ROLE_NAME)
+
+        if muted_role is None:
+            return
+
+        now_utc = datetime.now(timezone.utc)
+        for member in guild.members:
+            if muted_role not in member.roles:
+                continue
+
+            if self._is_member_currently_timed_out(member, now_utc):
+                continue
+
+            try:
+                # Remove only stale mute roles so active moderation actions are left untouched.
+                await member.remove_roles(muted_role, reason="Automatic unmute after timeout expiration")
+                # Send follow-up notifications so users and staff know the mute lifecycle completed.
+                await self._send_auto_unmute_notifications(guild, member)
+            except (discord.Forbidden, discord.HTTPException):
+                logging.exception("Failed to auto-unmute member %s in guild %s", member.id, guild.id)
+
+    @tasks.loop(minutes=1)
+    async def unmute_expired_members(self) -> None:
+        """Periodically scan guilds and remove stale muted roles."""
+
+        for guild in self.bot.guilds:
+            await self._remove_expired_mutes_from_guild(guild)
+
+    @unmute_expired_members.before_loop
+    async def before_unmute_expired_members(self) -> None:
+        """Ensure the Discord gateway is ready before the periodic unmute task runs."""
+
+        wait_until_ready = getattr(self.bot, "wait_until_ready", None)
+        if callable(wait_until_ready):
+            maybe_coro = wait_until_ready()
+            if hasattr(maybe_coro, "__await__"):
+                await maybe_coro
 
     def _append_mute_record(
         self,
@@ -165,6 +237,72 @@ class MuteCog(commands.Cog):
             # Avoid failing the mute command when audit logging cannot be delivered.
             return
 
+    async def _send_mute_direct_message(
+        self,
+        *,
+        member: discord.Member,
+        moderator: discord.abc.User,
+        requested_length: str,
+        ends_at: datetime,
+        reason: str,
+    ) -> None:
+        """Send a direct-message embed with mute details to the muted member."""
+
+        embed = discord.Embed(
+            title="You Have Been Muted",
+            description="You were muted by a moderator.",
+            color=discord.Color.orange(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        # Include the exact moderation details requested for transparency.
+        embed.add_field(name="Who Muted", value=getattr(moderator, "mention", str(moderator)), inline=False)
+        embed.add_field(name="How Long", value=f"`{requested_length}`", inline=True)
+        embed.add_field(name="Expiration Time", value=f"`{ends_at.isoformat()}`", inline=False)
+        embed.add_field(name="Why", value=reason, inline=False)
+
+        try:
+            await member.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException, AttributeError):
+            # DMs can fail when closed; moderation action should still complete.
+            return
+
+    async def _send_auto_unmute_notifications(self, guild: discord.Guild, member: discord.Member) -> None:
+        """Notify the member and audit log when an automatic unmute occurs."""
+
+        member_embed = discord.Embed(
+            title="You Have Been Unmuted",
+            description="Your mute has expired and the Muted role was removed automatically.",
+            color=discord.Color.green(),
+            timestamp=datetime.now(timezone.utc),
+        )
+
+        try:
+            await member.send(embed=member_embed)
+        except (discord.Forbidden, discord.HTTPException, AttributeError):
+            # Skip DM failures silently so scheduled cleanup is resilient.
+            pass
+
+        channel_id = self.server_config_store.get_audit_channel_id()
+        if channel_id is None:
+            return
+
+        audit_channel = guild.get_channel(channel_id)
+        if audit_channel is None:
+            return
+
+        audit_embed = discord.Embed(
+            title="Member Unmuted",
+            description="A member was automatically unmuted after timeout expiration.",
+            color=discord.Color.green(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        audit_embed.add_field(name="Member", value=getattr(member, "mention", str(member)), inline=False)
+
+        try:
+            await audit_channel.send(embed=audit_embed)
+        except (discord.Forbidden, discord.HTTPException):
+            return
+
     @staticmethod
     def _parse_timeout_length(lengthoftime: str) -> timedelta | None:
         """Parse timeout text like `10m`, `2h`, `7d`, or `1w` into a timedelta."""
@@ -298,6 +436,15 @@ class MuteCog(commands.Cog):
             duration_seconds=duration_seconds,
             started_at=timeout_started_at,
             ends_at=timeout_until,
+        )
+
+        # Attempt to notify the muted user directly with clear moderation details.
+        await self._send_mute_direct_message(
+            member=mention,
+            moderator=interaction.user,
+            requested_length=lengthoftime,
+            ends_at=timeout_until,
+            reason=reason,
         )
 
         await self._send_mute_audit_embed(

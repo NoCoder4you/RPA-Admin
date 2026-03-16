@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import tempfile
@@ -30,6 +30,7 @@ class MuteCogTests(unittest.IsolatedAsyncioTestCase):
             top_role=1,
             add_roles=AsyncMock(),
             timeout=AsyncMock(),
+            send=AsyncMock(),
         )
         invoking_member = SimpleNamespace(id=101, top_role=5, mention="<@101>")
         bot_member = SimpleNamespace(top_role=10)
@@ -82,8 +83,9 @@ class MuteCogTests(unittest.IsolatedAsyncioTestCase):
             self.assertGreater(timeout_until, datetime.now(timezone.utc))
             self.assertTrue(timeout_reason.endswith(" - cool off"))
 
-            # Ensure a moderation embed is sent into the configured audit channel.
+            # Ensure moderation notifications are sent to both audit logs and the muted user.
             audit_channel.send.assert_awaited_once()
+            target_member.send.assert_awaited_once()
 
             interaction.response.send_message.assert_awaited_once_with(
                 "🔇 Muted <@202> for `10m`. Reason: cool off",
@@ -128,6 +130,79 @@ class MuteCogTests(unittest.IsolatedAsyncioTestCase):
             "Invalid `lengthoftime`. Use formats like `10m`, `2h`, `3d`, or `1w`.",
             ephemeral=True,
         )
+
+    async def test_remove_expired_mutes_removes_role_for_member_without_active_timeout(self) -> None:
+        bot = MagicMock()
+        cog = MuteCog(bot)
+
+        muted_role = SimpleNamespace(id=555, name="Muted")
+        expired_member = SimpleNamespace(
+            id=42,
+            roles=[muted_role],
+            timed_out_until=None,
+            communication_disabled_until=None,
+            mention="<@42>",
+            send=AsyncMock(),
+            remove_roles=AsyncMock(),
+        )
+
+        audit_channel = SimpleNamespace(send=AsyncMock())
+        guild = SimpleNamespace(
+            id=777,
+            roles=[muted_role],
+            members=[expired_member],
+            get_role=MagicMock(return_value=muted_role),
+            get_channel=MagicMock(return_value=audit_channel),
+        )
+
+        cog.server_config_store = SimpleNamespace(
+            get_muted_role_id=MagicMock(return_value=555),
+            get_audit_channel_id=MagicMock(return_value=1234),
+        )
+
+        await cog._remove_expired_mutes_from_guild(guild)
+
+        expired_member.remove_roles.assert_awaited_once_with(
+            muted_role,
+            reason="Automatic unmute after timeout expiration",
+        )
+        expired_member.send.assert_awaited_once()
+        audit_channel.send.assert_awaited_once()
+
+    async def test_remove_expired_mutes_keeps_role_for_member_with_active_timeout(self) -> None:
+        bot = MagicMock()
+        cog = MuteCog(bot)
+
+        muted_role = SimpleNamespace(id=555, name="Muted")
+        active_member = SimpleNamespace(
+            id=42,
+            roles=[muted_role],
+            timed_out_until=datetime.now(timezone.utc) + timedelta(minutes=5),
+            communication_disabled_until=None,
+            mention="<@42>",
+            send=AsyncMock(),
+            remove_roles=AsyncMock(),
+        )
+
+        audit_channel = SimpleNamespace(send=AsyncMock())
+        guild = SimpleNamespace(
+            id=777,
+            roles=[muted_role],
+            members=[active_member],
+            get_role=MagicMock(return_value=muted_role),
+            get_channel=MagicMock(return_value=audit_channel),
+        )
+
+        cog.server_config_store = SimpleNamespace(
+            get_muted_role_id=MagicMock(return_value=555),
+            get_audit_channel_id=MagicMock(return_value=1234),
+        )
+
+        await cog._remove_expired_mutes_from_guild(guild)
+
+        active_member.remove_roles.assert_not_awaited()
+        active_member.send.assert_not_awaited()
+        audit_channel.send.assert_not_awaited()
 
 
 if __name__ == "__main__":

@@ -46,7 +46,7 @@ class HabboRoleUpdaterCog(commands.Cog):
         await self.bot.wait_until_ready()
 
     @app_commands.command(
-        name="update_verified_roles",
+        name="UVA",
         description="Manually run the automatic verified-user role updater now.",
     )
     @app_commands.checks.has_permissions(manage_roles=True)

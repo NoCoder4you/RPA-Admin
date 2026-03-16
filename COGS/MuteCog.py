@@ -217,7 +217,7 @@ class MuteCog(commands.Cog):
 
         embed = discord.Embed(
             title="Member Muted",
-            description="A member was muted using `/mute`.",
+            description=" ",
             color=discord.Color.orange(),
             timestamp=datetime.now(timezone.utc),
         )

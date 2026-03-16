@@ -15,6 +15,8 @@ from typing import Callable
 from urllib import parse, request
 from urllib.error import HTTPError, URLError
 
+from common_paths import json_file
+
 
 class HabboApiError(RuntimeError):
     """Raised when the Habbo API cannot be reached or returns invalid data."""
@@ -93,8 +95,8 @@ class VerifiedUserStore:
     """Persist verified Discord-to-Habbo mappings in JSON/VerifiedUsers.json."""
 
     def __init__(self, file_path: Path | None = None) -> None:
-        root_path = Path(__file__).resolve().parent
-        self.file_path = file_path or (root_path / "JSON" / "VerifiedUsers.json")
+        # Use the shared helper so path conventions stay consistent across modules.
+        self.file_path = file_path or json_file("VerifiedUsers.json")
 
     def save(self, discord_id: str, habbo_username: str) -> None:
         """Create/update one verified mapping and write it to disk."""
@@ -243,8 +245,8 @@ class BadgeRoleMapper:
         *,
         server_config_store: ServerConfigStore | None = None,
     ) -> None:
-        root_path = Path(__file__).resolve().parent
-        self.file_path = file_path or (root_path / "JSON" / "BadgesToRoles.json")
+        # Keep role-mapping location centralized via common path utilities.
+        self.file_path = file_path or json_file("BadgesToRoles.json")
         # Read optional shared employee-role configuration from serverconfig.json.
         self.server_config_store = server_config_store or ServerConfigStore()
 

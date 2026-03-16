@@ -7,13 +7,15 @@ from typing import Any
 import discord
 from discord.ext import commands
 
+from common_paths import json_file
+
 
 class AutoInviteConfigStore:
     """Load and expose role-to-server invite rules for the auto-invite cog."""
 
     def __init__(self, *, config_path: str | Path | None = None) -> None:
-        base_path = Path(__file__).resolve().parent.parent
-        self.config_path = Path(config_path) if config_path else base_path / "JSON" / "AutoInviteConfig.json"
+        # Default to the shared JSON folder helper to avoid duplicated root-path logic.
+        self.config_path = Path(config_path) if config_path else json_file("AutoInviteConfig.json")
 
     def _load_raw(self) -> dict[str, Any]:
         """Return raw JSON config data, or a safe empty structure on any read/parse failure."""

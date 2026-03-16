@@ -307,6 +307,12 @@ class BadgeRoleMapper:
                 if role_id is not None:
                     managed_role_ids.add(role_id)
 
+        # Include the shared employee role so sync flows can remove it when entitlement is lost.
+        # Example: user leaves all groups marked rpaemployee="yes" and should lose this role.
+        base_rpa_employee_role_id = self.server_config_store.get_base_rpa_employee_role_id()
+        if base_rpa_employee_role_id is not None:
+            managed_role_ids.add(base_rpa_employee_role_id)
+
         return managed_role_ids
 
     def _load_config(self) -> dict:

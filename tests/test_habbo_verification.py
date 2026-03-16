@@ -252,7 +252,9 @@ class BadgeRoleMapperTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            mapper = BadgeRoleMapper(file_path=mapping_path)
+            # Provide an explicit config-store stub to keep this test isolated from repo serverconfig.json.
+            config_store = MagicMock(get_base_rpa_employee_role_id=MagicMock(return_value=None))
+            mapper = BadgeRoleMapper(file_path=mapping_path, server_config_store=config_store)
             role_ids = mapper.resolve_role_ids({"foundation", "security", "special", "misc", "donor"})
 
             self.assertEqual(role_ids, [10, 20, 30, 40])
@@ -334,6 +336,28 @@ class BadgeRoleMapperTests(unittest.TestCase):
 
             self.assertEqual(role_ids, [10])
 
+
+    def test_get_all_mapped_role_ids_excludes_base_role_when_not_configured(self) -> None:
+        """Ensure role-removal scope stays accurate when no base employee role is configured."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mapping_path = Path(temp_dir) / "BadgesToRoles.json"
+            mapping_path.write_text(
+                json.dumps(
+                    {
+                        "EmployeeRoles": [{"role_id": 10, "group_id": "foundation"}],
+                        "SpecialUnits": [],
+                        "MiscRoles": [],
+                        "Donators": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config_store = MagicMock(get_base_rpa_employee_role_id=MagicMock(return_value=None))
+            mapper = BadgeRoleMapper(file_path=mapping_path, server_config_store=config_store)
+            self.assertEqual(mapper.get_all_mapped_role_ids(), {10})
+
     def test_get_all_mapped_role_ids_includes_all_supported_categories(self) -> None:
         """Ensure stale-role cleanup can rely on a full managed-role set."""
 
@@ -353,8 +377,9 @@ class BadgeRoleMapperTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            mapper = BadgeRoleMapper(file_path=mapping_path)
-            self.assertEqual(mapper.get_all_mapped_role_ids(), {10, 20, 30, 40, 50})
+            config_store = MagicMock(get_base_rpa_employee_role_id=MagicMock(return_value=1479388404260012092))
+            mapper = BadgeRoleMapper(file_path=mapping_path, server_config_store=config_store)
+            self.assertEqual(mapper.get_all_mapped_role_ids(), {10, 20, 30, 40, 50, 1479388404260012092})
 
 
 if __name__ == "__main__":

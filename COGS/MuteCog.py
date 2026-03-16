@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
-from pathlib import Path
 import re
 import logging
 
@@ -10,13 +9,14 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+from common_paths import json_file
 from habbo_verification_core import ServerConfigStore
 
 
 _DURATION_PATTERN = re.compile(r"^\s*(\d+)\s*([smhdw])\s*$", re.IGNORECASE)
 _MAX_TIMEOUT = timedelta(days=28)
 # Store timeout records alongside the project's other JSON persistence files.
-_MUTE_LOG_PATH = Path(__file__).resolve().parent.parent / "JSON" / "mute_timeouts.json"
+_MUTE_LOG_PATH = json_file("mute_timeouts.json")
 _MUTED_ROLE_NAME = "Muted"
 
 

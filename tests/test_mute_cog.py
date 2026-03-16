@@ -60,7 +60,11 @@ class MuteCogTests(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             cog.mute_log_path = Path(tmp_dir) / "mute_timeouts.json"
-            cog.server_config_store = SimpleNamespace(get_audit_channel_id=MagicMock(return_value=1234))
+            cog.server_config_store = SimpleNamespace(
+                get_audit_channel_id=MagicMock(return_value=1234),
+                get_muted_role_id=MagicMock(return_value=None),
+                set_muted_role_id=MagicMock(),
+            )
 
             await cog.mute.callback(cog, interaction, target_member, "10m", "cool off")
 
@@ -68,6 +72,7 @@ class MuteCogTests(unittest.IsolatedAsyncioTestCase):
             guild.create_role.assert_awaited_once()
             target_member.add_roles.assert_awaited_once()
             fake_channel.set_permissions.assert_awaited_once()
+            cog.server_config_store.set_muted_role_id.assert_called_once()
 
             target_member.timeout.assert_awaited_once()
             timeout_until = target_member.timeout.await_args.args[0]

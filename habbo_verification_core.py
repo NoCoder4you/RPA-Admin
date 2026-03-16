@@ -159,10 +159,13 @@ class VerifiedUserStore:
 
 
 class ServerConfigStore:
-    """Read single-server audit channel configuration from serverconfig.json.
+    """Read/write single-server configuration from serverconfig.json.
 
     Expected file shape:
-    {"audit_log_channel_id": "123"}
+    {
+      "audit_log_channel_id": "123",
+      "muted_role_id": "456"
+    }
     """
 
     def __init__(self, file_path: Path | None = None) -> None:
@@ -174,6 +177,26 @@ class ServerConfigStore:
 
         config = self._read_config()
         return self._safe_int(config.get("audit_log_channel_id"))
+
+    def get_muted_role_id(self) -> int | None:
+        """Return configured muted role ID for this single-server bot."""
+
+        config = self._read_config()
+        return self._safe_int(config.get("muted_role_id"))
+
+    def set_muted_role_id(self, role_id: int) -> None:
+        """Persist muted role ID to serverconfig.json while preserving other keys."""
+
+        config = self._read_config()
+        config["muted_role_id"] = str(role_id)
+        self._write_config(config)
+
+
+    def _write_config(self, config: dict) -> None:
+        """Write config JSON safely, creating parent directories when needed."""
+
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        self.file_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
     def _read_config(self) -> dict:
         """Load config JSON with safe fallback for missing/corrupted files."""

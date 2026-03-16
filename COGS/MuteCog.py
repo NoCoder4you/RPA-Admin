@@ -74,9 +74,18 @@ class MuteCog(commands.Cog):
             json.dump(records, output_file, indent=2)
 
     async def _ensure_muted_role(self, guild: discord.Guild) -> discord.Role:
-        """Get or create a `Muted` role and enforce channel restrictions for it."""
+        """Get/create the configured muted role and enforce channel restrictions."""
 
-        muted_role = discord.utils.get(guild.roles, name=_MUTED_ROLE_NAME)
+        muted_role: discord.Role | None = None
+
+        # First prefer role ID persisted in serverconfig.json for stable future lookups.
+        configured_role_id = self.server_config_store.get_muted_role_id()
+        if configured_role_id is not None:
+            muted_role = guild.get_role(configured_role_id)
+
+        # Fallback by role name for migration compatibility with older deployments.
+        if muted_role is None:
+            muted_role = discord.utils.get(guild.roles, name=_MUTED_ROLE_NAME)
 
         if muted_role is None:
             # Create a baseline role first; per-channel overwrite locks are applied below.
@@ -84,6 +93,9 @@ class MuteCog(commands.Cog):
                 name=_MUTED_ROLE_NAME,
                 reason="Created automatically by /mute command",
             )
+
+        # Save the resolved role ID so future mutes use a consistent role reference.
+        self.server_config_store.set_muted_role_id(muted_role.id)
 
         # Apply explicit denies in every channel so muted members cannot chat or speak.
         for channel in guild.channels:

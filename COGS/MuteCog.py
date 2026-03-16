@@ -80,6 +80,8 @@ class MuteCog(commands.Cog):
             try:
                 # Remove only stale mute roles so active moderation actions are left untouched.
                 await member.remove_roles(muted_role, reason="Automatic unmute after timeout expiration")
+                # Send follow-up notifications so users and staff know the mute lifecycle completed.
+                await self._send_auto_unmute_notifications(guild, member)
             except (discord.Forbidden, discord.HTTPException):
                 logging.exception("Failed to auto-unmute member %s in guild %s", member.id, guild.id)
 
@@ -235,6 +237,72 @@ class MuteCog(commands.Cog):
             # Avoid failing the mute command when audit logging cannot be delivered.
             return
 
+    async def _send_mute_direct_message(
+        self,
+        *,
+        member: discord.Member,
+        moderator: discord.abc.User,
+        requested_length: str,
+        ends_at: datetime,
+        reason: str,
+    ) -> None:
+        """Send a direct-message embed with mute details to the muted member."""
+
+        embed = discord.Embed(
+            title="You Have Been Muted",
+            description="You were muted by a moderator.",
+            color=discord.Color.orange(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        # Include the exact moderation details requested for transparency.
+        embed.add_field(name="Who Muted", value=getattr(moderator, "mention", str(moderator)), inline=False)
+        embed.add_field(name="How Long", value=f"`{requested_length}`", inline=True)
+        embed.add_field(name="Expiration Time", value=f"`{ends_at.isoformat()}`", inline=False)
+        embed.add_field(name="Why", value=reason, inline=False)
+
+        try:
+            await member.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException, AttributeError):
+            # DMs can fail when closed; moderation action should still complete.
+            return
+
+    async def _send_auto_unmute_notifications(self, guild: discord.Guild, member: discord.Member) -> None:
+        """Notify the member and audit log when an automatic unmute occurs."""
+
+        member_embed = discord.Embed(
+            title="You Have Been Unmuted",
+            description="Your mute has expired and the Muted role was removed automatically.",
+            color=discord.Color.green(),
+            timestamp=datetime.now(timezone.utc),
+        )
+
+        try:
+            await member.send(embed=member_embed)
+        except (discord.Forbidden, discord.HTTPException, AttributeError):
+            # Skip DM failures silently so scheduled cleanup is resilient.
+            pass
+
+        channel_id = self.server_config_store.get_audit_channel_id()
+        if channel_id is None:
+            return
+
+        audit_channel = guild.get_channel(channel_id)
+        if audit_channel is None:
+            return
+
+        audit_embed = discord.Embed(
+            title="Member Unmuted",
+            description="A member was automatically unmuted after timeout expiration.",
+            color=discord.Color.green(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        audit_embed.add_field(name="Member", value=getattr(member, "mention", str(member)), inline=False)
+
+        try:
+            await audit_channel.send(embed=audit_embed)
+        except (discord.Forbidden, discord.HTTPException):
+            return
+
     @staticmethod
     def _parse_timeout_length(lengthoftime: str) -> timedelta | None:
         """Parse timeout text like `10m`, `2h`, `7d`, or `1w` into a timedelta."""
@@ -368,6 +436,15 @@ class MuteCog(commands.Cog):
             duration_seconds=duration_seconds,
             started_at=timeout_started_at,
             ends_at=timeout_until,
+        )
+
+        # Attempt to notify the muted user directly with clear moderation details.
+        await self._send_mute_direct_message(
+            member=mention,
+            moderator=interaction.user,
+            requested_length=lengthoftime,
+            ends_at=timeout_until,
+            reason=reason,
         )
 
         await self._send_mute_audit_embed(

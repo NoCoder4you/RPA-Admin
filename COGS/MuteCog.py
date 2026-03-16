@@ -15,6 +15,7 @@ from habbo_verification_core import ServerConfigStore
 _DURATION_PATTERN = re.compile(r"^\s*(\d+)\s*([smhdw])\s*$", re.IGNORECASE)
 _MAX_TIMEOUT = timedelta(days=28)
 _MUTE_LOG_PATH = Path(__file__).resolve().parent.parent / "mute_timeouts.json"
+_MUTED_ROLE_NAME = "Muted"
 
 
 class MuteCog(commands.Cog):
@@ -71,6 +72,39 @@ class MuteCog(commands.Cog):
 
         with self.mute_log_path.open("w", encoding="utf-8") as output_file:
             json.dump(records, output_file, indent=2)
+
+    async def _ensure_muted_role(self, guild: discord.Guild) -> discord.Role:
+        """Get or create a `Muted` role and enforce channel restrictions for it."""
+
+        muted_role = discord.utils.get(guild.roles, name=_MUTED_ROLE_NAME)
+
+        if muted_role is None:
+            # Create a baseline role first; per-channel overwrite locks are applied below.
+            muted_role = await guild.create_role(
+                name=_MUTED_ROLE_NAME,
+                reason="Created automatically by /mute command",
+            )
+
+        # Apply explicit denies in every channel so muted members cannot chat or speak.
+        for channel in guild.channels:
+            overwrite = channel.overwrites_for(muted_role)
+
+            if isinstance(channel, discord.TextChannel):
+                overwrite.send_messages = False
+            elif isinstance(channel, discord.VoiceChannel):
+                overwrite.speak = False
+            else:
+                # For other channel types, set both when supported by Discord.
+                overwrite.send_messages = False
+                overwrite.speak = False
+
+            await channel.set_permissions(
+                muted_role,
+                overwrite=overwrite,
+                reason="Enforced muted role restrictions",
+            )
+
+        return muted_role
 
     async def _send_mute_audit_embed(
         self,
@@ -146,7 +180,7 @@ class MuteCog(commands.Cog):
         reason="Why this member is being muted",
     )
     @app_commands.checks.has_permissions(moderate_members=True)
-    @app_commands.checks.bot_has_permissions(moderate_members=True)
+    @app_commands.checks.bot_has_permissions(moderate_members=True, manage_roles=True, manage_channels=True)
     async def mute(
         self,
         interaction: discord.Interaction,
@@ -201,6 +235,23 @@ class MuteCog(commands.Cog):
         if bot_member is not None and mention.top_role >= bot_member.top_role:
             await interaction.response.send_message(
                 "I cannot mute that member because their top role is higher than or equal to mine.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            muted_role = await self._ensure_muted_role(interaction.guild)
+            # Apply the role so text/voice deny overwrites take effect immediately.
+            await mention.add_roles(muted_role, reason=f"{interaction.user} - {reason}")
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "Mute failed: I do not have permission to create/apply the Muted role.",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException:
+            await interaction.response.send_message(
+                "Mute failed while configuring the Muted role. Please try again.",
                 ephemeral=True,
             )
             return
@@ -264,7 +315,7 @@ class MuteCog(commands.Cog):
 
         if isinstance(error, app_commands.BotMissingPermissions):
             await interaction.response.send_message(
-                "I need the **Moderate Members** permission to use `/mute`.",
+                "I need **Moderate Members**, **Manage Roles**, and **Manage Channels** to use `/mute`.",
                 ephemeral=True,
             )
             return

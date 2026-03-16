@@ -28,16 +28,27 @@ class MuteCogTests(unittest.IsolatedAsyncioTestCase):
             id=202,
             mention="<@202>",
             top_role=1,
+            add_roles=AsyncMock(),
             timeout=AsyncMock(),
         )
         invoking_member = SimpleNamespace(id=101, top_role=5, mention="<@101>")
         bot_member = SimpleNamespace(top_role=10)
+
+        muted_role = SimpleNamespace(name="Muted")
+        fake_overwrite = SimpleNamespace(send_messages=None, speak=None)
+        fake_channel = SimpleNamespace(
+            overwrites_for=MagicMock(return_value=fake_overwrite),
+            set_permissions=AsyncMock(),
+        )
 
         audit_channel = SimpleNamespace(send=AsyncMock())
         guild = SimpleNamespace(
             id=777,
             owner_id=999,
             me=bot_member,
+            roles=[],
+            channels=[fake_channel],
+            create_role=AsyncMock(return_value=muted_role),
             get_channel=MagicMock(return_value=audit_channel),
         )
 
@@ -52,6 +63,11 @@ class MuteCogTests(unittest.IsolatedAsyncioTestCase):
             cog.server_config_store = SimpleNamespace(get_audit_channel_id=MagicMock(return_value=1234))
 
             await cog.mute.callback(cog, interaction, target_member, "10m", "cool off")
+
+            # Ensure muted role is created and applied when it does not already exist.
+            guild.create_role.assert_awaited_once()
+            target_member.add_roles.assert_awaited_once()
+            fake_channel.set_permissions.assert_awaited_once()
 
             target_member.timeout.assert_awaited_once()
             timeout_until = target_member.timeout.await_args.args[0]
@@ -85,7 +101,7 @@ class MuteCogTests(unittest.IsolatedAsyncioTestCase):
         bot = MagicMock()
         cog = MuteCog(bot)
 
-        target_member = SimpleNamespace(id=202, mention="<@202>", top_role=1, timeout=AsyncMock())
+        target_member = SimpleNamespace(id=202, mention="<@202>", top_role=1, timeout=AsyncMock(), add_roles=AsyncMock())
         invoking_member = SimpleNamespace(id=101, top_role=5, mention="<@101>")
 
         interaction = SimpleNamespace(
@@ -102,6 +118,7 @@ class MuteCogTests(unittest.IsolatedAsyncioTestCase):
         await cog.mute.callback(cog, interaction, target_member, "banana", "bad behavior")
 
         target_member.timeout.assert_not_awaited()
+        target_member.add_roles.assert_not_awaited()
         interaction.response.send_message.assert_awaited_once_with(
             "Invalid `lengthoftime`. Use formats like `10m`, `2h`, `3d`, or `1w`.",
             ephemeral=True,

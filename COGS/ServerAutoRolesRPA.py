@@ -216,7 +216,12 @@ class HabboRoleUpdaterCog(commands.Cog):
         added_role_names: list[str],
         removed_role_names: list[str],
     ) -> None:
-        """Send a concise updater embed that only includes user + actual role deltas."""
+        """Send a concise updater embed only when at least one role changed."""
+
+        # Requirement: no role delta means no update embed should be posted.
+        # This avoids cluttering the audit channel with "user-only" notifications.
+        if not added_role_names and not removed_role_names:
+            return
 
         channel_id = self.server_config_store.get_audit_channel_id()
         if channel_id is None:
@@ -237,9 +242,9 @@ class HabboRoleUpdaterCog(commands.Cog):
 
         # Only show sections for categories that actually changed to keep the updater output brief.
         if added_role_names:
-            embed.add_field(name="Added Roles", value="\n".join(added_role_names), inline=False)
+            embed.add_field(name="Added Roles", value=", ".join(added_role_names), inline=False)
         if removed_role_names:
-            embed.add_field(name="Removed Roles", value="\n".join(removed_role_names), inline=False)
+            embed.add_field(name="Removed Roles", value=", ".join(removed_role_names), inline=False)
 
         try:
             await channel.send(embed=embed)

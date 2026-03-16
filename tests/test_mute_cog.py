@@ -30,17 +30,26 @@ class MuteCogTests(unittest.IsolatedAsyncioTestCase):
             top_role=1,
             timeout=AsyncMock(),
         )
-        invoking_member = SimpleNamespace(id=101, top_role=5)
+        invoking_member = SimpleNamespace(id=101, top_role=5, mention="<@101>")
         bot_member = SimpleNamespace(top_role=10)
+
+        audit_channel = SimpleNamespace(send=AsyncMock())
+        guild = SimpleNamespace(
+            id=777,
+            owner_id=999,
+            me=bot_member,
+            get_channel=MagicMock(return_value=audit_channel),
+        )
 
         interaction = SimpleNamespace(
             user=invoking_member,
-            guild=SimpleNamespace(id=777, owner_id=999, me=bot_member),
+            guild=guild,
             response=SimpleNamespace(send_message=AsyncMock()),
         )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             cog.mute_log_path = Path(tmp_dir) / "mute_timeouts.json"
+            cog.server_config_store = SimpleNamespace(get_audit_channel_id=MagicMock(return_value=1234))
 
             await cog.mute.callback(cog, interaction, target_member, "10m", "cool off")
 
@@ -51,6 +60,9 @@ class MuteCogTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(timeout_until, datetime)
             self.assertGreater(timeout_until, datetime.now(timezone.utc))
             self.assertTrue(timeout_reason.endswith(" - cool off"))
+
+            # Ensure a moderation embed is sent into the configured audit channel.
+            audit_channel.send.assert_awaited_once()
 
             interaction.response.send_message.assert_awaited_once_with(
                 "🔇 Muted <@202> for `10m`. Reason: cool off",
@@ -74,11 +86,16 @@ class MuteCogTests(unittest.IsolatedAsyncioTestCase):
         cog = MuteCog(bot)
 
         target_member = SimpleNamespace(id=202, mention="<@202>", top_role=1, timeout=AsyncMock())
-        invoking_member = SimpleNamespace(id=101, top_role=5)
+        invoking_member = SimpleNamespace(id=101, top_role=5, mention="<@101>")
 
         interaction = SimpleNamespace(
             user=invoking_member,
-            guild=SimpleNamespace(id=777, owner_id=999, me=SimpleNamespace(top_role=10)),
+            guild=SimpleNamespace(
+                id=777,
+                owner_id=999,
+                me=SimpleNamespace(top_role=10),
+                get_channel=MagicMock(return_value=None),
+            ),
             response=SimpleNamespace(send_message=AsyncMock()),
         )
 

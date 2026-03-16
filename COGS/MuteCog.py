@@ -9,6 +9,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from habbo_verification_core import ServerConfigStore
+
 
 _DURATION_PATTERN = re.compile(r"^\s*(\d+)\s*([smhdw])\s*$", re.IGNORECASE)
 _MAX_TIMEOUT = timedelta(days=28)
@@ -23,6 +25,8 @@ class MuteCog(commands.Cog):
         self.bot = bot
         # Persist timeout metadata so moderation actions are auditable outside Discord.
         self.mute_log_path = _MUTE_LOG_PATH
+        # Reuse the project's single-server audit channel configuration source.
+        self.server_config_store = ServerConfigStore()
 
     def _append_mute_record(
         self,
@@ -67,6 +71,52 @@ class MuteCog(commands.Cog):
 
         with self.mute_log_path.open("w", encoding="utf-8") as output_file:
             json.dump(records, output_file, indent=2)
+
+    async def _send_mute_audit_embed(
+        self,
+        *,
+        interaction: discord.Interaction,
+        mention: discord.Member,
+        reason: str,
+        requested_length: str,
+        started_at: datetime,
+        ends_at: datetime,
+        duration_seconds: int,
+    ) -> None:
+        """Post a moderation embed to the configured audit log channel if available."""
+
+        if interaction.guild is None:
+            return
+
+        channel_id = self.server_config_store.get_audit_channel_id()
+        if channel_id is None:
+            return
+
+        channel = interaction.guild.get_channel(channel_id)
+        if channel is None:
+            return
+
+        embed = discord.Embed(
+            title="Member Muted",
+            description="A member was muted using `/mute`.",
+            color=discord.Color.orange(),
+            timestamp=datetime.now(timezone.utc),
+        )
+
+        # Include direct mentions to help moderators quickly identify involved users.
+        embed.add_field(name="Member", value=mention.mention, inline=False)
+        embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
+        embed.add_field(name="Requested Length", value=f"`{requested_length}`", inline=True)
+        embed.add_field(name="Duration Seconds", value=str(duration_seconds), inline=True)
+        embed.add_field(name="Start Time", value=f"`{started_at.isoformat()}`", inline=False)
+        embed.add_field(name="End Time", value=f"`{ends_at.isoformat()}`", inline=False)
+        embed.add_field(name="Reason", value=reason, inline=False)
+
+        try:
+            await channel.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            # Avoid failing the mute command when audit logging cannot be delivered.
+            return
 
     @staticmethod
     def _parse_timeout_length(lengthoftime: str) -> timedelta | None:
@@ -173,15 +223,27 @@ class MuteCog(commands.Cog):
             )
             return
 
+        duration_seconds = int(duration.total_seconds())
+
         self._append_mute_record(
             guild_id=interaction.guild.id,
             member_id=mention.id,
             moderator_id=interaction.user.id,
             reason=reason,
             requested_length=lengthoftime,
-            duration_seconds=int(duration.total_seconds()),
+            duration_seconds=duration_seconds,
             started_at=timeout_started_at,
             ends_at=timeout_until,
+        )
+
+        await self._send_mute_audit_embed(
+            interaction=interaction,
+            mention=mention,
+            reason=reason,
+            requested_length=lengthoftime,
+            started_at=timeout_started_at,
+            ends_at=timeout_until,
+            duration_seconds=duration_seconds,
         )
 
         await interaction.response.send_message(

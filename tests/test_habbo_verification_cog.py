@@ -128,6 +128,34 @@ class HabboVerificationCogReactionRoleTests(unittest.IsolatedAsyncioTestCase):
         member.add_roles.assert_not_awaited()
         message.remove_reaction.assert_awaited_once_with("❌", member)
 
+    async def test_ensure_verification_message_reaction_adds_green_check_to_configured_message(self) -> None:
+        # Confirm startup behavior: the bot should place ✅ on the configured verification message.
+        bot = SimpleNamespace(guilds=[])
+        cog = HabboVerificationCog.__new__(HabboVerificationCog)
+        cog.bot = bot
+        cog.server_config_store = SimpleNamespace(get_verification_reaction_message_id=lambda: 1481010999157981256)
+
+        message = SimpleNamespace(add_reaction=AsyncMock())
+        matching_channel = SimpleNamespace(fetch_message=AsyncMock(return_value=message))
+        missing_channel = SimpleNamespace(fetch_message=AsyncMock(side_effect=discord.NotFound(MagicMock(), "missing")))
+        bot.guilds = [SimpleNamespace(text_channels=[missing_channel, matching_channel])]
+
+        await cog._ensure_verification_message_reaction()
+
+        message.add_reaction.assert_awaited_once_with("✅")
+
+    async def test_ensure_verification_message_reaction_noops_without_configured_message_id(self) -> None:
+        # Guardrail: without a configured target message ID, startup should not issue fetch requests.
+        fetch_message = AsyncMock()
+        bot = SimpleNamespace(guilds=[SimpleNamespace(text_channels=[SimpleNamespace(fetch_message=fetch_message)])])
+        cog = HabboVerificationCog.__new__(HabboVerificationCog)
+        cog.bot = bot
+        cog.server_config_store = SimpleNamespace(get_verification_reaction_message_id=lambda: None)
+
+        await cog._ensure_verification_message_reaction()
+
+        fetch_message.assert_not_awaited()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -51,7 +51,9 @@ class RulesRegulationsCogTests(unittest.IsolatedAsyncioTestCase):
         # Validate that each outbound embed inherits the bot avatar thumbnail.
         sent_embeds = [call.kwargs["embed"] for call in ctx.send.await_args_list]
         self.assertTrue(all(embed.thumbnail.url == "https://cdn.example.com/live-bot-avatar.png" for embed in sent_embeds))
-        self.assertTrue(all(embed.footer.text == "RPA Foundation Bot" for embed in sent_embeds))
+        self.assertTrue(
+            all(embed.footer.text == "Royal Protection Agency - RPA Foundation Bot" for embed in sent_embeds)
+        )
 
 
 if __name__ == "__main__":

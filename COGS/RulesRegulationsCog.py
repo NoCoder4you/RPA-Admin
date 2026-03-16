@@ -112,8 +112,13 @@ class RulesRegulationsCog(commands.Cog):
         bot_avatar = getattr(getattr(ctx, "me", None), "display_avatar", None)
         thumbnail_url = str(bot_avatar.url) if bot_avatar and getattr(bot_avatar, "url", None) else None
 
-        # Use guild nickname/display name as footer text so members can identify the bot context.
-        footer_text = getattr(getattr(ctx, "me", None), "display_name", None)
+        # Build the requested branded footer format using the bot's current guild nickname.
+        bot_nickname = getattr(getattr(ctx, "me", None), "display_name", None)
+        if bot_nickname:
+            footer_text = f"Royal Protection Agency - {bot_nickname}"
+        else:
+            # Gracefully fall back when guild member context is unavailable.
+            footer_text = "Royal Protection Agency"
 
         embeds = self._build_rule_embeds(thumbnail_url=thumbnail_url, footer_text=footer_text)
 
@@ -124,5 +129,4 @@ class RulesRegulationsCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot) -> None:
-
     await bot.add_cog(RulesRegulationsCog(bot))

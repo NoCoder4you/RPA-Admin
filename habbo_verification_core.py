@@ -161,7 +161,7 @@ class VerifiedUserStore:
 
 
 class ServerConfigStore:
-    """Read/write single-server configuration from serverconfig.json.
+    """Read/write single-server configuration from JSON/serverconfig.json.
 
     Expected file shape:
     {
@@ -173,8 +173,8 @@ class ServerConfigStore:
     """
 
     def __init__(self, file_path: Path | None = None) -> None:
-        root_path = Path(__file__).resolve().parent
-        self.file_path = file_path or (root_path / "serverconfig.json")
+        # Keep server config in the shared JSON directory with the project's other persisted data.
+        self.file_path = file_path or json_file("serverconfig.json")
 
     def get_audit_channel_id(self) -> int | None:
         """Return configured audit log channel ID for this single-server bot."""

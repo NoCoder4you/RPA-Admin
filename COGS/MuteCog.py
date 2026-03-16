@@ -146,6 +146,15 @@ class MuteCog(commands.Cog):
         with self.mute_log_path.open("w", encoding="utf-8") as output_file:
             json.dump(records, output_file, indent=2)
 
+    @staticmethod
+    def _discord_timestamp_display(moment: datetime) -> str:
+        """Return Discord timestamp markdown in absolute + relative formats."""
+
+        # Discord resolves `<t:...>` in each viewer's local timezone, which makes
+        # moderation logs much easier for staff to read than raw ISO-8601 strings.
+        unix_seconds = int(moment.timestamp())
+        return f"<t:{unix_seconds}:F> (<t:{unix_seconds}:R>)"
+
     async def _ensure_muted_role(self, guild: discord.Guild) -> discord.Role:
         """Get/create the configured muted role and enforce channel restrictions."""
 
@@ -227,8 +236,8 @@ class MuteCog(commands.Cog):
         embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
         embed.add_field(name="Requested Length", value=f"`{requested_length}`", inline=True)
         embed.add_field(name="Duration Seconds", value=str(duration_seconds), inline=True)
-        embed.add_field(name="Start Time", value=f"`{started_at.isoformat()}`", inline=False)
-        embed.add_field(name="End Time", value=f"`{ends_at.isoformat()}`", inline=False)
+        embed.add_field(name="Start Time", value=self._discord_timestamp_display(started_at), inline=False)
+        embed.add_field(name="End Time", value=self._discord_timestamp_display(ends_at), inline=False)
         embed.add_field(name="Reason", value=reason, inline=False)
 
         try:
@@ -248,10 +257,8 @@ class MuteCog(commands.Cog):
     ) -> None:
         """Send a direct-message embed with mute details to the muted member."""
 
-        # Discord's timestamp markdown (`<t:...>`) renders in each viewer's local timezone,
-        # which is far more user-friendly than a raw ISO timestamp string.
-        expiration_unix = int(ends_at.timestamp())
-        expiration_display = f"<t:{expiration_unix}:F> (<t:{expiration_unix}:R>)"
+        # Use the same human-friendly timestamp format as the moderation audit logs.
+        expiration_display = self._discord_timestamp_display(ends_at)
 
         embed = discord.Embed(
             title="You Have Been Muted",

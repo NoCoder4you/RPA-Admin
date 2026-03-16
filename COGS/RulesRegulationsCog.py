@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import discord
 from discord.ext import commands
 
@@ -123,10 +124,9 @@ class RulesRegulationsCog(commands.Cog):
 
         # Send one embed per message so each rule section stays visually separated in chat.
         for embed in embeds:
+            await asyncio.sleep(1)
             await ctx.send(embed=embed)
 
 
 async def setup(bot: commands.Bot) -> None:
-    """Discord extension entrypoint for loading this cog."""
-
     await bot.add_cog(RulesRegulationsCog(bot))

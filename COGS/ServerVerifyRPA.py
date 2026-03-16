@@ -40,12 +40,12 @@ class HabboVerificationCog(commands.Cog):
         description="Verify your Habbo account by putting a temporary code in your motto.",
     )
     @app_commands.describe(
-        habbo_name="Your Habbo username",
+        Username="Your Habbo username",
     )
     async def verify(
         self,
         interaction: discord.Interaction,
-        habbo_name: str,
+        Username: str,
     ) -> None:
         """Create/check a verification challenge and validate against Habbo public API."""
 
@@ -108,9 +108,9 @@ class HabboVerificationCog(commands.Cog):
 
         # First-time verification path: use the currently provided Habbo name.
         try:
-            profile = fetch_habbo_profile(habbo_name)
+            profile = fetch_habbo_profile(Username)
         except HabboApiError as exc:
-            challenge = self.manager.get_or_create(interaction.user.id, habbo_name)
+            challenge = self.manager.get_or_create(interaction.user.id, Username)
             await interaction.followup.send(
                 embed=self._build_embed(
                     title="Habbo API Error",
@@ -127,10 +127,10 @@ class HabboVerificationCog(commands.Cog):
             )
             return
 
-        challenge = self.manager.get_or_create(interaction.user.id, habbo_name)
+        challenge = self.manager.get_or_create(interaction.user.id, Username)
 
         if motto_contains_code(profile, challenge.code):
-            verified_habbo_name = str(profile.get("name", habbo_name))
+            verified_habbo_name = str(profile.get("name", Username))
             self.verified_store.save(
                 discord_id=discord_id,
                 habbo_username=verified_habbo_name,

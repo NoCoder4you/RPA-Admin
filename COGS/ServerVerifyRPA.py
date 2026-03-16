@@ -275,6 +275,11 @@ class HabboVerificationCog(commands.Cog):
     ) -> None:
         """Send a dedicated role-change embed for verify and auto-sync actions."""
 
+        # Requirement: only post a role-sync update embed when an actual role delta exists.
+        # If both lists are empty, there is nothing meaningful for moderators to review.
+        if not added_role_names and not removed_role_names:
+            return
+
         channel_id = self.server_config_store.get_audit_channel_id()
         if channel_id is None:
             return

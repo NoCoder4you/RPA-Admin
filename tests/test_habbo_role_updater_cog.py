@@ -16,7 +16,7 @@ except ModuleNotFoundError as import_error:  # pragma: no cover - environment-de
 class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
     """Ensure updater embeds include only user mention and true role deltas."""
 
-    async def test_role_change_embed_includes_only_user_when_no_role_changes(self) -> None:
+    async def test_role_change_embed_is_skipped_when_no_role_changes(self) -> None:
         # Build a cog instance without running __init__ so background tasks are not started in tests.
         cog = HabboRoleUpdaterCog.__new__(HabboRoleUpdaterCog)
         cog.server_config_store = SimpleNamespace(get_audit_channel_id=lambda: 101)
@@ -32,13 +32,8 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
             removed_role_names=[],
         )
 
-        channel.send.assert_awaited_once()
-        embed = channel.send.await_args.kwargs["embed"]
-        field_names = [field.name for field in embed.fields]
-
-        self.assertEqual(embed.title, "Habbo Role Sync Update")
-        self.assertEqual(field_names, ["User"])
-        self.assertEqual(embed.fields[0].value, "<@123>")
+        # No role changes should produce no embed at all.
+        channel.send.assert_not_awaited()
 
     async def test_role_change_embed_includes_only_non_empty_role_sections(self) -> None:
         # Use a test double for config/channel so we can inspect exactly what was sent.

@@ -200,6 +200,20 @@ class ServerConfigStoreTests(unittest.TestCase):
             store = ServerConfigStore(file_path=file_path)
             self.assertIsNone(store.get_audit_channel_id())
 
+    def test_set_and_get_muted_role_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "serverconfig.json"
+            file_path.write_text(json.dumps({"audit_log_channel_id": "456"}), encoding="utf-8")
+
+            store = ServerConfigStore(file_path=file_path)
+            store.set_muted_role_id(789)
+
+            # Ensure muted role persistence keeps existing server config keys untouched.
+            data = json.loads(file_path.read_text(encoding="utf-8"))
+            self.assertEqual(data.get("audit_log_channel_id"), "456")
+            self.assertEqual(data.get("muted_role_id"), "789")
+            self.assertEqual(store.get_muted_role_id(), 789)
+
 
 
 class BadgeRoleMapperTests(unittest.TestCase):

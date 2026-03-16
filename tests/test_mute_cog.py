@@ -88,6 +88,13 @@ class MuteCogTests(unittest.IsolatedAsyncioTestCase):
             audit_channel.send.assert_awaited_once()
             target_member.send.assert_awaited_once()
 
+            # Audit embed should use Discord timestamp markdown for friendlier local-time rendering.
+            audit_embed = audit_channel.send.await_args.kwargs["embed"]
+            start_time_field = next(field for field in audit_embed.fields if field.name == "Start Time")
+            end_time_field = next(field for field in audit_embed.fields if field.name == "End Time")
+            self.assertRegex(start_time_field.value, r"^<t:\d+:F> \(<t:\d+:R>\)$")
+            self.assertRegex(end_time_field.value, r"^<t:\d+:F> \(<t:\d+:R>\)$")
+
             interaction.response.defer.assert_awaited_once_with(ephemeral=True)
             interaction.followup.send.assert_awaited_once_with(
                 "🔇 Muted <@202> for `10m`. Reason: cool off",

@@ -167,7 +167,8 @@ class ServerConfigStore:
     {
       "audit_log_channel_id": "123",
       "muted_role_id": "456",
-      "base_rpa_employee_role_id": "789"
+      "base_rpa_employee_role_id": "789",
+      "verification_reaction_message_id": "101112"
     }
     """
 
@@ -205,6 +206,19 @@ class ServerConfigStore:
 
         config = self._read_config()
         config["base_rpa_employee_role_id"] = str(role_id)
+        self._write_config(config)
+
+    def get_verification_reaction_message_id(self) -> int | None:
+        """Return message ID users must react to in order to receive verification-awaiting role."""
+
+        config = self._read_config()
+        return self._safe_int(config.get("verification_reaction_message_id"))
+
+    def set_verification_reaction_message_id(self, message_id: int) -> None:
+        """Persist verification reaction target message ID while preserving existing config keys."""
+
+        config = self._read_config()
+        config["verification_reaction_message_id"] = str(message_id)
         self._write_config(config)
 
     def _write_config(self, config: dict) -> None:

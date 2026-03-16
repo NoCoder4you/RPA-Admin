@@ -336,6 +336,78 @@ class HabboVerificationCog(commands.Cog):
         except (discord.Forbidden, discord.HTTPException):
             return
 
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
+        """Handle verification-message reactions and keep only bot-owned reactions on that message."""
+
+        # Ignore DM reactions because role assignment only makes sense inside a guild.
+        if payload.guild_id is None:
+            return
+
+        # Prevent bot self-actions and other automation accounts from receiving roles.
+        if self.bot.user is not None and payload.user_id == self.bot.user.id:
+            return
+
+        configured_message_id = self.server_config_store.get_verification_reaction_message_id()
+        if configured_message_id is None:
+            return
+
+        # Gate this handler to one explicit message ID stored in serverconfig.json.
+        if payload.message_id != configured_message_id:
+            return
+
+        guild = self.bot.get_guild(payload.guild_id)
+        if guild is None:
+            return
+
+        member = guild.get_member(payload.user_id)
+        if member is None:
+            try:
+                member = await guild.fetch_member(payload.user_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                return
+
+        # Enforce policy: user reactions should not persist on the verification message.
+        # This keeps the message reaction list effectively bot-only after processing.
+        await self._remove_member_reaction_from_message(payload, member)
+
+        emoji = str(payload.emoji)
+        allowed_green_checks = {"✅", "☑️", "✔️"}
+        if emoji not in allowed_green_checks:
+            return
+
+        role = discord.utils.get(guild.roles, name="Awaiting Verification")
+        if role is None or role in member.roles:
+            return
+
+        try:
+            # Assign the staging role required before moderators complete verification review.
+            await member.add_roles(role, reason="Reacted with green check on verification message")
+        except (discord.Forbidden, discord.HTTPException):
+            return
+
+    async def _remove_member_reaction_from_message(
+        self,
+        payload: discord.RawReactionActionEvent,
+        member: discord.Member,
+    ) -> None:
+        """Remove the reacting member's reaction to keep the verification message bot-only."""
+
+        channel = self.bot.get_channel(payload.channel_id)
+        if channel is None:
+            return
+
+        try:
+            message = await channel.fetch_message(payload.message_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return
+
+        try:
+            await message.remove_reaction(payload.emoji, member)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return
+
     @staticmethod
     def _build_avatar_thumbnail_url(profile: dict) -> str | None:
         """Build Habbo avatar thumbnail URL from profile figure string."""

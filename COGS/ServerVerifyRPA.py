@@ -35,6 +35,38 @@ class HabboVerificationCog(commands.Cog):
         # Resolve audit-log destination from serverconfig.json.
         self.server_config_store = ServerConfigStore()
 
+    @commands.Cog.listener()
+    async def on_ready(self) -> None:
+        """Ensure the configured verification message always has the bot-owned green-check reaction."""
+
+        # Keep the startup hook tiny and delegate to a dedicated helper for easier testing.
+        await self._ensure_verification_message_reaction()
+
+    async def _ensure_verification_message_reaction(self) -> None:
+        """Apply ✅ to the configured verification message ID when the bot comes online."""
+
+        configured_message_id = self.server_config_store.get_verification_reaction_message_id()
+        if configured_message_id is None:
+            return
+
+        # Scan connected guilds and accessible text channels to locate the configured message.
+        # This avoids requiring a separate channel ID in config while still targeting one exact message.
+        for guild in self.bot.guilds:
+            for channel in guild.text_channels:
+                try:
+                    message = await channel.fetch_message(configured_message_id)
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    continue
+
+                try:
+                    # Keep a single canonical green-check trigger visible on the target verification post.
+                    await message.add_reaction("✅")
+                except (discord.Forbidden, discord.HTTPException):
+                    return
+
+                # Stop once the configured message has been found and updated.
+                return
+
     @app_commands.command(
         name="verify",
         description="Verify your Habbo account by putting a temporary code in your motto.",

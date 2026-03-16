@@ -11,7 +11,12 @@ class RulesRegulationsCog(commands.Cog):
         # Keep a bot reference so this cog matches the structure used in other project cogs.
         self.bot = bot
 
-    def _build_rule_embeds(self, *, thumbnail_url: str | None = None) -> list[discord.Embed]:
+    def _build_rule_embeds(
+        self,
+        *,
+        thumbnail_url: str | None = None,
+        footer_text: str | None = None,
+    ) -> list[discord.Embed]:
         """Build all rule embeds in display order with one embed per section."""
 
         # Keep rule definitions data-driven so wording updates are easy and low-risk.
@@ -72,6 +77,10 @@ class RulesRegulationsCog(commands.Cog):
             # Apply the same thumbnail to every rules embed for consistent branding.
             if thumbnail_url:
                 embed.set_thumbnail(url=thumbnail_url)
+
+            # Show the bot's active guild nickname in the footer for identity consistency.
+            if footer_text:
+                embed.set_footer(text=footer_text)
             embeds.append(embed)
 
         # Add a final acknowledgement embed so members understand agreement implications.
@@ -86,6 +95,10 @@ class RulesRegulationsCog(commands.Cog):
         # Mirror the same thumbnail on the final acknowledgement embed for consistency.
         if thumbnail_url:
             closing_embed.set_thumbnail(url=thumbnail_url)
+
+        # Keep footer identity consistent on the closing embed as well.
+        if footer_text:
+            closing_embed.set_footer(text=footer_text)
         embeds.append(closing_embed)
 
         return embeds
@@ -98,7 +111,10 @@ class RulesRegulationsCog(commands.Cog):
         bot_avatar = getattr(getattr(ctx, "me", None), "display_avatar", None)
         thumbnail_url = str(bot_avatar.url) if bot_avatar and getattr(bot_avatar, "url", None) else None
 
-        embeds = self._build_rule_embeds(thumbnail_url=thumbnail_url)
+        # Use guild nickname/display name as footer text so members can identify the bot context.
+        footer_text = getattr(getattr(ctx, "me", None), "display_name", None)
+
+        embeds = self._build_rule_embeds(thumbnail_url=thumbnail_url, footer_text=footer_text)
 
         # Send one embed per message so each rule section stays visually separated in chat.
         for embed in embeds:

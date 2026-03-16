@@ -214,6 +214,20 @@ class ServerConfigStoreTests(unittest.TestCase):
             self.assertEqual(data.get("muted_role_id"), "789")
             self.assertEqual(store.get_muted_role_id(), 789)
 
+    def test_set_and_get_base_rpa_employee_role_id(self) -> None:
+        """Ensure the shared employee role ID is persisted in serverconfig.json."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "serverconfig.json"
+            file_path.write_text(json.dumps({"audit_log_channel_id": "456"}), encoding="utf-8")
+
+            store = ServerConfigStore(file_path=file_path)
+            store.set_base_rpa_employee_role_id(1479388404260012092)
+
+            data = json.loads(file_path.read_text(encoding="utf-8"))
+            self.assertEqual(data.get("audit_log_channel_id"), "456")
+            self.assertEqual(data.get("base_rpa_employee_role_id"), "1479388404260012092")
+            self.assertEqual(store.get_base_rpa_employee_role_id(), 1479388404260012092)
 
 
 class BadgeRoleMapperTests(unittest.TestCase):
@@ -242,6 +256,83 @@ class BadgeRoleMapperTests(unittest.TestCase):
             role_ids = mapper.resolve_role_ids({"foundation", "security", "special", "misc", "donor"})
 
             self.assertEqual(role_ids, [10, 20, 30, 40])
+
+    def test_resolve_role_ids_adds_base_employee_role_when_rpaemployee_yes(self) -> None:
+        """Ensure users marked as RPA employees get the shared employee Discord role."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mapping_path = Path(temp_dir) / "BadgesToRoles.json"
+            mapping_path.write_text(
+                json.dumps(
+                    {
+                        "EmployeeRoles": [
+                            {
+                                "role_id": 10,
+                                "group_id": "foundation",
+                                "rpaemployee": "yes",
+                            }
+                        ],
+                        "SpecialUnits": [],
+                        "MiscRoles": [],
+                        "Donators": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config_store = MagicMock(get_base_rpa_employee_role_id=MagicMock(return_value=1479388404260012092))
+            mapper = BadgeRoleMapper(file_path=mapping_path, server_config_store=config_store)
+            role_ids = mapper.resolve_role_ids({"foundation"})
+
+            self.assertEqual(role_ids, [10, 1479388404260012092])
+
+    def test_resolve_role_ids_ignores_base_employee_role_when_rpaemployee_not_yes(self) -> None:
+        """Ensure the shared employee role is not granted without explicit entitlement."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mapping_path = Path(temp_dir) / "BadgesToRoles.json"
+            mapping_path.write_text(
+                json.dumps(
+                    {
+                        "EmployeeRoles": [{"role_id": 10, "group_id": "foundation"}],
+                        "SpecialUnits": [],
+                        "MiscRoles": [],
+                        "Donators": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config_store = MagicMock(get_base_rpa_employee_role_id=MagicMock(return_value=1479388404260012092))
+            mapper = BadgeRoleMapper(file_path=mapping_path, server_config_store=config_store)
+            role_ids = mapper.resolve_role_ids({"foundation"})
+
+            self.assertEqual(role_ids, [10])
+
+    def test_resolve_role_ids_skips_base_employee_role_when_config_not_set(self) -> None:
+        """Ensure no shared employee role is added when serverconfig lacks the role ID."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mapping_path = Path(temp_dir) / "BadgesToRoles.json"
+            mapping_path.write_text(
+                json.dumps(
+                    {
+                        "EmployeeRoles": [
+                            {"role_id": 10, "group_id": "foundation", "rpaemployee": "yes"}
+                        ],
+                        "SpecialUnits": [],
+                        "MiscRoles": [],
+                        "Donators": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config_store = MagicMock(get_base_rpa_employee_role_id=MagicMock(return_value=None))
+            mapper = BadgeRoleMapper(file_path=mapping_path, server_config_store=config_store)
+            role_ids = mapper.resolve_role_ids({"foundation"})
+
+            self.assertEqual(role_ids, [10])
 
     def test_get_all_mapped_role_ids_includes_all_supported_categories(self) -> None:
         """Ensure stale-role cleanup can rely on a full managed-role set."""

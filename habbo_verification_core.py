@@ -164,7 +164,8 @@ class ServerConfigStore:
     Expected file shape:
     {
       "audit_log_channel_id": "123",
-      "muted_role_id": "456"
+      "muted_role_id": "456",
+      "base_rpa_employee_role_id": "789"
     }
     """
 
@@ -191,6 +192,18 @@ class ServerConfigStore:
         config["muted_role_id"] = str(role_id)
         self._write_config(config)
 
+    def get_base_rpa_employee_role_id(self) -> int | None:
+        """Return the configured base role granted to all RPA employees."""
+
+        config = self._read_config()
+        return self._safe_int(config.get("base_rpa_employee_role_id"))
+
+    def set_base_rpa_employee_role_id(self, role_id: int) -> None:
+        """Persist the base RPA employee role ID while preserving existing config keys."""
+
+        config = self._read_config()
+        config["base_rpa_employee_role_id"] = str(role_id)
+        self._write_config(config)
 
     def _write_config(self, config: dict) -> None:
         """Write config JSON safely, creating parent directories when needed."""
@@ -224,15 +237,23 @@ class ServerConfigStore:
 class BadgeRoleMapper:
     """Map Habbo group memberships to Discord role IDs via JSON/BadgesToRoles.json."""
 
-    def __init__(self, file_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        file_path: Path | None = None,
+        *,
+        server_config_store: ServerConfigStore | None = None,
+    ) -> None:
         root_path = Path(__file__).resolve().parent
         self.file_path = file_path or (root_path / "JSON" / "BadgesToRoles.json")
+        # Read optional shared employee-role configuration from serverconfig.json.
+        self.server_config_store = server_config_store or ServerConfigStore()
 
     def resolve_role_ids(self, habbo_group_ids: set[str]) -> list[int]:
         """Return role IDs for matching groups with employee-role hierarchy rules."""
 
         config = self._load_config()
         role_ids: list[int] = []
+        has_rpa_employee_badge = False
 
         # Assign one highest employee role based on file order (top = highest rank).
         for entry in config.get("EmployeeRoles", []):
@@ -241,6 +262,9 @@ class BadgeRoleMapper:
                 role_id = self._safe_int(entry.get("role_id"))
                 if role_id is not None:
                     role_ids.append(role_id)
+                # Employee entries can explicitly mark the user as an RPA employee.
+                if self._is_yes(entry.get("rpaemployee")):
+                    has_rpa_employee_badge = True
                 break
 
         # Assign all matching roles in other categories.
@@ -252,6 +276,18 @@ class BadgeRoleMapper:
                     role_id = self._safe_int(entry.get("role_id"))
                     if role_id is not None:
                         role_ids.append(role_id)
+                    # Some categories also encode employee entitlement, so keep this check generic.
+                    if self._is_yes(entry.get("rpaemployee")):
+                        has_rpa_employee_badge = True
+
+        # Ensure all users flagged as RPA employees get the shared role configured in serverconfig.json.
+        base_rpa_employee_role_id = self.server_config_store.get_base_rpa_employee_role_id()
+        if (
+            has_rpa_employee_badge
+            and base_rpa_employee_role_id is not None
+            and base_rpa_employee_role_id not in role_ids
+        ):
+            role_ids.append(base_rpa_employee_role_id)
 
         return role_ids
 
@@ -297,6 +333,12 @@ class BadgeRoleMapper:
             return int(value)
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _is_yes(value: object) -> bool:
+        """Return True when config values represent an affirmative "yes" state."""
+
+        return str(value).strip().lower() == "yes"
 
 
 def fetch_habbo_profile(habbo_name: str) -> dict:

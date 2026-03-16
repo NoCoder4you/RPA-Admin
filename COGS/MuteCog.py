@@ -267,8 +267,6 @@ class MuteCog(commands.Cog):
             return
 
     async def _send_auto_unmute_notifications(self, guild: discord.Guild, member: discord.Member) -> None:
-        """Notify the member and audit log when an automatic unmute occurs."""
-
         member_embed = discord.Embed(
             title="You Have Been Unmuted",
             description="Your mute has expired and the Muted role was removed automatically.",

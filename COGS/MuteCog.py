@@ -179,18 +179,25 @@ class MuteCog(commands.Cog):
         # Save the resolved role ID so future mutes use a consistent role reference.
         self.server_config_store.set_muted_role_id(muted_role.id)
 
-        # Apply explicit denies in every channel so muted members cannot chat or speak.
+        # Apply only missing explicit denies so repeat `/mute` calls stay fast in large servers.
+        # This avoids re-writing identical permission overwrites across every channel each time.
         for channel in guild.channels:
             overwrite = channel.overwrites_for(muted_role)
 
-            if isinstance(channel, discord.TextChannel):
+            desired_send_messages = isinstance(channel, discord.TextChannel) or not isinstance(channel, discord.VoiceChannel)
+            desired_speak = isinstance(channel, discord.VoiceChannel) or not isinstance(channel, discord.TextChannel)
+
+            # Skip API calls when restrictions are already in place.
+            needs_update = False
+            if desired_send_messages and getattr(overwrite, "send_messages", None) is not False:
                 overwrite.send_messages = False
-            elif isinstance(channel, discord.VoiceChannel):
+                needs_update = True
+            if desired_speak and getattr(overwrite, "speak", None) is not False:
                 overwrite.speak = False
-            else:
-                # For other channel types, set both when supported by Discord.
-                overwrite.send_messages = False
-                overwrite.speak = False
+                needs_update = True
+
+            if not needs_update:
+                continue
 
             await channel.set_permissions(
                 muted_role,

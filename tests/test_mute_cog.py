@@ -140,6 +140,44 @@ class MuteCogTests(unittest.IsolatedAsyncioTestCase):
             ephemeral=True,
         )
 
+
+    async def test_new_channel_create_applies_muted_role_restrictions(self) -> None:
+        bot = MagicMock()
+        cog = MuteCog(bot)
+
+        muted_role = SimpleNamespace(id=555, name="Muted")
+        guild = SimpleNamespace(
+            get_role=MagicMock(return_value=muted_role),
+            roles=[muted_role],
+        )
+        new_channel = SimpleNamespace(id=9090, guild=guild)
+
+        cog.server_config_store = SimpleNamespace(get_muted_role_id=MagicMock(return_value=555))
+        cog._apply_muted_role_restrictions = AsyncMock()
+
+        await cog.on_guild_channel_create(new_channel)
+
+        # Newly created channels should immediately receive muted-role denies.
+        cog._apply_muted_role_restrictions.assert_awaited_once_with(new_channel, muted_role)
+
+    async def test_new_channel_create_skips_when_muted_role_not_configured(self) -> None:
+        bot = MagicMock()
+        cog = MuteCog(bot)
+
+        guild = SimpleNamespace(
+            get_role=MagicMock(return_value=None),
+            roles=[],
+        )
+        new_channel = SimpleNamespace(id=9090, guild=guild)
+
+        cog.server_config_store = SimpleNamespace(get_muted_role_id=MagicMock(return_value=None))
+        cog._apply_muted_role_restrictions = AsyncMock()
+
+        await cog.on_guild_channel_create(new_channel)
+
+        # If no muted role exists yet, channel creation should not raise or attempt writes.
+        cog._apply_muted_role_restrictions.assert_not_awaited()
+
     async def test_remove_expired_mutes_removes_role_for_member_without_active_timeout(self) -> None:
         bot = MagicMock()
         cog = MuteCog(bot)

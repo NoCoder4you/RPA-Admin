@@ -155,6 +155,34 @@ class MuteCog(commands.Cog):
         unix_seconds = int(moment.timestamp())
         return f"<t:{unix_seconds}:F> (<t:{unix_seconds}:R>)"
 
+    async def _apply_muted_role_restrictions(self, channel: discord.abc.GuildChannel, muted_role: discord.Role) -> None:
+        """Ensure a channel denies muted members from sending messages/speaking where applicable."""
+
+        overwrite = channel.overwrites_for(muted_role)
+
+        # Text channels must deny sending messages, voice channels must deny speaking,
+        # and unsupported/other channel types get both denies for safest moderation behavior.
+        desired_send_messages = isinstance(channel, discord.TextChannel) or not isinstance(channel, discord.VoiceChannel)
+        desired_speak = isinstance(channel, discord.VoiceChannel) or not isinstance(channel, discord.TextChannel)
+
+        # Skip API calls when restrictions are already in place.
+        needs_update = False
+        if desired_send_messages and getattr(overwrite, "send_messages", None) is not False:
+            overwrite.send_messages = False
+            needs_update = True
+        if desired_speak and getattr(overwrite, "speak", None) is not False:
+            overwrite.speak = False
+            needs_update = True
+
+        if not needs_update:
+            return
+
+        await channel.set_permissions(
+            muted_role,
+            overwrite=overwrite,
+            reason="Enforced muted role restrictions",
+        )
+
     async def _ensure_muted_role(self, guild: discord.Guild) -> discord.Role:
         """Get/create the configured muted role and enforce channel restrictions."""
 
@@ -179,26 +207,34 @@ class MuteCog(commands.Cog):
         # Save the resolved role ID so future mutes use a consistent role reference.
         self.server_config_store.set_muted_role_id(muted_role.id)
 
-        # Apply explicit denies in every channel so muted members cannot chat or speak.
+        # Apply only missing explicit denies so repeat `/mute` calls stay fast in large servers.
+        # This avoids re-writing identical permission overwrites across every channel each time.
         for channel in guild.channels:
-            overwrite = channel.overwrites_for(muted_role)
-
-            if isinstance(channel, discord.TextChannel):
-                overwrite.send_messages = False
-            elif isinstance(channel, discord.VoiceChannel):
-                overwrite.speak = False
-            else:
-                # For other channel types, set both when supported by Discord.
-                overwrite.send_messages = False
-                overwrite.speak = False
-
-            await channel.set_permissions(
-                muted_role,
-                overwrite=overwrite,
-                reason="Enforced muted role restrictions",
-            )
+            await self._apply_muted_role_restrictions(channel, muted_role)
 
         return muted_role
+
+    @commands.Cog.listener()
+    async def on_guild_channel_create(self, channel: discord.abc.GuildChannel) -> None:
+        """Automatically apply muted-role restrictions to newly created channels."""
+
+        guild = getattr(channel, "guild", None)
+        if guild is None:
+            return
+
+        configured_role_id = self.server_config_store.get_muted_role_id()
+        muted_role = guild.get_role(configured_role_id) if configured_role_id is not None else None
+        if muted_role is None:
+            muted_role = discord.utils.get(guild.roles, name=_MUTED_ROLE_NAME)
+
+        if muted_role is None:
+            return
+
+        try:
+            # Keep future channels moderation-safe without waiting for the next `/mute` command.
+            await self._apply_muted_role_restrictions(channel, muted_role)
+        except (discord.Forbidden, discord.HTTPException):
+            logging.exception("Failed to enforce muted role restrictions in new channel %s", getattr(channel, "id", "unknown"))
 
     async def _send_mute_audit_embed(
         self,

@@ -48,6 +48,7 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
         cog._send_audit_embed.assert_awaited_once()
         fields = cog._send_audit_embed.await_args.kwargs["fields"]
         self.assertEqual(fields[1][0], "Changes")
+        self.assertIn("Discord audit log entry was not available", fields[1][1])
 
         cog._send_audit_embed.reset_mock()
         unchanged_after = SimpleNamespace(overwrites={"a": 1}, guild=guild, id=10, mention="#general", name="general")
@@ -59,29 +60,27 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
         cog._send_audit_embed = AsyncMock()
 
         overwrite_target = SimpleNamespace(id=321, name="Moderators")
+        before_allow = discord.Permissions.none()
+        after_allow = discord.Permissions.none()
+        after_allow.send_messages = True
         audit_entry = SimpleNamespace(
             user=SimpleNamespace(id=12, mention="<@12>"),
             extra=SimpleNamespace(overwrite=overwrite_target, overwrite_type="role"),
+            before=SimpleNamespace(allow=before_allow, deny=discord.Permissions.none()),
+            after=SimpleNamespace(allow=after_allow, deny=discord.Permissions.none()),
         )
         cog._find_recent_audit_entry = AsyncMock(return_value=audit_entry)
 
-        before_permissions = discord.Permissions.none()
-        after_permissions = discord.Permissions.none()
-        after_permissions.send_messages = True
-
-        before_overwrite = SimpleNamespace(pair=lambda: (before_permissions, discord.Permissions.none()))
-        after_overwrite = SimpleNamespace(pair=lambda: (after_permissions, discord.Permissions.none()))
-
         guild = SimpleNamespace()
         before = SimpleNamespace(
-            overwrites={overwrite_target: before_overwrite},
+            overwrites={},
             guild=guild,
             id=10,
             mention="#general",
             name="general",
         )
         after = SimpleNamespace(
-            overwrites={overwrite_target: after_overwrite},
+            overwrites={},
             guild=guild,
             id=10,
             mention="#general",

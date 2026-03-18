@@ -107,65 +107,47 @@ class AuditLogCog(commands.Cog):
 
     def _channel_overwrite_change_lines(
         self,
-        before: discord.abc.GuildChannel,
-        after: discord.abc.GuildChannel,
         audit_entry: discord.AuditLogEntry | None,
     ) -> list[str]:
-        """Summarize permission overwrite changes using audit-log data when available."""
+        """Summarize permission overwrite changes using only audit-log data."""
 
         change_lines: list[str] = []
 
-        # Prefer the audit log because it can tell us which specific overwrite entry changed.
-        if audit_entry is not None:
-            extra = getattr(audit_entry, "extra", None)
-            overwrite_target = getattr(extra, "overwrite", None)
-            overwrite_target_type = getattr(extra, "overwrite_type", None)
+        if audit_entry is None:
+            return ["Discord audit log entry was not available for this overwrite change."]
 
-            before_overwrite = None
-            after_overwrite = None
-            if overwrite_target is not None:
-                before_overwrite = before.overwrites.get(overwrite_target)
-                after_overwrite = after.overwrites.get(overwrite_target)
+        extra = getattr(audit_entry, "extra", None)
+        overwrite_target = getattr(extra, "overwrite", None)
+        overwrite_target_type = getattr(extra, "overwrite_type", None)
 
-            if overwrite_target is not None and (before_overwrite is not None or after_overwrite is not None):
-                target_label = self._format_overwrite_target(overwrite_target)
-                if overwrite_target_type is not None:
-                    target_label = f"{target_label} [{overwrite_target_type}]"
+        if overwrite_target is not None:
+            target_label = self._format_overwrite_target(overwrite_target)
+            if overwrite_target_type is not None:
+                target_label = f"{target_label} [{overwrite_target_type}]"
+            change_lines.append(f"Target: {target_label}")
 
-                before_allow = getattr(before_overwrite, "pair", lambda: (discord.Permissions.none(), discord.Permissions.none()))()[0]
-                before_deny = getattr(before_overwrite, "pair", lambda: (discord.Permissions.none(), discord.Permissions.none()))()[1]
-                after_allow = getattr(after_overwrite, "pair", lambda: (discord.Permissions.none(), discord.Permissions.none()))()[0]
-                after_deny = getattr(after_overwrite, "pair", lambda: (discord.Permissions.none(), discord.Permissions.none()))()[1]
+        before_state = getattr(audit_entry, "before", None)
+        after_state = getattr(audit_entry, "after", None)
+        if before_state is not None and after_state is not None:
+            before_allow = getattr(before_state, "allow", None) or discord.Permissions.none()
+            before_deny = getattr(before_state, "deny", None) or discord.Permissions.none()
+            after_allow = getattr(after_state, "allow", None) or discord.Permissions.none()
+            after_deny = getattr(after_state, "deny", None) or discord.Permissions.none()
 
-                allow_changes = self._permission_delta_lines(before_allow, after_allow, limit=6)
-                deny_changes = self._permission_delta_lines(before_deny, after_deny, limit=6)
+            allow_changes = self._permission_delta_lines(before_allow, after_allow, limit=6)
+            deny_changes = self._permission_delta_lines(before_deny, after_deny, limit=6)
 
-                change_lines.append(f"Target: {target_label}")
-                if allow_changes:
-                    change_lines.append("Allowed changes:")
-                    change_lines.extend(f"• {line}" for line in allow_changes)
-                if deny_changes:
-                    change_lines.append("Denied changes:")
-                    change_lines.extend(f"• {line}" for line in deny_changes)
+            if allow_changes:
+                change_lines.append("Allowed changes:")
+                change_lines.extend(f"• {line}" for line in allow_changes)
+            if deny_changes:
+                change_lines.append("Denied changes:")
+                change_lines.extend(f"• {line}" for line in deny_changes)
 
         if change_lines:
             return change_lines
 
-        # Fallback when the audit log does not include granular overwrite info.
-        before_targets = {self._format_overwrite_target(target) for target in before.overwrites.keys()}
-        after_targets = {self._format_overwrite_target(target) for target in after.overwrites.keys()}
-        added_targets = sorted(after_targets - before_targets)
-        removed_targets = sorted(before_targets - after_targets)
-
-        if added_targets:
-            change_lines.append(f"Added targets: {', '.join(added_targets[:5])}")
-        if removed_targets:
-            change_lines.append(f"Removed targets: {', '.join(removed_targets[:5])}")
-
-        if not change_lines:
-            change_lines.append("Overwrite details were changed, but Discord did not expose the granular diff.")
-
-        return change_lines
+        return ["Discord audit log did not expose granular overwrite details for this change."]
 
     async def _send_audit_embed(
         self,
@@ -352,7 +334,7 @@ class AuditLogCog(commands.Cog):
             target_id=after.id,
             fallback_target_name=getattr(after, "name", None),
         )
-        overwrite_change_lines = self._channel_overwrite_change_lines(before, after, audit_entry)
+        overwrite_change_lines = self._channel_overwrite_change_lines(audit_entry)
 
         await self._send_audit_embed(
             after.guild,

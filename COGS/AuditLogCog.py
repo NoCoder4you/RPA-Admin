@@ -42,19 +42,31 @@ class AuditLogCog(commands.Cog):
         *,
         action: discord.AuditLogAction,
         target_id: int,
+        fallback_target_name: str | None = None,
     ) -> discord.AuditLogEntry | None:
         """Return the freshest audit-log entry matching action + target, if available."""
 
         # We only scan a handful of recent entries to keep API usage low.
+        fallback_entry: discord.AuditLogEntry | None = None
         try:
             async for entry in guild.audit_logs(limit=6, action=action):
                 entry_target_id = getattr(entry.target, "id", None)
                 if entry_target_id == target_id:
                     return entry
+
+                # Some Discord audit events do not reliably expose the final target ID
+                # in the exact shape we expect at event time, so keep the freshest
+                # plausible fallback entry to avoid showing "Unknown" too often.
+                if fallback_entry is None:
+                    fallback_entry = entry
+
+                entry_target_name = getattr(entry.target, "name", None)
+                if fallback_target_name and entry_target_name == fallback_target_name:
+                    fallback_entry = entry
         except (discord.Forbidden, discord.HTTPException):
             # Missing permissions or temporary API failures should not break the logger.
             return None
-        return None
+        return fallback_entry
 
     @staticmethod
     def _format_actor(actor: discord.abc.User | None) -> str:
@@ -217,6 +229,7 @@ class AuditLogCog(commands.Cog):
             guild,
             action=discord.AuditLogAction.ban,
             target_id=user.id,
+            fallback_target_name=str(user),
         )
         await self._send_audit_embed(
             guild,
@@ -234,6 +247,7 @@ class AuditLogCog(commands.Cog):
             guild,
             action=discord.AuditLogAction.unban,
             target_id=user.id,
+            fallback_target_name=str(user),
         )
         await self._send_audit_embed(
             guild,
@@ -251,6 +265,7 @@ class AuditLogCog(commands.Cog):
             channel.guild,
             action=discord.AuditLogAction.channel_create,
             target_id=channel.id,
+            fallback_target_name=getattr(channel, "name", None),
         )
         await self._send_audit_embed(
             channel.guild,
@@ -271,6 +286,7 @@ class AuditLogCog(commands.Cog):
             channel.guild,
             action=discord.AuditLogAction.channel_delete,
             target_id=channel.id,
+            fallback_target_name=getattr(channel, "name", None),
         )
         await self._send_audit_embed(
             channel.guild,
@@ -291,6 +307,7 @@ class AuditLogCog(commands.Cog):
             role.guild,
             action=discord.AuditLogAction.role_create,
             target_id=role.id,
+            fallback_target_name=role.name,
         )
         await self._send_audit_embed(
             role.guild,
@@ -308,6 +325,7 @@ class AuditLogCog(commands.Cog):
             role.guild,
             action=discord.AuditLogAction.role_delete,
             target_id=role.id,
+            fallback_target_name=role.name,
         )
         await self._send_audit_embed(
             role.guild,
@@ -332,6 +350,7 @@ class AuditLogCog(commands.Cog):
             after.guild,
             action=discord.AuditLogAction.channel_update,
             target_id=after.id,
+            fallback_target_name=getattr(after, "name", None),
         )
         overwrite_change_lines = self._channel_overwrite_change_lines(before, after, audit_entry)
 
@@ -360,6 +379,7 @@ class AuditLogCog(commands.Cog):
             after.guild,
             action=discord.AuditLogAction.role_update,
             target_id=after.id,
+            fallback_target_name=after.name,
         )
         permission_deltas = self._permission_delta_lines(before.permissions, after.permissions)
         change_summary = "\n".join(permission_deltas) if permission_deltas else "No individual permission deltas resolved."
@@ -405,6 +425,7 @@ class AuditLogCog(commands.Cog):
             after.guild,
             action=member_role_update_action,
             target_id=after.id,
+            fallback_target_name=str(after),
         )
         changed_fields.insert(0, ("By", self._format_actor(audit_entry.user if audit_entry else None), False))
 
@@ -443,6 +464,7 @@ class AuditLogCog(commands.Cog):
             after,
             action=discord.AuditLogAction.guild_update,
             target_id=after.id,
+            fallback_target_name=after.name,
         )
         changed_fields.insert(0, ("By", self._format_actor(audit_entry.user if audit_entry else None), False))
 
@@ -478,6 +500,7 @@ class AuditLogCog(commands.Cog):
             member.guild,
             action=discord.AuditLogAction.member_update,
             target_id=member.id,
+            fallback_target_name=str(member),
         )
         changed_fields.insert(0, ("By", self._format_actor(audit_entry.user if audit_entry else None), False))
 

@@ -95,6 +95,42 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Target: Moderators (`321`) [role]", fields[1][1])
         self.assertIn("send_messages", fields[1][1])
 
+    async def test_find_recent_audit_entry_falls_back_to_recent_name_match(self) -> None:
+        cog = AuditLogCog(MagicMock())
+
+        matching_name_entry = SimpleNamespace(
+            target=SimpleNamespace(id=999, name="woof"),
+            user=SimpleNamespace(id=55, mention="<@55>"),
+        )
+
+        class FakeAuditLogIterator:
+            def __init__(self, entries):
+                self._entries = iter(entries)
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self._entries)
+                except StopIteration as exc:
+                    raise StopAsyncIteration from exc
+
+        guild = SimpleNamespace(
+            audit_logs=MagicMock(
+                return_value=FakeAuditLogIterator([matching_name_entry])
+            )
+        )
+
+        result = await cog._find_recent_audit_entry(
+            guild,
+            action="channel_update",
+            target_id=123,
+            fallback_target_name="woof",
+        )
+
+        self.assertIs(result, matching_name_entry)
+
     async def test_member_ban_and_unban_are_logged(self) -> None:
         cog = AuditLogCog(MagicMock())
         cog._send_audit_embed = AsyncMock()

@@ -29,6 +29,9 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
         audit_channel.send.assert_awaited_once()
         embed = audit_channel.send.await_args.kwargs["embed"]
         self.assertEqual(embed.title, "Member Joined")
+        # The embed should include a Discord relative timestamp marker.
+        when_field = next(field for field in embed.fields if field.name == "When")
+        self.assertRegex(when_field.value, r"^<t:\d+:R>$")
 
     async def test_channel_permission_update_logs_only_when_overwrites_change(self) -> None:
         cog = AuditLogCog(MagicMock())
@@ -49,6 +52,7 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
     async def test_member_ban_and_unban_are_logged(self) -> None:
         cog = AuditLogCog(MagicMock())
         cog._send_audit_embed = AsyncMock()
+        cog._find_recent_audit_entry = AsyncMock(return_value=SimpleNamespace(user=SimpleNamespace(id=7, mention="<@7>")))
 
         guild = SimpleNamespace()
         user = SimpleNamespace(id=99, mention="<@99>")
@@ -57,10 +61,13 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
         await cog.on_member_unban(guild, user)
 
         self.assertEqual(cog._send_audit_embed.await_count, 2)
+        first_fields = cog._send_audit_embed.await_args_list[0].kwargs["fields"]
+        self.assertEqual(first_fields[0][0], "By")
 
     async def test_role_permission_update_logs_before_and_after_values(self) -> None:
         cog = AuditLogCog(MagicMock())
         cog._send_audit_embed = AsyncMock()
+        cog._find_recent_audit_entry = AsyncMock(return_value=SimpleNamespace(user=SimpleNamespace(id=7, mention="<@7>")))
 
         guild = SimpleNamespace()
         before_permissions = SimpleNamespace(value=1)
@@ -73,8 +80,10 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
 
         cog._send_audit_embed.assert_awaited_once()
         fields = cog._send_audit_embed.await_args.kwargs["fields"]
-        self.assertEqual(fields[0][1], "1")
-        self.assertEqual(fields[1][1], "2")
+        self.assertEqual(fields[1][1], "1")
+        self.assertEqual(fields[2][1], "2")
+        self.assertEqual(fields[0][0], "By")
+        self.assertEqual(fields[3][0], "Changed Flags")
 
     async def test_voice_state_update_logs_server_mute_and_deafen_changes(self) -> None:
         cog = AuditLogCog(MagicMock())
@@ -88,7 +97,9 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
 
         cog._send_audit_embed.assert_awaited_once()
         fields = cog._send_audit_embed.await_args.kwargs["fields"]
-        self.assertEqual(len(fields), 2)
+        self.assertTrue(any(field[0] == "By" for field in fields))
+        self.assertTrue(any(field[0] == "Server Mute" for field in fields))
+        self.assertTrue(any(field[0] == "Server Deaf" for field in fields))
 
         cog._send_audit_embed.reset_mock()
         unchanged = SimpleNamespace(mute=True, deaf=True)
@@ -98,6 +109,7 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
     async def test_member_update_logs_nickname_and_roles(self) -> None:
         cog = AuditLogCog(MagicMock())
         cog._send_audit_embed = AsyncMock()
+        cog._find_recent_audit_entry = AsyncMock(return_value=SimpleNamespace(user=SimpleNamespace(id=8, mention="<@8>")))
 
         role_a = SimpleNamespace(id=1)
         role_b = SimpleNamespace(id=2)
@@ -109,12 +121,14 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
 
         cog._send_audit_embed.assert_awaited_once()
         fields = cog._send_audit_embed.await_args.kwargs["fields"]
+        self.assertTrue(any(field[0] == "By" for field in fields))
         self.assertTrue(any(field[0] == "Nickname" for field in fields))
         self.assertTrue(any(field[0] == "Roles Added" for field in fields))
 
     async def test_guild_update_logs_core_setting_changes(self) -> None:
         cog = AuditLogCog(MagicMock())
         cog._send_audit_embed = AsyncMock()
+        cog._find_recent_audit_entry = AsyncMock(return_value=SimpleNamespace(user=SimpleNamespace(id=9, mention="<@9>")))
 
         afk_before = SimpleNamespace(name="AFK-Old")
         afk_after = SimpleNamespace(name="AFK-New")
@@ -137,6 +151,8 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
 
         cog._send_audit_embed.assert_awaited_once()
         self.assertEqual(cog._send_audit_embed.await_args.kwargs["title"], "Server Settings Updated")
+        fields = cog._send_audit_embed.await_args.kwargs["fields"]
+        self.assertTrue(any(field[0] == "By" for field in fields))
 
 
 if __name__ == "__main__":

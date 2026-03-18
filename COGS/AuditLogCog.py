@@ -22,6 +22,57 @@ class AuditLogCog(commands.Cog):
 
         return datetime.now(timezone.utc).isoformat()
 
+    @staticmethod
+    def _relative_timestamp_markdown() -> str:
+        """Return Discord markdown that renders as a relative time in clients."""
+
+        unix_seconds = int(datetime.now(timezone.utc).timestamp())
+        return f"<t:{unix_seconds}:R>"
+
+    async def _find_recent_audit_entry(
+        self,
+        guild: discord.Guild,
+        *,
+        action: discord.AuditLogAction,
+        target_id: int,
+    ) -> discord.AuditLogEntry | None:
+        """Return the freshest audit-log entry matching action + target, if available."""
+
+        # We only scan a handful of recent entries to keep API usage low.
+        try:
+            async for entry in guild.audit_logs(limit=6, action=action):
+                entry_target_id = getattr(entry.target, "id", None)
+                if entry_target_id == target_id:
+                    return entry
+        except (discord.Forbidden, discord.HTTPException):
+            # Missing permissions or temporary API failures should not break the logger.
+            return None
+        return None
+
+    @staticmethod
+    def _format_actor(actor: discord.abc.User | None) -> str:
+        """Return a readable actor display string for embeds."""
+
+        if actor is None:
+            return "Unknown"
+        if hasattr(actor, "mention"):
+            return f"{actor.mention} (`{actor.id}`)"
+        return f"{actor} (`{getattr(actor, 'id', 'unknown')}`)"
+
+    @staticmethod
+    def _permission_delta_lines(before: discord.Permissions, after: discord.Permissions, *, limit: int = 12) -> list[str]:
+        """Build a compact, human-readable list of changed permission flags."""
+
+        changes: list[str] = []
+        for permission_name, old_value in before:
+            new_value = getattr(after, permission_name)
+            if old_value == new_value:
+                continue
+            changes.append(f"`{permission_name}`: `{old_value}` ➜ `{new_value}`")
+            if len(changes) >= limit:
+                break
+        return changes
+
     async def _send_audit_embed(
         self,
         guild: discord.Guild,
@@ -42,6 +93,9 @@ class AuditLogCog(commands.Cog):
             return
 
         embed = discord.Embed(title=title, description=description, color=color)
+        # Relative time reads naturally in chat ("2 seconds ago") and was requested by staff.
+        embed.add_field(name="When", value=self._relative_timestamp_markdown(), inline=False)
+        # Keep UTC ISO timestamp as a secondary field for exact incident forensics.
         embed.add_field(name="Timestamp (UTC)", value=self._utc_now_iso(), inline=False)
 
         for name, value, inline in fields or []:
@@ -75,10 +129,16 @@ class AuditLogCog(commands.Cog):
     async def on_member_ban(self, guild: discord.Guild, user: discord.abc.User) -> None:
         """Log member bans explicitly so punitive actions are easier to review."""
 
+        audit_entry = await self._find_recent_audit_entry(
+            guild,
+            action=discord.AuditLogAction.ban,
+            target_id=user.id,
+        )
         await self._send_audit_embed(
             guild,
             title="Member Banned",
             description=f"{user.mention if hasattr(user, 'mention') else user} (`{user.id}`) was banned.",
+            fields=[("By", self._format_actor(audit_entry.user if audit_entry else None), False)],
             color=discord.Color.red(),
         )
 
@@ -86,10 +146,16 @@ class AuditLogCog(commands.Cog):
     async def on_member_unban(self, guild: discord.Guild, user: discord.abc.User) -> None:
         """Log unbans to keep moderation reversals visible in the audit trail."""
 
+        audit_entry = await self._find_recent_audit_entry(
+            guild,
+            action=discord.AuditLogAction.unban,
+            target_id=user.id,
+        )
         await self._send_audit_embed(
             guild,
             title="Member Unbanned",
             description=f"{user.mention if hasattr(user, 'mention') else user} (`{user.id}`) was unbanned.",
+            fields=[("By", self._format_actor(audit_entry.user if audit_entry else None), False)],
             color=discord.Color.green(),
         )
 
@@ -97,11 +163,19 @@ class AuditLogCog(commands.Cog):
     async def on_guild_channel_create(self, channel: discord.abc.GuildChannel) -> None:
         """Log newly created channels so structural changes are visible to admins."""
 
+        audit_entry = await self._find_recent_audit_entry(
+            channel.guild,
+            action=discord.AuditLogAction.channel_create,
+            target_id=channel.id,
+        )
         await self._send_audit_embed(
             channel.guild,
             title="Channel Created",
             description=f"{channel.mention if hasattr(channel, 'mention') else channel.name} (`{channel.id}`) was created.",
-            fields=[("Type", str(channel.type), True)],
+            fields=[
+                ("Type", str(channel.type), True),
+                ("By", self._format_actor(audit_entry.user if audit_entry else None), False),
+            ],
             color=discord.Color.green(),
         )
 
@@ -109,11 +183,19 @@ class AuditLogCog(commands.Cog):
     async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel) -> None:
         """Log channel deletions to preserve evidence of destructive changes."""
 
+        audit_entry = await self._find_recent_audit_entry(
+            channel.guild,
+            action=discord.AuditLogAction.channel_delete,
+            target_id=channel.id,
+        )
         await self._send_audit_embed(
             channel.guild,
             title="Channel Deleted",
             description=f"{channel.name} (`{channel.id}`) was deleted.",
-            fields=[("Type", str(channel.type), True)],
+            fields=[
+                ("Type", str(channel.type), True),
+                ("By", self._format_actor(audit_entry.user if audit_entry else None), False),
+            ],
             color=discord.Color.red(),
         )
 
@@ -121,10 +203,16 @@ class AuditLogCog(commands.Cog):
     async def on_guild_role_create(self, role: discord.Role) -> None:
         """Log role creation so privilege model changes are historically discoverable."""
 
+        audit_entry = await self._find_recent_audit_entry(
+            role.guild,
+            action=discord.AuditLogAction.role_create,
+            target_id=role.id,
+        )
         await self._send_audit_embed(
             role.guild,
             title="Role Created",
             description=f"Role **{role.name}** (`{role.id}`) was created.",
+            fields=[("By", self._format_actor(audit_entry.user if audit_entry else None), False)],
             color=discord.Color.green(),
         )
 
@@ -132,10 +220,16 @@ class AuditLogCog(commands.Cog):
     async def on_guild_role_delete(self, role: discord.Role) -> None:
         """Log role deletion for forensic visibility around permission restructuring."""
 
+        audit_entry = await self._find_recent_audit_entry(
+            role.guild,
+            action=discord.AuditLogAction.role_delete,
+            target_id=role.id,
+        )
         await self._send_audit_embed(
             role.guild,
             title="Role Deleted",
             description=f"Role **{role.name}** (`{role.id}`) was deleted.",
+            fields=[("By", self._format_actor(audit_entry.user if audit_entry else None), False)],
             color=discord.Color.red(),
         )
 
@@ -150,6 +244,16 @@ class AuditLogCog(commands.Cog):
         if before.overwrites == after.overwrites:
             return
 
+        audit_entry = await self._find_recent_audit_entry(
+            after.guild,
+            action=discord.AuditLogAction.channel_update,
+            target_id=after.id,
+        )
+        before_targets = {getattr(target, "id", str(target)) for target in before.overwrites.keys()}
+        after_targets = {getattr(target, "id", str(target)) for target in after.overwrites.keys()}
+        added_target_count = len(after_targets - before_targets)
+        removed_target_count = len(before_targets - after_targets)
+
         await self._send_audit_embed(
             after.guild,
             title="Channel Permissions Updated",
@@ -157,6 +261,12 @@ class AuditLogCog(commands.Cog):
                 f"Permission overwrites changed for "
                 f"{after.mention if hasattr(after, 'mention') else after.name} (`{after.id}`)."
             ),
+            fields=[
+                ("By", self._format_actor(audit_entry.user if audit_entry else None), False),
+                ("Added Overwrites", str(added_target_count), True),
+                ("Removed Overwrites", str(removed_target_count), True),
+                ("Current Overwrites", str(len(after_targets)), True),
+            ],
             color=discord.Color.gold(),
         )
 
@@ -167,13 +277,23 @@ class AuditLogCog(commands.Cog):
         if before.permissions == after.permissions:
             return
 
+        audit_entry = await self._find_recent_audit_entry(
+            after.guild,
+            action=discord.AuditLogAction.role_update,
+            target_id=after.id,
+        )
+        permission_deltas = self._permission_delta_lines(before.permissions, after.permissions)
+        change_summary = "\n".join(permission_deltas) if permission_deltas else "No individual permission deltas resolved."
+
         await self._send_audit_embed(
             after.guild,
             title="Role Permissions Updated",
             description=f"Permissions changed for role **{after.name}** (`{after.id}`).",
             fields=[
+                ("By", self._format_actor(audit_entry.user if audit_entry else None), False),
                 ("Before", str(before.permissions.value), True),
                 ("After", str(after.permissions.value), True),
+                ("Changed Flags", change_summary[:1024], False),
             ],
             color=discord.Color.gold(),
         )
@@ -200,6 +320,14 @@ class AuditLogCog(commands.Cog):
 
         if not changed_fields:
             return
+
+        member_role_update_action = getattr(discord.AuditLogAction, "member_role_update", discord.AuditLogAction.member_update)
+        audit_entry = await self._find_recent_audit_entry(
+            after.guild,
+            action=member_role_update_action,
+            target_id=after.id,
+        )
+        changed_fields.insert(0, ("By", self._format_actor(audit_entry.user if audit_entry else None), False))
 
         await self._send_audit_embed(
             after.guild,
@@ -232,6 +360,13 @@ class AuditLogCog(commands.Cog):
         if not changed_fields:
             return
 
+        audit_entry = await self._find_recent_audit_entry(
+            after,
+            action=discord.AuditLogAction.guild_update,
+            target_id=after.id,
+        )
+        changed_fields.insert(0, ("By", self._format_actor(audit_entry.user if audit_entry else None), False))
+
         await self._send_audit_embed(
             after,
             title="Server Settings Updated",
@@ -259,6 +394,13 @@ class AuditLogCog(commands.Cog):
 
         if not changed_fields:
             return
+
+        audit_entry = await self._find_recent_audit_entry(
+            member.guild,
+            action=discord.AuditLogAction.member_update,
+            target_id=member.id,
+        )
+        changed_fields.insert(0, ("By", self._format_actor(audit_entry.user if audit_entry else None), False))
 
         await self._send_audit_embed(
             member.guild,

@@ -7,8 +7,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 try:
+    import discord
     from COGS.AuditLogCog import AuditLogCog
 except ModuleNotFoundError:
+    discord = None
     AuditLogCog = None
 
 
@@ -29,13 +31,14 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
         audit_channel.send.assert_awaited_once()
         embed = audit_channel.send.await_args.kwargs["embed"]
         self.assertEqual(embed.title, "Member Joined")
-        # The embed should include a Discord relative timestamp marker.
+        # The embed should include cleaner absolute + relative Discord timestamp markers.
         when_field = next(field for field in embed.fields if field.name == "When")
-        self.assertRegex(when_field.value, r"^<t:\d+:R>$")
+        self.assertRegex(when_field.value, r"^<t:\d+:f> • <t:\d+:R>$")
 
     async def test_channel_permission_update_logs_only_when_overwrites_change(self) -> None:
         cog = AuditLogCog(MagicMock())
         cog._send_audit_embed = AsyncMock()
+        cog._find_recent_audit_entry = AsyncMock(return_value=None)
 
         guild = SimpleNamespace()
         before = SimpleNamespace(overwrites={"a": 1}, guild=guild, id=10, mention="#general", name="general")
@@ -43,11 +46,54 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
 
         await cog.on_guild_channel_update(before, after)
         cog._send_audit_embed.assert_awaited_once()
+        fields = cog._send_audit_embed.await_args.kwargs["fields"]
+        self.assertEqual(fields[1][0], "Changes")
 
         cog._send_audit_embed.reset_mock()
         unchanged_after = SimpleNamespace(overwrites={"a": 1}, guild=guild, id=10, mention="#general", name="general")
         await cog.on_guild_channel_update(before, unchanged_after)
         cog._send_audit_embed.assert_not_awaited()
+
+    async def test_channel_permission_update_prefers_audit_log_overwrite_details(self) -> None:
+        cog = AuditLogCog(MagicMock())
+        cog._send_audit_embed = AsyncMock()
+
+        overwrite_target = SimpleNamespace(id=321, name="Moderators")
+        audit_entry = SimpleNamespace(
+            user=SimpleNamespace(id=12, mention="<@12>"),
+            extra=SimpleNamespace(overwrite=overwrite_target, overwrite_type="role"),
+        )
+        cog._find_recent_audit_entry = AsyncMock(return_value=audit_entry)
+
+        before_permissions = discord.Permissions.none()
+        after_permissions = discord.Permissions.none()
+        after_permissions.send_messages = True
+
+        before_overwrite = SimpleNamespace(pair=lambda: (before_permissions, discord.Permissions.none()))
+        after_overwrite = SimpleNamespace(pair=lambda: (after_permissions, discord.Permissions.none()))
+
+        guild = SimpleNamespace()
+        before = SimpleNamespace(
+            overwrites={overwrite_target: before_overwrite},
+            guild=guild,
+            id=10,
+            mention="#general",
+            name="general",
+        )
+        after = SimpleNamespace(
+            overwrites={overwrite_target: after_overwrite},
+            guild=guild,
+            id=10,
+            mention="#general",
+            name="general",
+        )
+
+        await cog.on_guild_channel_update(before, after)
+
+        fields = cog._send_audit_embed.await_args.kwargs["fields"]
+        self.assertEqual(fields[1][0], "Changes")
+        self.assertIn("Target: Moderators (`321`) [role]", fields[1][1])
+        self.assertIn("send_messages", fields[1][1])
 
     async def test_member_ban_and_unban_are_logged(self) -> None:
         cog = AuditLogCog(MagicMock())

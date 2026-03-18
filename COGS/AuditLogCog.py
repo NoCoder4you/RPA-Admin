@@ -29,6 +29,13 @@ class AuditLogCog(commands.Cog):
         unix_seconds = int(datetime.now(timezone.utc).timestamp())
         return f"<t:{unix_seconds}:R>"
 
+    @staticmethod
+    def _full_timestamp_markdown() -> str:
+        """Return Discord markdown that renders as a concise absolute timestamp."""
+
+        unix_seconds = int(datetime.now(timezone.utc).timestamp())
+        return f"<t:{unix_seconds}:f>"
+
     async def _find_recent_audit_entry(
         self,
         guild: discord.Guild,
@@ -73,6 +80,81 @@ class AuditLogCog(commands.Cog):
                 break
         return changes
 
+    @staticmethod
+    def _format_overwrite_target(target: object) -> str:
+        """Return a friendly label for a permission overwrite target."""
+
+        if target is None:
+            return "Unknown target"
+
+        target_name = getattr(target, "mention", None) or getattr(target, "name", None) or str(target)
+        target_id = getattr(target, "id", None)
+        if target_id is None:
+            return str(target_name)
+        return f"{target_name} (`{target_id}`)"
+
+    def _channel_overwrite_change_lines(
+        self,
+        before: discord.abc.GuildChannel,
+        after: discord.abc.GuildChannel,
+        audit_entry: discord.AuditLogEntry | None,
+    ) -> list[str]:
+        """Summarize permission overwrite changes using audit-log data when available."""
+
+        change_lines: list[str] = []
+
+        # Prefer the audit log because it can tell us which specific overwrite entry changed.
+        if audit_entry is not None:
+            extra = getattr(audit_entry, "extra", None)
+            overwrite_target = getattr(extra, "overwrite", None)
+            overwrite_target_type = getattr(extra, "overwrite_type", None)
+
+            before_overwrite = None
+            after_overwrite = None
+            if overwrite_target is not None:
+                before_overwrite = before.overwrites.get(overwrite_target)
+                after_overwrite = after.overwrites.get(overwrite_target)
+
+            if overwrite_target is not None and (before_overwrite is not None or after_overwrite is not None):
+                target_label = self._format_overwrite_target(overwrite_target)
+                if overwrite_target_type is not None:
+                    target_label = f"{target_label} [{overwrite_target_type}]"
+
+                before_allow = getattr(before_overwrite, "pair", lambda: (discord.Permissions.none(), discord.Permissions.none()))()[0]
+                before_deny = getattr(before_overwrite, "pair", lambda: (discord.Permissions.none(), discord.Permissions.none()))()[1]
+                after_allow = getattr(after_overwrite, "pair", lambda: (discord.Permissions.none(), discord.Permissions.none()))()[0]
+                after_deny = getattr(after_overwrite, "pair", lambda: (discord.Permissions.none(), discord.Permissions.none()))()[1]
+
+                allow_changes = self._permission_delta_lines(before_allow, after_allow, limit=6)
+                deny_changes = self._permission_delta_lines(before_deny, after_deny, limit=6)
+
+                change_lines.append(f"Target: {target_label}")
+                if allow_changes:
+                    change_lines.append("Allowed changes:")
+                    change_lines.extend(f"• {line}" for line in allow_changes)
+                if deny_changes:
+                    change_lines.append("Denied changes:")
+                    change_lines.extend(f"• {line}" for line in deny_changes)
+
+        if change_lines:
+            return change_lines
+
+        # Fallback when the audit log does not include granular overwrite info.
+        before_targets = {self._format_overwrite_target(target) for target in before.overwrites.keys()}
+        after_targets = {self._format_overwrite_target(target) for target in after.overwrites.keys()}
+        added_targets = sorted(after_targets - before_targets)
+        removed_targets = sorted(before_targets - after_targets)
+
+        if added_targets:
+            change_lines.append(f"Added targets: {', '.join(added_targets[:5])}")
+        if removed_targets:
+            change_lines.append(f"Removed targets: {', '.join(removed_targets[:5])}")
+
+        if not change_lines:
+            change_lines.append("Overwrite details were changed, but Discord did not expose the granular diff.")
+
+        return change_lines
+
     async def _send_audit_embed(
         self,
         guild: discord.Guild,
@@ -93,10 +175,12 @@ class AuditLogCog(commands.Cog):
             return
 
         embed = discord.Embed(title=title, description=description, color=color)
-        # Relative time reads naturally in chat ("2 seconds ago") and was requested by staff.
-        embed.add_field(name="When", value=self._relative_timestamp_markdown(), inline=False)
-        # Keep UTC ISO timestamp as a secondary field for exact incident forensics.
-        embed.add_field(name="Timestamp (UTC)", value=self._utc_now_iso(), inline=False)
+        # Combine absolute and relative Discord timestamps for a cleaner presentation in chat.
+        embed.add_field(
+            name="When",
+            value=f"{self._full_timestamp_markdown()} • {self._relative_timestamp_markdown()}",
+            inline=False,
+        )
 
         for name, value, inline in fields or []:
             embed.add_field(name=name, value=value, inline=inline)
@@ -249,10 +333,7 @@ class AuditLogCog(commands.Cog):
             action=discord.AuditLogAction.channel_update,
             target_id=after.id,
         )
-        before_targets = {getattr(target, "id", str(target)) for target in before.overwrites.keys()}
-        after_targets = {getattr(target, "id", str(target)) for target in after.overwrites.keys()}
-        added_target_count = len(after_targets - before_targets)
-        removed_target_count = len(before_targets - after_targets)
+        overwrite_change_lines = self._channel_overwrite_change_lines(before, after, audit_entry)
 
         await self._send_audit_embed(
             after.guild,
@@ -263,9 +344,7 @@ class AuditLogCog(commands.Cog):
             ),
             fields=[
                 ("By", self._format_actor(audit_entry.user if audit_entry else None), False),
-                ("Added Overwrites", str(added_target_count), True),
-                ("Removed Overwrites", str(removed_target_count), True),
-                ("Current Overwrites", str(len(after_targets)), True),
+                ("Changes", "\n".join(overwrite_change_lines)[:1024], False),
             ],
             color=discord.Color.gold(),
         )

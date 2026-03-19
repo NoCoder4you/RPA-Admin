@@ -74,6 +74,25 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
 
         cog._send_audit_embed.assert_not_awaited()
 
+    async def test_channel_rename_logs_old_and_new_names(self) -> None:
+        cog = AuditLogCog(MagicMock())
+        cog._send_audit_embed = AsyncMock()
+        cog._find_recent_audit_entry_from_actions = AsyncMock(
+            return_value=SimpleNamespace(user=SimpleNamespace(id=22, mention="<@22>"))
+        )
+
+        guild = SimpleNamespace()
+        before = SimpleNamespace(overwrites={"a": 1}, guild=guild, id=10, mention="#general", name="general")
+        after = SimpleNamespace(overwrites={"a": 1}, guild=guild, id=10, mention="#welcome", name="welcome")
+
+        await cog.on_guild_channel_update(before, after)
+
+        cog._send_audit_embed.assert_awaited_once()
+        self.assertEqual(cog._send_audit_embed.await_args.kwargs["title"], "Channel Renamed")
+        fields = cog._send_audit_embed.await_args.kwargs["fields"]
+        self.assertEqual(fields[1], ("Old Name", "`general`", True))
+        self.assertEqual(fields[2], ("New Name", "`welcome`", True))
+
     async def test_channel_permission_update_logs_only_when_overwrites_change(self) -> None:
         cog = AuditLogCog(MagicMock())
         cog._send_audit_embed = AsyncMock()
@@ -342,8 +361,9 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
         cog._find_recent_audit_entry = AsyncMock(return_value=SimpleNamespace(user=SimpleNamespace(id=7, mention="<@7>")))
 
         guild = SimpleNamespace()
-        before_permissions = SimpleNamespace(value=1)
-        after_permissions = SimpleNamespace(value=2)
+        before_permissions = discord.Permissions.none()
+        after_permissions = discord.Permissions.none()
+        after_permissions.manage_channels = True
 
         before = SimpleNamespace(guild=guild, permissions=before_permissions, name="Admin", id=55)
         after = SimpleNamespace(guild=guild, permissions=after_permissions, name="Admin", id=55)
@@ -351,11 +371,63 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
         await cog.on_guild_role_update(before, after)
 
         cog._send_audit_embed.assert_awaited_once()
-        fields = cog._send_audit_embed.await_args.kwargs["fields"]
-        self.assertEqual(fields[1][1], "1")
-        self.assertEqual(fields[2][1], "2")
+        kwargs = cog._send_audit_embed.await_args.kwargs
+        self.assertEqual(kwargs["title"], "Role Updated")
+        fields = kwargs["fields"]
         self.assertEqual(fields[0][0], "By")
+        self.assertEqual(fields[1][0], "Permissions Before")
+        self.assertEqual(fields[1][1], str(before_permissions.value))
+        self.assertEqual(fields[2][0], "Permissions After")
+        self.assertEqual(fields[2][1], str(after_permissions.value))
         self.assertEqual(fields[3][0], "Changed Flags")
+        self.assertIn("manage_channels", fields[3][1])
+
+    async def test_role_name_update_logs_before_and_after_values(self) -> None:
+        cog = AuditLogCog(MagicMock())
+        cog._send_audit_embed = AsyncMock()
+        cog._find_recent_audit_entry = AsyncMock(return_value=SimpleNamespace(user=SimpleNamespace(id=8, mention="<@8>")))
+
+        guild = SimpleNamespace()
+        permissions = discord.Permissions.none()
+
+        before = SimpleNamespace(guild=guild, permissions=permissions, name="Old Name", id=77)
+        after = SimpleNamespace(guild=guild, permissions=permissions, name="New Name", id=77)
+
+        await cog.on_guild_role_update(before, after)
+
+        cog._send_audit_embed.assert_awaited_once()
+        kwargs = cog._send_audit_embed.await_args.kwargs
+        self.assertEqual(kwargs["title"], "Role Updated")
+        self.assertIn("name updated", kwargs["description"])
+        fields = kwargs["fields"]
+        self.assertEqual(fields[1], ("Name Before", "Old Name", True))
+        self.assertEqual(fields[2], ("Name After", "New Name", True))
+
+    async def test_role_name_and_permission_update_logs_both_change_sets(self) -> None:
+        cog = AuditLogCog(MagicMock())
+        cog._send_audit_embed = AsyncMock()
+        cog._find_recent_audit_entry = AsyncMock(return_value=SimpleNamespace(user=SimpleNamespace(id=9, mention="<@9>")))
+
+        guild = SimpleNamespace()
+        before_permissions = discord.Permissions.none()
+        after_permissions = discord.Permissions.none()
+        after_permissions.manage_roles = True
+
+        before = SimpleNamespace(guild=guild, permissions=before_permissions, name="Old Name", id=99)
+        after = SimpleNamespace(guild=guild, permissions=after_permissions, name="New Name", id=99)
+
+        await cog.on_guild_role_update(before, after)
+
+        cog._send_audit_embed.assert_awaited_once()
+        kwargs = cog._send_audit_embed.await_args.kwargs
+        self.assertIn("name and permissions updated", kwargs["description"])
+        fields = kwargs["fields"]
+        field_names = [field[0] for field in fields]
+        self.assertIn("Name Before", field_names)
+        self.assertIn("Name After", field_names)
+        self.assertIn("Permissions Before", field_names)
+        self.assertIn("Permissions After", field_names)
+        self.assertIn("Changed Flags", field_names)
 
     async def test_voice_state_update_logs_server_mute_and_deafen_changes(self) -> None:
         cog = AuditLogCog(MagicMock())

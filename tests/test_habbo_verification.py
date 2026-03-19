@@ -290,6 +290,21 @@ class ServerConfigStoreTests(unittest.TestCase):
             self.assertEqual(data.get("admin_role_id"), "1484029753185931336")
             self.assertEqual(store.get_admin_role_id(), 1484029753185931336)
 
+    def test_set_and_get_webhook_archive_channel_id(self) -> None:
+        """Ensure the webhook archive channel ID is persisted in serverconfig.json."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "serverconfig.json"
+            file_path.write_text(json.dumps({"audit_log_channel_id": "456"}), encoding="utf-8")
+
+            store = ServerConfigStore(file_path=file_path)
+            store.set_webhook_archive_channel_id(1484040953370120292)
+
+            data = json.loads(file_path.read_text(encoding="utf-8"))
+            self.assertEqual(data.get("audit_log_channel_id"), "456")
+            self.assertEqual(data.get("webhook_archive_channel_id"), "1484040953370120292")
+            self.assertEqual(store.get_webhook_archive_channel_id(), 1484040953370120292)
+
 
 class BadgeRoleMapperTests(unittest.TestCase):
     """Validate role mapping and employee-role hierarchy behavior."""

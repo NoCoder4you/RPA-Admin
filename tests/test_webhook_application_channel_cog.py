@@ -32,27 +32,69 @@ class WebhookApplicationChannelCogTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(request)
 
-    def test_build_channel_name_normalizes_username_for_discord(self) -> None:
-        channel_name = WebhookApplicationChannelCog.build_channel_name("John Doe!!!")
+    def test_build_channel_name_normalizes_prefix_and_username_for_discord(self) -> None:
+        channel_name = WebhookApplicationChannelCog.build_channel_name("ET", "John Doe!!!")
 
-        self.assertEqual(channel_name, "john-doe")
+        self.assertEqual(channel_name, "et-john-doe")
 
-    def test_build_application_embed_provides_resources_and_allowed_prefixes(self) -> None:
-        embed = WebhookApplicationChannelCog.build_application_embed(
-            ChannelCreateRequest(unit_prefix="ET", username="Jane Smith")
-        )
+    async def test_get_archived_webhook_message_returns_latest_embed_message(self) -> None:
+        archive_channel = SimpleNamespace()
+        bot = SimpleNamespace(get_channel=lambda channel_id: archive_channel if channel_id == 999 else None)
+        cog = WebhookApplicationChannelCog(bot)
+        cog.server_config_store = SimpleNamespace(get_webhook_archive_channel_id=lambda: 999)
+        latest_embed_message = SimpleNamespace(embeds=[SimpleNamespace(copy=lambda: "copied")])
 
-        self.assertEqual(embed.title, "ET Application Resources")
-        self.assertEqual(embed.fields[2].name, "Allowed Prefixes")
-        self.assertIn("EA", embed.fields[2].value)
-        self.assertEqual(embed.fields[3].name, "Purpose")
-        self.assertIn("not for the bot to ask application questions", embed.fields[3].value)
-        self.assertEqual(embed.fields[4].name, "Resource Step 1")
+        async def history(*, limit: int):
+            self.assertEqual(limit, 25)
+            for archived_message in [SimpleNamespace(embeds=[]), latest_embed_message]:
+                yield archived_message
 
-    async def test_on_message_creates_channel_and_posts_application_embed(self) -> None:
+        archive_channel.history = history
+
+        archived_message = await cog._get_archived_webhook_message()
+
+        self.assertIs(archived_message, latest_embed_message)
+
+    async def test_get_archived_webhook_message_returns_none_without_configured_archive_channel(self) -> None:
+        cog = WebhookApplicationChannelCog(SimpleNamespace(get_channel=lambda _channel_id: None))
+        cog.server_config_store = SimpleNamespace(get_webhook_archive_channel_id=lambda: None)
+
+        archived_message = await cog._get_archived_webhook_message()
+
+        self.assertIsNone(archived_message)
+
+    async def test_send_archived_webhook_message_prefers_native_forward(self) -> None:
+        archived_message = SimpleNamespace(forward=AsyncMock(), embeds=[SimpleNamespace(copy=lambda: "copied")], content="")
         cog = WebhookApplicationChannelCog(MagicMock())
-
+        cog._get_archived_webhook_message = AsyncMock(return_value=archived_message)
         created_channel = SimpleNamespace(send=AsyncMock())
+
+        forwarded = await cog._send_archived_webhook_message(created_channel)
+
+        self.assertTrue(forwarded)
+        archived_message.forward.assert_awaited_once_with(created_channel)
+        created_channel.send.assert_not_awaited()
+
+    async def test_send_archived_webhook_message_falls_back_to_embed_copy_when_forward_missing(self) -> None:
+        copied_embed = object()
+        archived_message = SimpleNamespace(
+            embeds=[SimpleNamespace(copy=lambda: copied_embed)],
+            content="Archived resource message",
+        )
+        cog = WebhookApplicationChannelCog(MagicMock())
+        cog._get_archived_webhook_message = AsyncMock(return_value=archived_message)
+        created_channel = SimpleNamespace(send=AsyncMock())
+
+        forwarded = await cog._send_archived_webhook_message(created_channel)
+
+        self.assertTrue(forwarded)
+        created_channel.send.assert_awaited_once_with(content="Archived resource message", embed=copied_embed)
+
+    async def test_on_message_creates_prefixed_channel_and_forwards_archived_webhook_message(self) -> None:
+        cog = WebhookApplicationChannelCog(MagicMock())
+        cog._send_archived_webhook_message = AsyncMock(return_value=True)
+
+        created_channel = SimpleNamespace(delete=AsyncMock())
         guild = SimpleNamespace(create_text_channel=AsyncMock(return_value=created_channel))
         source_channel = SimpleNamespace(category=SimpleNamespace(name="Applications"))
         message = SimpleNamespace(
@@ -66,18 +108,31 @@ class WebhookApplicationChannelCogTests(unittest.IsolatedAsyncioTestCase):
 
         guild.create_text_channel.assert_awaited_once()
         create_call = guild.create_text_channel.await_args
-        self.assertEqual(create_call.args[0], "jane-smith")
+        self.assertEqual(create_call.args[0], "et-jane-smith")
         self.assertIs(create_call.kwargs["category"], source_channel.category)
         self.assertIn("ET applicant Jane Smith", create_call.kwargs["reason"])
 
-        created_channel.send.assert_awaited_once()
-        sent_embed = created_channel.send.await_args.kwargs["embed"]
-        self.assertEqual(sent_embed.title, "ET Application Resources")
-        self.assertEqual(sent_embed.fields[0].name, "Applicant Username")
-        self.assertEqual(sent_embed.fields[0].value, "Jane Smith")
-        self.assertEqual(sent_embed.fields[1].name, "Unit Prefix")
-        self.assertEqual(sent_embed.fields[1].value, "ET")
-        self.assertEqual(sent_embed.fields[2].name, "Allowed Prefixes")
+        cog._send_archived_webhook_message.assert_awaited_once_with(created_channel)
+        created_channel.delete.assert_not_awaited()
+
+    async def test_on_message_deletes_channel_when_archive_forward_fails(self) -> None:
+        cog = WebhookApplicationChannelCog(MagicMock())
+        cog._send_archived_webhook_message = AsyncMock(return_value=False)
+
+        created_channel = SimpleNamespace(delete=AsyncMock())
+        guild = SimpleNamespace(create_text_channel=AsyncMock(return_value=created_channel))
+        message = SimpleNamespace(
+            webhook_id=12345,
+            content="RPA channelcreate ET Jane Smith",
+            guild=guild,
+            channel=SimpleNamespace(category=None),
+        )
+
+        await cog.on_message(message)
+
+        created_channel.delete.assert_awaited_once_with(
+            reason="Failed to forward archived webhook resources after channel creation"
+        )
 
     async def test_on_message_ignores_non_webhook_messages(self) -> None:
         cog = WebhookApplicationChannelCog(MagicMock())

@@ -169,7 +169,9 @@ class ServerConfigStore:
       "profanity_log_channel_id": "234",
       "muted_role_id": "456",
       "base_rpa_employee_role_id": "789",
-      "verification_reaction_message_id": "101112"
+      "verification_reaction_message_id": "101112",
+      "username_change_request_channel_id": "121314",
+      "username_change_admin_role_id": "151617"
     }
     """
 
@@ -233,6 +235,32 @@ class ServerConfigStore:
 
         config = self._read_config()
         config["verification_reaction_message_id"] = str(message_id)
+        self._write_config(config)
+
+    def get_username_change_request_channel_id(self) -> int | None:
+        """Return the configured requests channel ID used for Habbo username-change notifications."""
+
+        config = self._read_config()
+        return self._safe_int(config.get("username_change_request_channel_id"))
+
+    def set_username_change_request_channel_id(self, channel_id: int) -> None:
+        """Persist the requests channel ID for username-change review notifications."""
+
+        config = self._read_config()
+        config["username_change_request_channel_id"] = str(channel_id)
+        self._write_config(config)
+
+    def get_username_change_admin_role_id(self) -> int | None:
+        """Return the configured admin role ID that should be mentioned on username-change notifications."""
+
+        config = self._read_config()
+        return self._safe_int(config.get("username_change_admin_role_id"))
+
+    def set_username_change_admin_role_id(self, role_id: int) -> None:
+        """Persist the admin role ID used for username-change request pings."""
+
+        config = self._read_config()
+        config["username_change_admin_role_id"] = str(role_id)
         self._write_config(config)
 
     def _write_config(self, config: dict) -> None:

@@ -260,6 +260,37 @@ class ServerConfigStoreTests(unittest.TestCase):
             self.assertEqual(store.get_base_rpa_employee_role_id(), 1479388404260012092)
 
 
+    def test_set_and_get_username_change_request_channel_id(self) -> None:
+        """Ensure the username-change requests channel ID is persisted in serverconfig.json."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "serverconfig.json"
+            file_path.write_text(json.dumps({"audit_log_channel_id": "456"}), encoding="utf-8")
+
+            store = ServerConfigStore(file_path=file_path)
+            store.set_username_change_request_channel_id(1479465446632853524)
+
+            data = json.loads(file_path.read_text(encoding="utf-8"))
+            self.assertEqual(data.get("audit_log_channel_id"), "456")
+            self.assertEqual(data.get("username_change_request_channel_id"), "1479465446632853524")
+            self.assertEqual(store.get_username_change_request_channel_id(), 1479465446632853524)
+
+    def test_set_and_get_username_change_admin_role_id(self) -> None:
+        """Ensure the username-change admin role ID is persisted in serverconfig.json."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "serverconfig.json"
+            file_path.write_text(json.dumps({"audit_log_channel_id": "456"}), encoding="utf-8")
+
+            store = ServerConfigStore(file_path=file_path)
+            store.set_username_change_admin_role_id(1484029753185931336)
+
+            data = json.loads(file_path.read_text(encoding="utf-8"))
+            self.assertEqual(data.get("audit_log_channel_id"), "456")
+            self.assertEqual(data.get("username_change_admin_role_id"), "1484029753185931336")
+            self.assertEqual(store.get_username_change_admin_role_id(), 1484029753185931336)
+
+
 class BadgeRoleMapperTests(unittest.TestCase):
     """Validate role mapping and employee-role hierarchy behavior."""
 

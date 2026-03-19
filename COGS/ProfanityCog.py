@@ -117,19 +117,8 @@ class ProfanityCog(commands.Cog):
                 return True
         return False
 
-    async def _send_user_notice(self, message: discord.Message) -> None:
-        """Send an explanatory embed to the configured notice channel after a deletion."""
-
-        notice_channel = message.channel
-        if message.guild is not None:
-            notice_channel_id = self.server_config_store.get_profanity_notice_channel_id()
-
-            # Prefer a dedicated notice channel when configured so staff can separate
-            # public filter notices from the original message channel and log channel.
-            if notice_channel_id is not None:
-                configured_channel = message.guild.get_channel(notice_channel_id)
-                if configured_channel is not None:
-                    notice_channel = configured_channel
+    async def _send_user_notice(self, message: discord.Message) -> bool:
+        """Try to DM the affected user and return whether the notice was delivered."""
 
         embed = discord.Embed(
             title="Profanity Filter",
@@ -149,9 +138,15 @@ class ProfanityCog(commands.Cog):
             value=message.guild.name if message.guild else "Direct Messages",
             inline=True,
         )
-        await notice_channel.send(embed=embed)
+        try:
+            await message.author.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException, AttributeError):
+            # DMs can fail because of privacy settings or because the mock/test object
+            # does not fully emulate a Discord user. Report that in the log channel instead.
+            return False
+        return True
 
-    async def _send_log_notice(self, message: discord.Message) -> None:
+    async def _send_log_notice(self, message: discord.Message, *, dm_sent: bool) -> None:
         """Send an audit-style embed to the configured profanity log channel, if available."""
 
         if message.guild is None:
@@ -178,6 +173,15 @@ class ProfanityCog(commands.Cog):
             inline=False,
         )
         embed.add_field(name="Deleted Content", value=message.content[:1024] or "*(no text content)*", inline=False)
+        embed.add_field(
+            name="User Notice",
+            value=(
+                "Direct message delivered successfully."
+                if dm_sent
+                else "I could not DM the user, likely because their privacy settings blocked the bot."
+            ),
+            inline=False,
+        )
         await log_channel.send(embed=embed)
 
     @commands.Cog.listener()
@@ -201,8 +205,8 @@ class ProfanityCog(commands.Cog):
             # If the bot cannot delete the message, avoid sending misleading notices.
             return
 
-        await self._send_user_notice(message)
-        await self._send_log_notice(message)
+        dm_sent = await self._send_user_notice(message)
+        await self._send_log_notice(message, dm_sent=dm_sent)
 
 
 async def setup(bot: commands.Bot) -> None:

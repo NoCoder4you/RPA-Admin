@@ -90,6 +90,14 @@ class WebhookApplicationChannelCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(forwarded)
         created_channel.send.assert_awaited_once_with(content="Archived resource message", embed=copied_embed)
 
+    async def test_delete_channel_create_message_ignores_delete_failures(self) -> None:
+        cog = WebhookApplicationChannelCog(MagicMock())
+        message = SimpleNamespace(delete=AsyncMock(side_effect=AttributeError()))
+
+        await cog._delete_channel_create_message(message)
+
+        message.delete.assert_awaited_once_with()
+
     async def test_on_message_creates_prefixed_channel_and_forwards_archived_webhook_message(self) -> None:
         cog = WebhookApplicationChannelCog(MagicMock())
         cog._send_archived_webhook_message = AsyncMock(return_value=True)
@@ -102,6 +110,7 @@ class WebhookApplicationChannelCogTests(unittest.IsolatedAsyncioTestCase):
             content="RPA channelcreate ET Jane Smith",
             guild=guild,
             channel=source_channel,
+            delete=AsyncMock(),
         )
 
         await cog.on_message(message)
@@ -113,6 +122,7 @@ class WebhookApplicationChannelCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ET applicant Jane Smith", create_call.kwargs["reason"])
 
         cog._send_archived_webhook_message.assert_awaited_once_with(created_channel)
+        message.delete.assert_awaited_once_with()
         created_channel.delete.assert_not_awaited()
 
     async def test_on_message_deletes_channel_when_archive_forward_fails(self) -> None:
@@ -126,6 +136,7 @@ class WebhookApplicationChannelCogTests(unittest.IsolatedAsyncioTestCase):
             content="RPA channelcreate ET Jane Smith",
             guild=guild,
             channel=SimpleNamespace(category=None),
+            delete=AsyncMock(),
         )
 
         await cog.on_message(message)
@@ -133,6 +144,7 @@ class WebhookApplicationChannelCogTests(unittest.IsolatedAsyncioTestCase):
         created_channel.delete.assert_awaited_once_with(
             reason="Failed to forward archived webhook resources after channel creation"
         )
+        message.delete.assert_not_awaited()
 
     async def test_on_message_ignores_non_webhook_messages(self) -> None:
         cog = WebhookApplicationChannelCog(MagicMock())

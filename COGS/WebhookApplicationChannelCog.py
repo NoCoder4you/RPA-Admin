@@ -143,6 +143,15 @@ class WebhookApplicationChannelCog(commands.Cog):
         except (discord.Forbidden, discord.HTTPException, IndexError, AttributeError):
             return False
 
+    async def _delete_channel_create_message(self, message: discord.Message) -> None:
+        """Delete the original webhook command message after the new channel is ready."""
+
+        try:
+            # Clean up the one-time webhook command so the source channel does not retain stale create requests.
+            await message.delete()
+        except (AttributeError, discord.Forbidden, discord.HTTPException):
+            pass
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         """Create an application channel when a webhook posts the expected command string."""
@@ -164,6 +173,7 @@ class WebhookApplicationChannelCog(commands.Cog):
             return
 
         if await self._send_archived_webhook_message(created_channel):
+            await self._delete_channel_create_message(message)
             return
 
         try:

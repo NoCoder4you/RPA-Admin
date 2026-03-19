@@ -12,13 +12,14 @@ import random
 
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot_errors.log")
 logging.basicConfig(
-    level=logging.ERROR,
+    level=logging.INFO,
     format="%(asctime)s:%(levelname)s:%(message)s",
     handlers=[
         logging.FileHandler(LOG_FILE),
         logging.StreamHandler()
     ]
 )
+logger = logging.getLogger("rpa_admin_bot")
 
 # ------------------------------------------------------------------
 # TOKEN
@@ -59,13 +60,90 @@ def load_bot_token_from_env_file():
 TOKEN = load_bot_token_from_env_file()
 
 
-
 # ------------------------------------------------------------------
 # BOT SETUP
 # ------------------------------------------------------------------
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="RPA ", intents=intents, help_command=None)
+
+# ------------------------------------------------------------------
+# COMMAND LOGGING HELPERS
+# ------------------------------------------------------------------
+
+
+def safe_display_name(user):
+    """Return a readable username without failing if discord fields are unavailable."""
+    return getattr(user, "display_name", None) or getattr(user, "name", "Unknown User")
+
+
+
+def format_channel_location(channel):
+    """Describe the channel so logs show where a command was triggered."""
+    if channel is None:
+        return "Direct Message"
+
+    guild = getattr(channel, "guild", None)
+    guild_name = guild.name if guild else "Direct Message"
+    channel_name = getattr(channel, "name", str(channel))
+    return f"{guild_name} -> #{channel_name}"
+
+
+
+def format_command_arguments(positional_arguments=None, keyword_arguments=None):
+    """Build a compact argument summary for both prefix and slash commands."""
+    argument_parts = []
+
+    for value in positional_arguments or []:
+        argument_parts.append(repr(value))
+
+    for key, value in (keyword_arguments or {}).items():
+        argument_parts.append(f"{key}={value!r}")
+
+    return ", ".join(argument_parts) if argument_parts else "None"
+
+
+
+def build_prefix_command_log(ctx):
+    """Create a single structured log line for text command usage."""
+    return (
+        "Prefix command used | "
+        f"user={safe_display_name(ctx.author)} ({ctx.author.id}) | "
+        f"channel={format_channel_location(ctx.channel)} | "
+        f"command={ctx.command.qualified_name if ctx.command else ctx.invoked_with} | "
+        f"message={ctx.message.content} | "
+        f"arguments={format_command_arguments(ctx.args[2:], ctx.kwargs)}"
+    )
+
+
+
+def build_slash_command_log(interaction, command):
+    """Create a structured log line for slash command usage, including options."""
+    command_name = command.qualified_name if command else interaction.command.name
+    return (
+        "Slash command used | "
+        f"user={safe_display_name(interaction.user)} ({interaction.user.id}) | "
+        f"channel={format_channel_location(interaction.channel)} | "
+        f"command=/{command_name} | "
+        f"arguments={format_command_arguments(keyword_arguments=interaction.namespace.__dict__)}"
+    )
+
+
+
+def log_failed_command(command_type, command_name, actor, channel, error, *, raw_input=None, arguments=None):
+    """Capture failures with enough context to reproduce the command invocation."""
+    logger.error(
+        "%s failed | user=%s (%s) | channel=%s | command=%s | raw_input=%s | arguments=%s | error=%s",
+        command_type,
+        safe_display_name(actor),
+        getattr(actor, "id", "Unknown ID"),
+        format_channel_location(channel),
+        command_name,
+        raw_input or "None",
+        arguments or "None",
+        error,
+        exc_info=True,
+    )
 
 # ------------------------------------------------------------------
 # COG DISCOVERY / LOADING (from ./COGS)
@@ -93,7 +171,7 @@ async def load_cogs():
             await bot.load_extension(f"COGS.{extension}")
             print(f"[LOADED] - COGS.{extension}")
         except Exception as e:
-            logging.error(f"Failed to load cog COGS.{extension}: {e}")
+            logger.error(f"Failed to load cog COGS.{extension}: {e}")
             print(f"--- !!! [FAILED] !!! --- - COGS.{extension}: {e}")
     print("All Cogs Loaded")
 
@@ -167,7 +245,7 @@ async def custom_help(ctx):
             try:
                 await message.clear_reactions()
             except Exception as e:
-                logging.error(f"Failed to clear reactions: {e}")
+                logger.error(f"Failed to clear reactions: {e}")
             break
 
 # ------------------------------------------------------------------
@@ -182,7 +260,7 @@ async def load(ctx, extension: str):
         await bot.load_extension(ext)
         await ctx.send(f"Loaded `{ext}` successfully.", delete_after=2.5)
     except Exception as e:
-        logging.error(f"Failed to load cog {extension}: {e}")
+        logger.error(f"Failed to load cog {extension}: {e}")
         await ctx.send(f"Failed to load `{extension}`: {e}", delete_after=2.5)
 
 @bot.command(name="unload")
@@ -193,7 +271,7 @@ async def unload(ctx, extension: str):
         await bot.unload_extension(ext)
         await ctx.send(f"Unloaded `{ext}` successfully.", delete_after=2.5)
     except Exception as e:
-        logging.error(f"Failed to unload cog {extension}: {e}")
+        logger.error(f"Failed to unload cog {extension}: {e}")
         await ctx.send(f"Failed to unload `{extension}`: {e}", delete_after=2.5)
 
 @bot.command(name="rc")
@@ -204,7 +282,7 @@ async def reload(ctx, extension: str):
         await bot.reload_extension(ext)
         await ctx.send(f"Reloaded `{ext}` successfully.", delete_after=2.5)
     except Exception as e:
-        logging.error(f"Failed to reload cog {extension}: {e}")
+        logger.error(f"Failed to reload cog {extension}: {e}")
         await ctx.send(f"Failed to reload `{extension}`: {e}", delete_after=2.5)
 
 @bot.command(name="reload")
@@ -218,7 +296,7 @@ async def reload_all(ctx):
             await bot.reload_extension(f"COGS.{extension}")
         await ctx.send("All cogs reloaded successfully.", delete_after=2.5)
     except Exception as e:
-        logging.error(f"Failed to reload all cogs: {e}")
+        logger.error(f"Failed to reload all cogs: {e}")
         await ctx.send(f"Failed to reload cogs: {e}", delete_after=2.5)
 
 # ------------------------------------------------------------------
@@ -234,7 +312,7 @@ async def restart(ctx):
         await bot.close()
         os.execv(sys.executable, [sys.executable] + sys.argv)
     except Exception as e:
-        logging.error(f"Failed to restart the bot: {e}")
+        logger.error(f"Failed to restart the bot: {e}")
         await ctx.send(f"Failed to restart the bot: {e}", delete_after=5)
 
 @bot.command(name="sync")
@@ -260,7 +338,7 @@ def load_statuses(file_path=None):
                 raise ValueError("Status file is empty.")
             return statuses
     except Exception as e:
-        logging.error(f"Error loading statuses: {e}")
+        logger.error(f"Error loading statuses: {e}")
         return ["Default status message."]
 
 @tasks.loop(minutes=0.25)
@@ -277,18 +355,51 @@ async def update_status():
 # ------------------------------------------------------------------
 
 @bot.event
+async def on_command(ctx):
+    logger.info(build_prefix_command_log(ctx))
+
+@bot.event
 async def on_error(event_method, *args, **kwargs):
-    logging.error(f"Unhandled exception in event: {event_method}", exc_info=True)
+    logger.error(f"Unhandled exception in event: {event_method}", exc_info=True)
 
 @bot.event
 async def on_command_error(ctx, error):
-    logging.error(f"Command error: {error}", exc_info=True)
+    command_name = ctx.command.qualified_name if ctx.command else ctx.invoked_with
+    log_failed_command(
+        "Prefix command",
+        command_name,
+        ctx.author,
+        ctx.channel,
+        error,
+        raw_input=ctx.message.content,
+        arguments=format_command_arguments(ctx.args[2:], ctx.kwargs),
+    )
+
+@bot.listen("on_interaction")
+async def log_slash_command_usage(interaction: discord.Interaction):
+    # Listen for application commands without overriding discord.py's default interaction flow.
+    if interaction.type == discord.InteractionType.application_command:
+        command = interaction.command
+        if command is not None:
+            logger.info(build_slash_command_log(interaction, command))
+
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
     if isinstance(error, discord.app_commands.CheckFailure):
         return
-    logging.error(f"Unhandled app command error: {error}", exc_info=True)
+
+    command = interaction.command
+    command_name = f"/{command.qualified_name}" if command else "/unknown"
+    log_failed_command(
+        "Slash command",
+        command_name,
+        interaction.user,
+        interaction.channel,
+        error,
+        raw_input=None,
+        arguments=format_command_arguments(keyword_arguments=interaction.namespace.__dict__),
+    )
 
 # ------------------------------------------------------------------
 # READY
@@ -301,7 +412,7 @@ async def on_ready():
     try:
         await load_cogs()
     except Exception as e:
-        logging.error(f"Failed during load_cogs(): {e}", exc_info=True)
+        logger.error(f"Failed during load_cogs(): {e}", exc_info=True)
 
     if not update_status.is_running():
         update_status.start()

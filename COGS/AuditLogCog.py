@@ -146,16 +146,27 @@ class AuditLogCog(commands.Cog):
             return str(target_name)
         return f"{target_name} (`{target_id}`)"
 
+    @staticmethod
+    def _permission_symbol(enabled_state: bool | None) -> str:
+        """Return the requested symbol for allowed, neutral, and denied permission states."""
+
+        if enabled_state is True:
+            return "✅"
+        if enabled_state is False:
+            return "❌"
+        return "⬜"
+
     def _channel_overwrite_change_lines(
         self,
         audit_entry: discord.AuditLogEntry | None,
-    ) -> list[str]:
+    ) -> tuple[str | None, list[str]]:
         """Summarize permission overwrite changes using only audit-log data."""
 
+        affected_target: str | None = None
         change_lines: list[str] = []
 
         if audit_entry is None:
-            return ["Discord audit log entry was not available for this overwrite change."]
+            return None, ["Discord audit log entry was not available for this overwrite change."]
 
         extra = getattr(audit_entry, "extra", None)
         overwrite_target = getattr(extra, "overwrite", None)
@@ -165,7 +176,7 @@ class AuditLogCog(commands.Cog):
             target_label = self._format_overwrite_target(overwrite_target)
             if overwrite_target_type is not None:
                 target_label = f"{target_label} [{overwrite_target_type}]"
-            change_lines.append(f"Target: {target_label}")
+            affected_target = target_label
 
         # First prefer the audit-log entry's explicit change list because that is the
         # most direct representation of what Discord says changed.
@@ -189,11 +200,11 @@ class AuditLogCog(commands.Cog):
                     removed_names = self._permission_names_by_transition(before_permissions, after_permissions, enabled_to=False)
 
                     if granted_names:
-                        action_label = "Allowed permissions" if change_key == "allow" else "Denied permissions"
-                        change_lines.append(f"{action_label}: {', '.join(f'`{name}`' for name in granted_names)}")
+                        symbol = self._permission_symbol(change_key == "allow")
+                        change_lines.extend(f"{symbol} `{name}`" for name in granted_names)
                     if removed_names:
-                        removal_label = "Removed allowed permissions" if change_key == "allow" else "Removed denied permissions"
-                        change_lines.append(f"{removal_label}: {', '.join(f'`{name}`' for name in removed_names)}")
+                        neutral_symbol = self._permission_symbol(None)
+                        change_lines.extend(f"{neutral_symbol} `{name}`" for name in removed_names)
                     if permission_changes and not granted_names and not removed_names:
                         fallback_label = "Allowed changes:" if change_key == "allow" else "Denied changes:"
                         change_lines.append(fallback_label)
@@ -202,7 +213,7 @@ class AuditLogCog(commands.Cog):
                     change_lines.append(f"`{change_key}`: `{before_value}` ➜ `{after_value}`")
 
         if change_lines:
-            return change_lines
+            return affected_target, change_lines
 
         before_state = getattr(audit_entry, "before", None)
         after_state = getattr(audit_entry, "after", None)
@@ -220,13 +231,13 @@ class AuditLogCog(commands.Cog):
             removed_denied_names = self._permission_names_by_transition(before_deny, after_deny, enabled_to=False)
 
             if allowed_names:
-                change_lines.append(f"Allowed permissions: {', '.join(f'`{name}`' for name in allowed_names)}")
+                change_lines.extend(f"{self._permission_symbol(True)} `{name}`" for name in allowed_names)
             if removed_allowed_names:
-                change_lines.append(f"Removed allowed permissions: {', '.join(f'`{name}`' for name in removed_allowed_names)}")
+                change_lines.extend(f"{self._permission_symbol(None)} `{name}`" for name in removed_allowed_names)
             if denied_names:
-                change_lines.append(f"Denied permissions: {', '.join(f'`{name}`' for name in denied_names)}")
+                change_lines.extend(f"{self._permission_symbol(False)} `{name}`" for name in denied_names)
             if removed_denied_names:
-                change_lines.append(f"Removed denied permissions: {', '.join(f'`{name}`' for name in removed_denied_names)}")
+                change_lines.extend(f"{self._permission_symbol(None)} `{name}`" for name in removed_denied_names)
 
             if allow_changes and not allowed_names and not removed_allowed_names:
                 change_lines.append("Allowed changes:")
@@ -236,9 +247,9 @@ class AuditLogCog(commands.Cog):
                 change_lines.extend(f"• {line}" for line in deny_changes)
 
         if change_lines:
-            return change_lines
+            return affected_target, change_lines
 
-        return ["Discord audit log did not expose granular overwrite details for this change."]
+        return affected_target, ["Discord audit log did not expose granular overwrite details for this change."]
 
     async def _send_audit_embed(
         self,
@@ -457,7 +468,12 @@ class AuditLogCog(commands.Cog):
             target_id=after.id,
             fallback_target_name=getattr(after, "name", None),
         )
-        overwrite_change_lines = self._channel_overwrite_change_lines(audit_entry)
+        affected_target, overwrite_change_lines = self._channel_overwrite_change_lines(audit_entry)
+
+        fields = [("By", self._format_actor(audit_entry.user if audit_entry else None), False)]
+        if affected_target is not None:
+            fields.append(("Affected", affected_target, False))
+        fields.append(("Changes", "\n".join(overwrite_change_lines)[:1024], False))
 
         await self._send_audit_embed(
             after.guild,
@@ -466,10 +482,7 @@ class AuditLogCog(commands.Cog):
                 f"Permission overwrites changed for "
                 f"{after.mention if hasattr(after, 'mention') else after.name} (`{after.id}`)."
             ),
-            fields=[
-                ("By", self._format_actor(audit_entry.user if audit_entry else None), False),
-                ("Changes", "\n".join(overwrite_change_lines)[:1024], False),
-            ],
+            fields=fields,
             color=discord.Color.gold(),
         )
 

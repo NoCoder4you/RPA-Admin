@@ -74,6 +74,25 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
 
         cog._send_audit_embed.assert_not_awaited()
 
+    async def test_channel_rename_logs_old_and_new_names(self) -> None:
+        cog = AuditLogCog(MagicMock())
+        cog._send_audit_embed = AsyncMock()
+        cog._find_recent_audit_entry_from_actions = AsyncMock(
+            return_value=SimpleNamespace(user=SimpleNamespace(id=22, mention="<@22>"))
+        )
+
+        guild = SimpleNamespace()
+        before = SimpleNamespace(overwrites={"a": 1}, guild=guild, id=10, mention="#general", name="general")
+        after = SimpleNamespace(overwrites={"a": 1}, guild=guild, id=10, mention="#welcome", name="welcome")
+
+        await cog.on_guild_channel_update(before, after)
+
+        cog._send_audit_embed.assert_awaited_once()
+        self.assertEqual(cog._send_audit_embed.await_args.kwargs["title"], "Channel Renamed")
+        fields = cog._send_audit_embed.await_args.kwargs["fields"]
+        self.assertEqual(fields[1], ("Old Name", "`general`", True))
+        self.assertEqual(fields[2], ("New Name", "`welcome`", True))
+
     async def test_channel_permission_update_logs_only_when_overwrites_change(self) -> None:
         cog = AuditLogCog(MagicMock())
         cog._send_audit_embed = AsyncMock()

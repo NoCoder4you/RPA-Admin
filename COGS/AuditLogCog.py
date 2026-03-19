@@ -578,39 +578,68 @@ class AuditLogCog(commands.Cog):
         before: discord.abc.GuildChannel,
         after: discord.abc.GuildChannel,
     ) -> None:
-        """Log channel permission overwrite changes for traceable access-control edits."""
+        """Log channel rename and overwrite updates so moderators can see exactly what changed."""
 
-        if before.overwrites == after.overwrites:
+        name_changed = before.name != after.name
+        overwrites_changed = before.overwrites != after.overwrites
+        if not name_changed and not overwrites_changed:
             return
 
-        overwrite_actions = [
-            getattr(discord.AuditLogAction, "overwrite_update", discord.AuditLogAction.channel_update),
-            getattr(discord.AuditLogAction, "overwrite_create", discord.AuditLogAction.channel_update),
-            getattr(discord.AuditLogAction, "overwrite_delete", discord.AuditLogAction.channel_update),
-            discord.AuditLogAction.channel_update,
-        ]
+        # Prefer overwrite-specific audit actions when permissions changed, but still
+        # fall back to the generic channel update entry so simple renames are attributed.
+        audit_actions = [discord.AuditLogAction.channel_update]
+        if overwrites_changed:
+            audit_actions = [
+                getattr(discord.AuditLogAction, "overwrite_update", discord.AuditLogAction.channel_update),
+                getattr(discord.AuditLogAction, "overwrite_create", discord.AuditLogAction.channel_update),
+                getattr(discord.AuditLogAction, "overwrite_delete", discord.AuditLogAction.channel_update),
+                discord.AuditLogAction.channel_update,
+            ]
+
         audit_entry = await self._find_recent_audit_entry_from_actions(
             after.guild,
-            actions=overwrite_actions,
+            actions=audit_actions,
             target_id=after.id,
-            fallback_target_name=getattr(after, "name", None),
+            fallback_target_name=getattr(before, "name", None) or getattr(after, "name", None),
         )
-        affected_target, overwrite_change_lines = self._channel_overwrite_change_lines(audit_entry)
-        if affected_target is None:
-            affected_target = self._resolve_changed_overwrite_target_label(before, after)
 
         fields = [("By", self._format_actor(audit_entry.user if audit_entry else None), False)]
-        if affected_target is not None:
-            fields.append(("Affected", affected_target, False))
-        fields.append(("Changes", "\n".join(overwrite_change_lines)[:1024], False))
+        if name_changed:
+            # Keep rename details in dedicated fields so moderators can immediately spot
+            # the previous and current channel names without parsing the description.
+            fields.append(("Old Name", f"`{before.name}`", True))
+            fields.append(("New Name", f"`{after.name}`", True))
+
+        if overwrites_changed:
+            affected_target, overwrite_change_lines = self._channel_overwrite_change_lines(audit_entry)
+            if affected_target is None:
+                affected_target = self._resolve_changed_overwrite_target_label(before, after)
+            if affected_target is not None:
+                fields.append(("Affected", affected_target, False))
+            fields.append(("Changes", "\n".join(overwrite_change_lines)[:1024], False))
+
+        title = "Channel Updated" if name_changed and overwrites_changed else (
+            "Channel Renamed" if name_changed else "Channel Permissions Updated"
+        )
+        if name_changed and overwrites_changed:
+            description = (
+                f"Channel {after.mention if hasattr(after, 'mention') else after.name} (`{after.id}`) "
+                f"was renamed and had permission overwrites updated."
+            )
+        elif name_changed:
+            description = (
+                f"Channel {after.mention if hasattr(after, 'mention') else after.name} (`{after.id}`) was renamed."
+            )
+        else:
+            description = (
+                f"Permission overwrites changed for "
+                f"{after.mention if hasattr(after, 'mention') else after.name} (`{after.id}`)."
+            )
 
         await self._send_audit_embed(
             after.guild,
-            title="Channel Permissions Updated",
-            description=(
-                f"Permission overwrites changed for "
-                f"{after.mention if hasattr(after, 'mention') else after.name} (`{after.id}`)."
-            ),
+            title=title,
+            description=description,
             fields=fields,
             color=discord.Color.gold(),
         )

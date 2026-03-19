@@ -27,7 +27,10 @@ class WebhookApplicationChannelCog(commands.Cog):
         re.IGNORECASE,
     )
 
-    # Store reusable resource guidance in one place so unit-specific copy can be updated later.
+    # Restrict channel creation to the currently approved application prefixes provided by the user.
+    ALLOWED_UNIT_PREFIXES: Final[frozenset[str]] = frozenset({"IA", "FU", "MT", "ET", "EA", "TU"})
+
+    # Store reusable resource guidance in one place so prefix-specific copy can be updated later.
     RESOURCE_STEPS: Final[tuple[str, ...]] = (
         "Use this channel to gather the applicant's answers and supporting details.",
         "Share the correct unit application link, document, or template for the applicant here.",
@@ -49,7 +52,7 @@ class WebhookApplicationChannelCog(commands.Cog):
 
         unit_prefix = match.group("unit_prefix").strip().upper()
         username = match.group("username").strip()
-        if not username:
+        if unit_prefix not in cls.ALLOWED_UNIT_PREFIXES or not username:
             return None
 
         return ChannelCreateRequest(unit_prefix=unit_prefix, username=username)
@@ -78,6 +81,11 @@ class WebhookApplicationChannelCog(commands.Cog):
         )
         embed.add_field(name="Applicant Username", value=request.username, inline=True)
         embed.add_field(name="Unit Prefix", value=request.unit_prefix, inline=True)
+        embed.add_field(
+            name="Allowed Prefixes",
+            value=", ".join(sorted(cls.ALLOWED_UNIT_PREFIXES)),
+            inline=False,
+        )
         embed.add_field(
             name="Purpose",
             value=(

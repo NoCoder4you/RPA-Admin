@@ -27,20 +27,27 @@ class WebhookApplicationChannelCogTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(request)
 
+    def test_parse_channel_create_request_rejects_unknown_prefix(self) -> None:
+        request = WebhookApplicationChannelCog.parse_channel_create_request("RPA channelcreate HR Jane Smith")
+
+        self.assertIsNone(request)
+
     def test_build_channel_name_normalizes_username_for_discord(self) -> None:
         channel_name = WebhookApplicationChannelCog.build_channel_name("John Doe!!!")
 
         self.assertEqual(channel_name, "john-doe")
 
-    def test_build_application_embed_provides_resources_instead_of_questions(self) -> None:
+    def test_build_application_embed_provides_resources_and_allowed_prefixes(self) -> None:
         embed = WebhookApplicationChannelCog.build_application_embed(
-            ChannelCreateRequest(unit_prefix="HR", username="Jane Smith")
+            ChannelCreateRequest(unit_prefix="ET", username="Jane Smith")
         )
 
-        self.assertEqual(embed.title, "HR Application Resources")
-        self.assertEqual(embed.fields[2].name, "Purpose")
-        self.assertIn("not for the bot to ask application questions", embed.fields[2].value)
-        self.assertEqual(embed.fields[3].name, "Resource Step 1")
+        self.assertEqual(embed.title, "ET Application Resources")
+        self.assertEqual(embed.fields[2].name, "Allowed Prefixes")
+        self.assertIn("EA", embed.fields[2].value)
+        self.assertEqual(embed.fields[3].name, "Purpose")
+        self.assertIn("not for the bot to ask application questions", embed.fields[3].value)
+        self.assertEqual(embed.fields[4].name, "Resource Step 1")
 
     async def test_on_message_creates_channel_and_posts_application_embed(self) -> None:
         cog = WebhookApplicationChannelCog(MagicMock())
@@ -50,7 +57,7 @@ class WebhookApplicationChannelCogTests(unittest.IsolatedAsyncioTestCase):
         source_channel = SimpleNamespace(category=SimpleNamespace(name="Applications"))
         message = SimpleNamespace(
             webhook_id=12345,
-            content="RPA channelcreate HR Jane Smith",
+            content="RPA channelcreate ET Jane Smith",
             guild=guild,
             channel=source_channel,
         )
@@ -61,16 +68,16 @@ class WebhookApplicationChannelCogTests(unittest.IsolatedAsyncioTestCase):
         create_call = guild.create_text_channel.await_args
         self.assertEqual(create_call.args[0], "jane-smith")
         self.assertIs(create_call.kwargs["category"], source_channel.category)
-        self.assertIn("HR applicant Jane Smith", create_call.kwargs["reason"])
+        self.assertIn("ET applicant Jane Smith", create_call.kwargs["reason"])
 
         created_channel.send.assert_awaited_once()
         sent_embed = created_channel.send.await_args.kwargs["embed"]
-        self.assertEqual(sent_embed.title, "HR Application Resources")
+        self.assertEqual(sent_embed.title, "ET Application Resources")
         self.assertEqual(sent_embed.fields[0].name, "Applicant Username")
         self.assertEqual(sent_embed.fields[0].value, "Jane Smith")
         self.assertEqual(sent_embed.fields[1].name, "Unit Prefix")
-        self.assertEqual(sent_embed.fields[1].value, "HR")
-        self.assertEqual(sent_embed.fields[2].name, "Purpose")
+        self.assertEqual(sent_embed.fields[1].value, "ET")
+        self.assertEqual(sent_embed.fields[2].name, "Allowed Prefixes")
 
     async def test_on_message_ignores_non_webhook_messages(self) -> None:
         cog = WebhookApplicationChannelCog(MagicMock())
@@ -78,6 +85,21 @@ class WebhookApplicationChannelCogTests(unittest.IsolatedAsyncioTestCase):
         guild = SimpleNamespace(create_text_channel=AsyncMock())
         message = SimpleNamespace(
             webhook_id=None,
+            content="RPA channelcreate ET Jane Smith",
+            guild=guild,
+            channel=SimpleNamespace(category=None),
+        )
+
+        await cog.on_message(message)
+
+        guild.create_text_channel.assert_not_awaited()
+
+    async def test_on_message_ignores_unknown_prefix_commands(self) -> None:
+        cog = WebhookApplicationChannelCog(MagicMock())
+
+        guild = SimpleNamespace(create_text_channel=AsyncMock())
+        message = SimpleNamespace(
+            webhook_id=9876,
             content="RPA channelcreate HR Jane Smith",
             guild=guild,
             channel=SimpleNamespace(category=None),

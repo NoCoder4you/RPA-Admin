@@ -94,6 +94,47 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
         await cog.on_guild_channel_update(before, unchanged_after)
         cog._send_audit_embed.assert_not_awaited()
 
+    async def test_channel_permission_update_falls_back_to_changed_overwrite_target_from_channel_snapshot(self) -> None:
+        cog = AuditLogCog(MagicMock())
+        cog._send_audit_embed = AsyncMock()
+        cog._find_recent_audit_entry_from_actions = AsyncMock(return_value=None)
+
+        unchanged_role = SimpleNamespace(id=111, name="Members")
+        changed_role = SimpleNamespace(id=654, name="Special Visitor")
+
+        unchanged_overwrite = discord.PermissionOverwrite(view_channel=True)
+        before_changed_overwrite = discord.PermissionOverwrite()
+        after_changed_overwrite = discord.PermissionOverwrite(embed_links=False)
+
+        guild = SimpleNamespace()
+        before = SimpleNamespace(
+            overwrites={
+                unchanged_role: unchanged_overwrite,
+                changed_role: before_changed_overwrite,
+            },
+            guild=guild,
+            id=10,
+            mention="#general",
+            name="general",
+        )
+        after = SimpleNamespace(
+            overwrites={
+                unchanged_role: unchanged_overwrite,
+                changed_role: after_changed_overwrite,
+            },
+            guild=guild,
+            id=10,
+            mention="#general",
+            name="general",
+        )
+
+        await cog.on_guild_channel_update(before, after)
+
+        fields = cog._send_audit_embed.await_args.kwargs["fields"]
+        self.assertEqual(fields[1][0], "Affected")
+        self.assertIn("Special Visitor (`654`)", fields[1][1])
+        self.assertIn("Discord audit log entry was not available", fields[2][1])
+
     async def test_channel_permission_update_prefers_audit_log_overwrite_details(self) -> None:
         cog = AuditLogCog(MagicMock())
         cog._send_audit_embed = AsyncMock()

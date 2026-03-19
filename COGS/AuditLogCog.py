@@ -257,6 +257,38 @@ class AuditLogCog(commands.Cog):
             return "❌"
         return "⬜"
 
+    def _resolve_changed_overwrite_target_label(
+        self,
+        before: discord.abc.GuildChannel,
+        after: discord.abc.GuildChannel,
+    ) -> str | None:
+        """Infer the changed overwrite target from the channel snapshots when audit logs are sparse."""
+
+        before_targets = getattr(before, "overwrites", {}) or {}
+        after_targets = getattr(after, "overwrites", {}) or {}
+
+        # Compare overwrite keys directly first because Discord normally reuses the
+        # same member/role objects in cache, which makes this the most reliable path.
+        before_target_ids = {getattr(target, "id", None): target for target in before_targets}
+        after_target_ids = {getattr(target, "id", None): target for target in after_targets}
+
+        changed_target_ids: list[int | None] = []
+        all_target_ids = set(before_target_ids) | set(after_target_ids)
+        for target_id in all_target_ids:
+            before_target = before_target_ids.get(target_id)
+            after_target = after_target_ids.get(target_id)
+            before_overwrite = before_targets.get(before_target) if before_target is not None else None
+            after_overwrite = after_targets.get(after_target) if after_target is not None else None
+            if before_overwrite != after_overwrite:
+                changed_target_ids.append(target_id)
+
+        if len(changed_target_ids) == 1:
+            target_id = changed_target_ids[0]
+            candidate = after_target_ids.get(target_id) or before_target_ids.get(target_id)
+            return self._format_overwrite_target(candidate) if candidate is not None else None
+
+        return None
+
     def _channel_overwrite_change_lines(
         self,
         audit_entry: discord.AuditLogEntry | None,
@@ -564,6 +596,8 @@ class AuditLogCog(commands.Cog):
             fallback_target_name=getattr(after, "name", None),
         )
         affected_target, overwrite_change_lines = self._channel_overwrite_change_lines(audit_entry)
+        if affected_target is None:
+            affected_target = self._resolve_changed_overwrite_target_label(before, after)
 
         fields = [("By", self._format_actor(audit_entry.user if audit_entry else None), False)]
         if affected_target is not None:

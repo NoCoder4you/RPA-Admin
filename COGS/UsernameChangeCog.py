@@ -11,6 +11,88 @@ from discord.ext import commands
 from habbo_verification_core import HabboApiError, ServerConfigStore, VerifiedUserStore, fetch_habbo_profile
 
 
+class UsernameChangeRequestView(discord.ui.View):
+    """Interactive moderator controls for approving or declining a username-change request embed."""
+
+    def __init__(self, *, admin_role_id: int | None) -> None:
+        # Keep the view persistent long enough for staff to action routine requests.
+        super().__init__(timeout=None)
+        self.admin_role_id = admin_role_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """Allow only configured Discord Admin role holders to use the moderation buttons."""
+
+        if self.admin_role_id is None:
+            await interaction.response.send_message(
+                "This request cannot be actioned because the admin role is not configured.",
+                ephemeral=True,
+            )
+            return False
+
+        member_roles = getattr(interaction.user, "roles", [])
+        if any(getattr(role, "id", None) == self.admin_role_id for role in member_roles):
+            return True
+
+        await interaction.response.send_message(
+            "You need the configured Discord Admin role to use these buttons.",
+            ephemeral=True,
+        )
+        return False
+
+    @discord.ui.button(label="Accept", style=discord.ButtonStyle.success, custom_id="username_change:accept")
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        """Mark the request as accepted and lock the moderation controls."""
+
+        await self._finalize_request(interaction, button, status="Accepted", color=discord.Color.green())
+
+    @discord.ui.button(label="Decline", style=discord.ButtonStyle.danger, custom_id="username_change:decline")
+    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        """Mark the request as declined and lock the moderation controls."""
+
+        await self._finalize_request(interaction, button, status="Declined", color=discord.Color.red())
+
+    async def _finalize_request(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+        *,
+        status: str,
+        color: discord.Color,
+    ) -> None:
+        """Update the embed status field, note the moderator, and disable further button input."""
+
+        message = interaction.message
+        if message is None or not message.embeds:
+            await interaction.response.send_message(
+                "I could not find the original username-change embed to update.",
+                ephemeral=True,
+            )
+            return
+
+        embed = message.embeds[0].copy()
+        self._upsert_status_field(embed, status=status, moderator=interaction.user.mention)
+        embed.color = color
+
+        # Disable every button once a final moderator decision has been made.
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @staticmethod
+    def _upsert_status_field(embed: discord.Embed, *, status: str, moderator: str) -> None:
+        """Insert or replace the request-status field so the moderation outcome is always visible."""
+
+        status_value = f"{status} by {moderator}"
+        for index, field in enumerate(embed.fields):
+            if field.name == "Request Status":
+                embed.set_field_at(index, name="Request Status", value=status_value, inline=False)
+                return
+
+        embed.add_field(name="Request Status", value=status_value, inline=False)
+
+
 class UsernameChangeCog(commands.Cog):
     """Self-service cog for keeping verified Habbo username records in sync with Discord."""
 
@@ -147,10 +229,15 @@ class UsernameChangeCog(commands.Cog):
         embed.add_field(name="Updated Username", value=updated_username, inline=True)
         embed.add_field(name="Nickname Sync", value=nickname_status, inline=False)
         embed.add_field(name="AutoRoles Reload", value=reload_status, inline=False)
+        embed.add_field(name="Request Status", value="Pending admin review", inline=False)
 
         try:
             content = f"<@&{admin_role_id}>" if admin_role_id else None
-            await channel.send(content=content, embed=embed)
+            await channel.send(
+                content=content,
+                embed=embed,
+                view=UsernameChangeRequestView(admin_role_id=admin_role_id),
+            )
         except (discord.Forbidden, discord.HTTPException):
             return
 

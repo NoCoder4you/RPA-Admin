@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 try:
     import discord
     from discord.ext import commands
-    from COGS.UsernameChangeCog import UsernameChangeCog
+    from COGS.UsernameChangeCog import UsernameChangeCog, UsernameChangeRequestView
 except ModuleNotFoundError as exc:  # pragma: no cover - environment-dependent test skip
     raise unittest.SkipTest(f"discord.py is not installed in this environment: {exc}")
 
@@ -82,11 +82,11 @@ class UsernameChangeCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, "Loaded AutoRoles cog because it was not already loaded.")
         bot.load_extension.assert_awaited_once_with("COGS.ServerAutoRolesRPA")
 
-    async def test_send_verification_log_embed_posts_to_configured_requests_channel_with_admin_ping(self) -> None:
+    async def test_send_verification_log_embed_posts_to_configured_requests_channel_with_admin_ping_and_buttons(self) -> None:
         sent_messages: list[dict[str, object]] = []
 
-        async def capture_send(*, content=None, embed=None):
-            sent_messages.append({"content": content, "embed": embed})
+        async def capture_send(*, content=None, embed=None, view=None):
+            sent_messages.append({"content": content, "embed": embed, "view": view})
 
         channel = SimpleNamespace(send=AsyncMock(side_effect=capture_send))
         guild = SimpleNamespace(get_channel=lambda channel_id: channel if channel_id == 1479465446632853524 else None)
@@ -112,6 +112,62 @@ class UsernameChangeCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(embed.title, "Habbo Username Change Request")
         self.assertEqual(embed.fields[1].value, "OldHabbo")
         self.assertEqual(embed.fields[2].value, "NewHabbo")
+        self.assertEqual(embed.fields[5].value, "Pending admin review")
+        view = sent_messages[0]["view"]
+        self.assertIsInstance(view, UsernameChangeRequestView)
+        self.assertEqual([child.label for child in view.children], ["Accept", "Decline"])
+
+
+class UsernameChangeRequestViewTests(unittest.IsolatedAsyncioTestCase):
+    """Validate request-button authorization and embed status updates."""
+
+    async def test_interaction_check_rejects_users_without_admin_role(self) -> None:
+        view = UsernameChangeRequestView(admin_role_id=1484029753185931336)
+        response = SimpleNamespace(send_message=AsyncMock())
+        interaction = SimpleNamespace(user=SimpleNamespace(roles=[SimpleNamespace(id=1)]), response=response)
+
+        allowed = await view.interaction_check(interaction)
+
+        self.assertFalse(allowed)
+        response.send_message.assert_awaited_once_with(
+            "You need the configured Discord Admin role to use these buttons.",
+            ephemeral=True,
+        )
+
+    async def test_accept_button_marks_embed_as_accepted_and_disables_buttons(self) -> None:
+        view = UsernameChangeRequestView(admin_role_id=1484029753185931336)
+        embed = discord.Embed(title="Habbo Username Change Request")
+        embed.add_field(name="Request Status", value="Pending admin review", inline=False)
+        response = SimpleNamespace(edit_message=AsyncMock())
+        interaction = SimpleNamespace(
+            user=SimpleNamespace(mention="<@555>"),
+            message=SimpleNamespace(embeds=[embed]),
+            response=response,
+        )
+
+        await view.accept.callback(interaction)
+
+        response.edit_message.assert_awaited_once()
+        edited_embed = response.edit_message.await_args.kwargs["embed"]
+        edited_view = response.edit_message.await_args.kwargs["view"]
+        self.assertEqual(edited_embed.fields[0].value, "Accepted by <@555>")
+        self.assertTrue(all(child.disabled for child in edited_view.children))
+
+    async def test_decline_button_marks_embed_as_declined_and_disables_buttons(self) -> None:
+        view = UsernameChangeRequestView(admin_role_id=1484029753185931336)
+        embed = discord.Embed(title="Habbo Username Change Request")
+        response = SimpleNamespace(edit_message=AsyncMock())
+        interaction = SimpleNamespace(
+            user=SimpleNamespace(mention="<@777>"),
+            message=SimpleNamespace(embeds=[embed]),
+            response=response,
+        )
+
+        await view.decline.callback(interaction)
+
+        edited_embed = response.edit_message.await_args.kwargs["embed"]
+        self.assertEqual(edited_embed.fields[0].name, "Request Status")
+        self.assertEqual(edited_embed.fields[0].value, "Declined by <@777>")
 
 
 if __name__ == "__main__":

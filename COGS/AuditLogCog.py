@@ -146,6 +146,53 @@ class AuditLogCog(commands.Cog):
             return str(target_name)
         return f"{target_name} (`{target_id}`)"
 
+    def _resolve_overwrite_target_label(self, audit_entry: discord.AuditLogEntry | None) -> str | None:
+        """Best-effort resolution of the role/member affected by an overwrite audit entry."""
+
+        if audit_entry is None:
+            return None
+
+        extra = getattr(audit_entry, "extra", None)
+        overwrite_target_type = getattr(extra, "overwrite_type", None)
+
+        preferred_extra_keys = ("overwrite", "role", "member", "user", "target")
+        for key in preferred_extra_keys:
+            candidate = getattr(extra, key, None)
+            if candidate is None:
+                continue
+            label = self._format_overwrite_target(candidate)
+            if overwrite_target_type is not None:
+                return f"{label} [{overwrite_target_type}]"
+            return label
+
+        if extra is not None and hasattr(extra, "__dict__"):
+            for key, candidate in vars(extra).items():
+                if key in {"channel", "overwrite_type"} or candidate is None:
+                    continue
+                if hasattr(candidate, "id") or hasattr(candidate, "name") or hasattr(candidate, "mention"):
+                    label = self._format_overwrite_target(candidate)
+                    if overwrite_target_type is not None:
+                        return f"{label} [{overwrite_target_type}]"
+                    return label
+
+        raw_changes = getattr(audit_entry, "changes", None)
+        iterable_changes = getattr(raw_changes, "__iter__", None)
+        if callable(iterable_changes):
+            for change in raw_changes:
+                if getattr(change, "key", None) not in {"role", "member", "user", "overwrite"}:
+                    continue
+                after_value = getattr(change, "after", getattr(change, "new", None))
+                before_value = getattr(change, "before", getattr(change, "old", None))
+                candidate = after_value or before_value
+                if candidate is None:
+                    continue
+                label = self._format_overwrite_target(candidate)
+                if overwrite_target_type is not None:
+                    return f"{label} [{overwrite_target_type}]"
+                return label
+
+        return None
+
     @staticmethod
     def _permission_symbol(enabled_state: bool | None) -> str:
         """Return the requested symbol for allowed, neutral, and denied permission states."""
@@ -169,14 +216,8 @@ class AuditLogCog(commands.Cog):
             return None, ["Discord audit log entry was not available for this overwrite change."]
 
         extra = getattr(audit_entry, "extra", None)
-        overwrite_target = getattr(extra, "overwrite", None)
         overwrite_target_type = getattr(extra, "overwrite_type", None)
-
-        if overwrite_target is not None:
-            target_label = self._format_overwrite_target(overwrite_target)
-            if overwrite_target_type is not None:
-                target_label = f"{target_label} [{overwrite_target_type}]"
-            affected_target = target_label
+        affected_target = self._resolve_overwrite_target_label(audit_entry)
 
         # First prefer the audit-log entry's explicit change list because that is the
         # most direct representation of what Discord says changed.

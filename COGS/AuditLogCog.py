@@ -264,7 +264,33 @@ class AuditLogCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member) -> None:
-        """Log member leaves for basic retention and moderation visibility."""
+        """Log voluntary leaves while avoiding misleading entries for kicks/bans."""
+
+        kick_entry = await self._find_recent_audit_entry(
+            member.guild,
+            action=discord.AuditLogAction.kick,
+            target_id=member.id,
+            fallback_target_name=str(member),
+        )
+        if kick_entry is not None:
+            await self._send_audit_embed(
+                member.guild,
+                title="Member Kicked",
+                description=f"{member.mention} (`{member.id}`) was removed from the server.",
+                fields=[("By", self._format_actor(kick_entry.user), False)],
+                color=discord.Color.red(),
+            )
+            return
+
+        ban_entry = await self._find_recent_audit_entry(
+            member.guild,
+            action=discord.AuditLogAction.ban,
+            target_id=member.id,
+            fallback_target_name=str(member),
+        )
+        if ban_entry is not None:
+            # `on_member_ban` will log the ban itself, so suppress the generic leave log.
+            return
 
         await self._send_audit_embed(
             member.guild,

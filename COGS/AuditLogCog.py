@@ -93,6 +93,26 @@ class AuditLogCog(commands.Cog):
         return changes
 
     @staticmethod
+    def _permission_names_by_transition(
+        before: discord.Permissions,
+        after: discord.Permissions,
+        *,
+        enabled_to: bool,
+        limit: int = 8,
+    ) -> list[str]:
+        """Return permission names that changed to the requested boolean state."""
+
+        changed_names: list[str] = []
+        for permission_name, old_value in before:
+            new_value = getattr(after, permission_name)
+            if old_value == new_value or new_value is not enabled_to:
+                continue
+            changed_names.append(permission_name)
+            if len(changed_names) >= limit:
+                break
+        return changed_names
+
+    @staticmethod
     def _format_overwrite_target(target: object) -> str:
         """Return a friendly label for a permission overwrite target."""
 
@@ -144,9 +164,18 @@ class AuditLogCog(commands.Cog):
                         after_permissions,
                         limit=6,
                     )
-                    if permission_changes:
-                        section_label = "Allowed changes:" if change_key == "allow" else "Denied changes:"
-                        change_lines.append(section_label)
+                    granted_names = self._permission_names_by_transition(before_permissions, after_permissions, enabled_to=True)
+                    removed_names = self._permission_names_by_transition(before_permissions, after_permissions, enabled_to=False)
+
+                    if granted_names:
+                        action_label = "Allowed permissions" if change_key == "allow" else "Denied permissions"
+                        change_lines.append(f"{action_label}: {', '.join(f'`{name}`' for name in granted_names)}")
+                    if removed_names:
+                        removal_label = "Removed allowed permissions" if change_key == "allow" else "Removed denied permissions"
+                        change_lines.append(f"{removal_label}: {', '.join(f'`{name}`' for name in removed_names)}")
+                    if permission_changes and not granted_names and not removed_names:
+                        fallback_label = "Allowed changes:" if change_key == "allow" else "Denied changes:"
+                        change_lines.append(fallback_label)
                         change_lines.extend(f"• {line}" for line in permission_changes)
                 elif before_value != after_value:
                     change_lines.append(f"`{change_key}`: `{before_value}` ➜ `{after_value}`")
@@ -164,11 +193,24 @@ class AuditLogCog(commands.Cog):
 
             allow_changes = self._permission_delta_lines(before_allow, after_allow, limit=6)
             deny_changes = self._permission_delta_lines(before_deny, after_deny, limit=6)
+            allowed_names = self._permission_names_by_transition(before_allow, after_allow, enabled_to=True)
+            removed_allowed_names = self._permission_names_by_transition(before_allow, after_allow, enabled_to=False)
+            denied_names = self._permission_names_by_transition(before_deny, after_deny, enabled_to=True)
+            removed_denied_names = self._permission_names_by_transition(before_deny, after_deny, enabled_to=False)
 
-            if allow_changes:
+            if allowed_names:
+                change_lines.append(f"Allowed permissions: {', '.join(f'`{name}`' for name in allowed_names)}")
+            if removed_allowed_names:
+                change_lines.append(f"Removed allowed permissions: {', '.join(f'`{name}`' for name in removed_allowed_names)}")
+            if denied_names:
+                change_lines.append(f"Denied permissions: {', '.join(f'`{name}`' for name in denied_names)}")
+            if removed_denied_names:
+                change_lines.append(f"Removed denied permissions: {', '.join(f'`{name}`' for name in removed_denied_names)}")
+
+            if allow_changes and not allowed_names and not removed_allowed_names:
                 change_lines.append("Allowed changes:")
                 change_lines.extend(f"• {line}" for line in allow_changes)
-            if deny_changes:
+            if deny_changes and not denied_names and not removed_denied_names:
                 change_lines.append("Denied changes:")
                 change_lines.extend(f"• {line}" for line in deny_changes)
 

@@ -92,7 +92,7 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
         fields = cog._send_audit_embed.await_args.kwargs["fields"]
         self.assertEqual(fields[1][0], "Changes")
         self.assertIn("Target: Moderators (`321`) [role]", fields[1][1])
-        self.assertIn("send_messages", fields[1][1])
+        self.assertIn("Allowed permissions: `send_messages`", fields[1][1])
 
     async def test_channel_permission_update_reads_direct_audit_change_objects(self) -> None:
         cog = AuditLogCog(MagicMock())
@@ -121,8 +121,7 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
 
         fields = cog._send_audit_embed.await_args.kwargs["fields"]
         self.assertIn("Target: [2iC] Crown Directorate (`321`) [role]", fields[1][1])
-        self.assertIn("manage_roles", fields[1][1])
-        self.assertIn("manage_webhooks", fields[1][1])
+        self.assertIn("Denied permissions: `manage_roles`, `manage_webhooks`", fields[1][1])
 
     async def test_find_recent_audit_entry_falls_back_to_recent_name_match(self) -> None:
         cog = AuditLogCog(MagicMock())

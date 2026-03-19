@@ -68,6 +68,27 @@ class AuditLogCog(commands.Cog):
             return None
         return fallback_entry
 
+    async def _find_recent_audit_entry_from_actions(
+        self,
+        guild: discord.Guild,
+        *,
+        actions: list[discord.AuditLogAction],
+        target_id: int,
+        fallback_target_name: str | None = None,
+    ) -> discord.AuditLogEntry | None:
+        """Return the first matching recent audit entry from a prioritized action list."""
+
+        for action in actions:
+            entry = await self._find_recent_audit_entry(
+                guild,
+                action=action,
+                target_id=target_id,
+                fallback_target_name=fallback_target_name,
+            )
+            if entry is not None:
+                return entry
+        return None
+
     @staticmethod
     def _format_actor(actor: discord.abc.User | None) -> str:
         """Return a readable actor display string for embeds."""
@@ -91,6 +112,26 @@ class AuditLogCog(commands.Cog):
             if len(changes) >= limit:
                 break
         return changes
+
+    @staticmethod
+    def _permission_names_by_transition(
+        before: discord.Permissions,
+        after: discord.Permissions,
+        *,
+        enabled_to: bool,
+        limit: int = 8,
+    ) -> list[str]:
+        """Return permission names that changed to the requested boolean state."""
+
+        changed_names: list[str] = []
+        for permission_name, old_value in before:
+            new_value = getattr(after, permission_name)
+            if old_value == new_value or new_value is not enabled_to:
+                continue
+            changed_names.append(permission_name)
+            if len(changed_names) >= limit:
+                break
+        return changed_names
 
     @staticmethod
     def _format_overwrite_target(target: object) -> str:
@@ -144,9 +185,18 @@ class AuditLogCog(commands.Cog):
                         after_permissions,
                         limit=6,
                     )
-                    if permission_changes:
-                        section_label = "Allowed changes:" if change_key == "allow" else "Denied changes:"
-                        change_lines.append(section_label)
+                    granted_names = self._permission_names_by_transition(before_permissions, after_permissions, enabled_to=True)
+                    removed_names = self._permission_names_by_transition(before_permissions, after_permissions, enabled_to=False)
+
+                    if granted_names:
+                        action_label = "Allowed permissions" if change_key == "allow" else "Denied permissions"
+                        change_lines.append(f"{action_label}: {', '.join(f'`{name}`' for name in granted_names)}")
+                    if removed_names:
+                        removal_label = "Removed allowed permissions" if change_key == "allow" else "Removed denied permissions"
+                        change_lines.append(f"{removal_label}: {', '.join(f'`{name}`' for name in removed_names)}")
+                    if permission_changes and not granted_names and not removed_names:
+                        fallback_label = "Allowed changes:" if change_key == "allow" else "Denied changes:"
+                        change_lines.append(fallback_label)
                         change_lines.extend(f"• {line}" for line in permission_changes)
                 elif before_value != after_value:
                     change_lines.append(f"`{change_key}`: `{before_value}` ➜ `{after_value}`")
@@ -164,11 +214,24 @@ class AuditLogCog(commands.Cog):
 
             allow_changes = self._permission_delta_lines(before_allow, after_allow, limit=6)
             deny_changes = self._permission_delta_lines(before_deny, after_deny, limit=6)
+            allowed_names = self._permission_names_by_transition(before_allow, after_allow, enabled_to=True)
+            removed_allowed_names = self._permission_names_by_transition(before_allow, after_allow, enabled_to=False)
+            denied_names = self._permission_names_by_transition(before_deny, after_deny, enabled_to=True)
+            removed_denied_names = self._permission_names_by_transition(before_deny, after_deny, enabled_to=False)
 
-            if allow_changes:
+            if allowed_names:
+                change_lines.append(f"Allowed permissions: {', '.join(f'`{name}`' for name in allowed_names)}")
+            if removed_allowed_names:
+                change_lines.append(f"Removed allowed permissions: {', '.join(f'`{name}`' for name in removed_allowed_names)}")
+            if denied_names:
+                change_lines.append(f"Denied permissions: {', '.join(f'`{name}`' for name in denied_names)}")
+            if removed_denied_names:
+                change_lines.append(f"Removed denied permissions: {', '.join(f'`{name}`' for name in removed_denied_names)}")
+
+            if allow_changes and not allowed_names and not removed_allowed_names:
                 change_lines.append("Allowed changes:")
                 change_lines.extend(f"• {line}" for line in allow_changes)
-            if deny_changes:
+            if deny_changes and not denied_names and not removed_denied_names:
                 change_lines.append("Denied changes:")
                 change_lines.extend(f"• {line}" for line in deny_changes)
 
@@ -222,7 +285,33 @@ class AuditLogCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member) -> None:
-        """Log member leaves for basic retention and moderation visibility."""
+        """Log voluntary leaves while avoiding misleading entries for kicks/bans."""
+
+        kick_entry = await self._find_recent_audit_entry(
+            member.guild,
+            action=discord.AuditLogAction.kick,
+            target_id=member.id,
+            fallback_target_name=str(member),
+        )
+        if kick_entry is not None:
+            await self._send_audit_embed(
+                member.guild,
+                title="Member Kicked",
+                description=f"{member.mention} (`{member.id}`) was removed from the server.",
+                fields=[("By", self._format_actor(kick_entry.user), False)],
+                color=discord.Color.red(),
+            )
+            return
+
+        ban_entry = await self._find_recent_audit_entry(
+            member.guild,
+            action=discord.AuditLogAction.ban,
+            target_id=member.id,
+            fallback_target_name=str(member),
+        )
+        if ban_entry is not None:
+            # `on_member_ban` will log the ban itself, so suppress the generic leave log.
+            return
 
         await self._send_audit_embed(
             member.guild,
@@ -356,9 +445,15 @@ class AuditLogCog(commands.Cog):
         if before.overwrites == after.overwrites:
             return
 
-        audit_entry = await self._find_recent_audit_entry(
+        overwrite_actions = [
+            getattr(discord.AuditLogAction, "overwrite_update", discord.AuditLogAction.channel_update),
+            getattr(discord.AuditLogAction, "overwrite_create", discord.AuditLogAction.channel_update),
+            getattr(discord.AuditLogAction, "overwrite_delete", discord.AuditLogAction.channel_update),
+            discord.AuditLogAction.channel_update,
+        ]
+        audit_entry = await self._find_recent_audit_entry_from_actions(
             after.guild,
-            action=discord.AuditLogAction.channel_update,
+            actions=overwrite_actions,
             target_id=after.id,
             fallback_target_name=getattr(after, "name", None),
         )
@@ -412,13 +507,15 @@ class AuditLogCog(commands.Cog):
         """Log nickname and role membership changes that impact moderation context."""
 
         changed_fields: list[tuple[str, str, bool]] = []
+        nickname_changed = before.nick != after.nick
 
-        if before.nick != after.nick:
+        if nickname_changed:
             changed_fields.append(("Nickname", f"`{before.nick or 'None'}` ➜ `{after.nick or 'None'}`", False))
 
         before_role_ids = {role.id for role in before.roles}
         after_role_ids = {role.id for role in after.roles}
-        if before_role_ids != after_role_ids:
+        roles_changed = before_role_ids != after_role_ids
+        if roles_changed:
             added = [f"<@&{role.id}>" for role in after.roles if role.id not in before_role_ids]
             removed = [f"<@&{role.id}>" for role in before.roles if role.id not in after_role_ids]
 
@@ -430,10 +527,17 @@ class AuditLogCog(commands.Cog):
         if not changed_fields:
             return
 
-        member_role_update_action = getattr(discord.AuditLogAction, "member_role_update", discord.AuditLogAction.member_update)
-        audit_entry = await self._find_recent_audit_entry(
+        audit_actions: list[discord.AuditLogAction] = []
+        if roles_changed:
+            audit_actions.append(
+                getattr(discord.AuditLogAction, "member_role_update", discord.AuditLogAction.member_update)
+            )
+        if nickname_changed or not audit_actions:
+            audit_actions.append(discord.AuditLogAction.member_update)
+
+        audit_entry = await self._find_recent_audit_entry_from_actions(
             after.guild,
-            action=member_role_update_action,
+            actions=audit_actions,
             target_id=after.id,
             fallback_target_name=str(after),
         )

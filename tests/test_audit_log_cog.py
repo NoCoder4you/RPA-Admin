@@ -35,6 +35,45 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
         when_field = next(field for field in embed.fields if field.name == "When")
         self.assertRegex(when_field.value, r"^<t:\d+:f> • <t:\d+:R>$")
 
+    async def test_member_remove_logs_voluntary_leave_when_no_moderation_entry_exists(self) -> None:
+        cog = AuditLogCog(MagicMock())
+        cog._send_audit_embed = AsyncMock()
+        cog._find_recent_audit_entry = AsyncMock(side_effect=[None, None])
+
+        member = SimpleNamespace(guild=SimpleNamespace(), mention="<@1>", id=1)
+
+        await cog.on_member_remove(member)
+
+        cog._send_audit_embed.assert_awaited_once()
+        self.assertEqual(cog._send_audit_embed.await_args.kwargs["title"], "Member Left")
+
+    async def test_member_remove_logs_kick_when_kick_audit_entry_exists(self) -> None:
+        cog = AuditLogCog(MagicMock())
+        cog._send_audit_embed = AsyncMock()
+        kick_entry = SimpleNamespace(user=SimpleNamespace(id=44, mention="<@44>"))
+        cog._find_recent_audit_entry = AsyncMock(side_effect=[kick_entry])
+
+        member = SimpleNamespace(guild=SimpleNamespace(), mention="<@1>", id=1)
+
+        await cog.on_member_remove(member)
+
+        cog._send_audit_embed.assert_awaited_once()
+        self.assertEqual(cog._send_audit_embed.await_args.kwargs["title"], "Member Kicked")
+        fields = cog._send_audit_embed.await_args.kwargs["fields"]
+        self.assertEqual(fields[0][0], "By")
+
+    async def test_member_remove_skips_generic_log_when_ban_audit_entry_exists(self) -> None:
+        cog = AuditLogCog(MagicMock())
+        cog._send_audit_embed = AsyncMock()
+        ban_entry = SimpleNamespace(user=SimpleNamespace(id=45, mention="<@45>"))
+        cog._find_recent_audit_entry = AsyncMock(side_effect=[None, ban_entry])
+
+        member = SimpleNamespace(guild=SimpleNamespace(), mention="<@1>", id=1)
+
+        await cog.on_member_remove(member)
+
+        cog._send_audit_embed.assert_not_awaited()
+
     async def test_channel_permission_update_logs_only_when_overwrites_change(self) -> None:
         cog = AuditLogCog(MagicMock())
         cog._send_audit_embed = AsyncMock()
@@ -92,7 +131,7 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
         fields = cog._send_audit_embed.await_args.kwargs["fields"]
         self.assertEqual(fields[1][0], "Changes")
         self.assertIn("Target: Moderators (`321`) [role]", fields[1][1])
-        self.assertIn("send_messages", fields[1][1])
+        self.assertIn("Allowed permissions: `send_messages`", fields[1][1])
 
     async def test_channel_permission_update_reads_direct_audit_change_objects(self) -> None:
         cog = AuditLogCog(MagicMock())
@@ -121,8 +160,7 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
 
         fields = cog._send_audit_embed.await_args.kwargs["fields"]
         self.assertIn("Target: [2iC] Crown Directorate (`321`) [role]", fields[1][1])
-        self.assertIn("manage_roles", fields[1][1])
-        self.assertIn("manage_webhooks", fields[1][1])
+        self.assertIn("Denied permissions: `manage_roles`, `manage_webhooks`", fields[1][1])
 
     async def test_find_recent_audit_entry_falls_back_to_recent_name_match(self) -> None:
         cog = AuditLogCog(MagicMock())
@@ -159,6 +197,21 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIs(result, matching_name_entry)
+
+    async def test_find_recent_audit_entry_from_actions_uses_prioritized_overwrite_actions(self) -> None:
+        cog = AuditLogCog(MagicMock())
+        desired_entry = SimpleNamespace(user=SimpleNamespace(id=77, mention="<@77>"))
+        cog._find_recent_audit_entry = AsyncMock(side_effect=[None, desired_entry])
+
+        result = await cog._find_recent_audit_entry_from_actions(
+            SimpleNamespace(),
+            actions=["overwrite_update", "overwrite_create", "channel_update"],
+            target_id=123,
+            fallback_target_name="woof",
+        )
+
+        self.assertIs(result, desired_entry)
+        self.assertEqual(cog._find_recent_audit_entry.await_count, 2)
 
     async def test_member_ban_and_unban_are_logged(self) -> None:
         cog = AuditLogCog(MagicMock())
@@ -220,7 +273,9 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
     async def test_member_update_logs_nickname_and_roles(self) -> None:
         cog = AuditLogCog(MagicMock())
         cog._send_audit_embed = AsyncMock()
-        cog._find_recent_audit_entry = AsyncMock(return_value=SimpleNamespace(user=SimpleNamespace(id=8, mention="<@8>")))
+        cog._find_recent_audit_entry_from_actions = AsyncMock(
+            return_value=SimpleNamespace(user=SimpleNamespace(id=8, mention="<@8>"))
+        )
 
         role_a = SimpleNamespace(id=1)
         role_b = SimpleNamespace(id=2)
@@ -235,6 +290,23 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(field[0] == "By" for field in fields))
         self.assertTrue(any(field[0] == "Nickname" for field in fields))
         self.assertTrue(any(field[0] == "Roles Added" for field in fields))
+
+    async def test_member_update_uses_member_update_action_for_nickname_only_changes(self) -> None:
+        cog = AuditLogCog(MagicMock())
+        cog._send_audit_embed = AsyncMock()
+        cog._find_recent_audit_entry_from_actions = AsyncMock(
+            return_value=SimpleNamespace(user=SimpleNamespace(id=10, mention="<@10>"))
+        )
+
+        guild = SimpleNamespace()
+        shared_role = SimpleNamespace(id=1)
+        before = SimpleNamespace(guild=guild, mention="<@22>", id=22, nick="Old", roles=[shared_role])
+        after = SimpleNamespace(guild=guild, mention="<@22>", id=22, nick="New", roles=[shared_role])
+
+        await cog.on_member_update(before, after)
+
+        actions = cog._find_recent_audit_entry_from_actions.await_args.kwargs["actions"]
+        self.assertEqual(actions, [discord.AuditLogAction.member_update])
 
     async def test_guild_update_logs_core_setting_changes(self) -> None:
         cog = AuditLogCog(MagicMock())

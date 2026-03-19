@@ -80,9 +80,16 @@ class WebhookApplicationChannelCog(commands.Cog):
     )
 
     # Restrict channel creation to the currently approved application prefixes provided by the user.
-    ALLOWED_UNIT_PREFIXES: Final[frozenset[str]] = frozenset({"IA", "MT", "ET", "EA", "TU"})
+    ALLOWED_UNIT_PREFIXES: Final[frozenset[str]] = frozenset({"IA", "FU", "MT", "ET", "EA", "TU"})
 
-    NEW_APPLICATION_MESSAGE: Final[str] = "# New Unit Application Received\n-# Please only claim applications that are relevant to you."
+    UNIT_LABELS: Final[dict[str, str]] = {
+        "IA": "Internal Affairs",
+        "FU": "Foundation Unit",
+        "MT": "Media Team",
+        "ET": "Entertainment Team",
+        "EA": "External Affairs",
+        "TU": "Transfer Unit",
+    }
 
     def __init__(self, bot: commands.Bot) -> None:
         # Store the bot reference for parity with the rest of the project and easier testing.
@@ -122,14 +129,21 @@ class WebhookApplicationChannelCog(commands.Cog):
             return normalized_username[:100]
         return "application"
 
-    def _build_new_application_notification(self) -> str:
+    @classmethod
+    def build_new_application_message(cls, unit_prefix: str) -> str:
+        """Return the requested notification heading for the supplied unit prefix."""
+
+        unit_label = cls.UNIT_LABELS.get(unit_prefix.upper(), unit_prefix.upper())
+        return f"# New {unit_label} Application"
+
+    def _build_new_application_notification(self, request: ChannelCreateRequest) -> str:
         """Build the staff notification posted into the configured new-applications channel."""
 
         unit_leadership_role_id = self.server_config_store.get_unit_leadership_role_id()
         leadership_mention = (
             f"<@&{unit_leadership_role_id}>" if unit_leadership_role_id is not None else "@Unit Leadership"
         )
-        return f"{leadership_mention}\n{self.NEW_APPLICATION_MESSAGE}"
+        return f"{leadership_mention}\n{self.build_new_application_message(request.unit_prefix)}"
 
     async def _create_application_channel(
         self,
@@ -204,7 +218,11 @@ class WebhookApplicationChannelCog(commands.Cog):
         except (discord.Forbidden, discord.HTTPException, IndexError, AttributeError):
             return False
 
-    async def _send_new_application_notification(self, created_channel: discord.TextChannel) -> bool:
+    async def _send_new_application_notification(
+        self,
+        created_channel: discord.TextChannel,
+        request: ChannelCreateRequest,
+    ) -> bool:
         """Post the Unit Leadership notification with a Claim button in the configured new-applications channel."""
 
         new_applications_channel_id = self.server_config_store.get_new_applications_channel_id()
@@ -217,7 +235,7 @@ class WebhookApplicationChannelCog(commands.Cog):
 
         try:
             await new_applications_channel.send(
-                content=self._build_new_application_notification(),
+                content=self._build_new_application_notification(request),
                 view=ApplicationClaimView(application_channel_id=created_channel.id),
             )
             return True
@@ -261,7 +279,7 @@ class WebhookApplicationChannelCog(commands.Cog):
                 pass
             return
 
-        if not await self._send_new_application_notification(created_channel):
+        if not await self._send_new_application_notification(created_channel, request):
             try:
                 # Remove the channel if staff cannot be notified, preventing unseen application channels from piling up.
                 await created_channel.delete(reason="Failed to send new application notification after channel creation")

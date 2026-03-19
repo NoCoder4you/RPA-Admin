@@ -39,11 +39,24 @@ class WebhookApplicationChannelCogTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(channel_name, "et-john-doe")
 
+    def test_build_new_application_message_uses_full_unit_name(self) -> None:
+        self.assertEqual(
+            WebhookApplicationChannelCog.build_new_application_message("IA"),
+            "# New Internal Affairs Application",
+        )
+        self.assertEqual(
+            WebhookApplicationChannelCog.build_new_application_message("TU"),
+            "# New Transfer Unit Application",
+        )
+
     def test_build_new_application_notification_mentions_configured_role(self) -> None:
         cog = WebhookApplicationChannelCog(MagicMock())
         cog.server_config_store = SimpleNamespace(get_unit_leadership_role_id=lambda: 555)
 
-        self.assertEqual(cog._build_new_application_notification(), "<@&555>\n# New Unit Application Recieved")
+        self.assertEqual(
+            cog._build_new_application_notification(ChannelCreateRequest(unit_prefix="IA", username="John Doe")),
+            "<@&555>\n# New Internal Affairs Application",
+        )
 
     async def test_get_archived_webhook_message_returns_latest_embed_message(self) -> None:
         archive_channel = SimpleNamespace()
@@ -112,11 +125,12 @@ class WebhookApplicationChannelCogTests(unittest.IsolatedAsyncioTestCase):
             get_unit_leadership_role_id=lambda: 555,
         )
         created_channel = SimpleNamespace(id=777)
+        request = ChannelCreateRequest(unit_prefix="ET", username="Jane Smith")
 
-        sent = await cog._send_new_application_notification(created_channel)
+        sent = await cog._send_new_application_notification(created_channel, request)
 
         self.assertTrue(sent)
-        self.assertEqual(sent_messages[0]["content"], "<@&555>\n# New Unit Application Recieved")
+        self.assertEqual(sent_messages[0]["content"], "<@&555>\n# New Entertainment Team Application")
         self.assertIsInstance(sent_messages[0]["view"], ApplicationClaimView)
         self.assertEqual(sent_messages[0]["view"].application_channel_id, 777)
 
@@ -153,7 +167,7 @@ class WebhookApplicationChannelCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ET applicant Jane Smith", create_call.kwargs["reason"])
 
         cog._send_archived_webhook_message.assert_awaited_once_with(created_channel)
-        cog._send_new_application_notification.assert_awaited_once_with(created_channel)
+        cog._send_new_application_notification.assert_awaited_once_with(created_channel, ChannelCreateRequest(unit_prefix="ET", username="Jane Smith"))
         message.delete.assert_awaited_once_with()
         created_channel.delete.assert_not_awaited()
 

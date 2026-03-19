@@ -198,6 +198,21 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(result, matching_name_entry)
 
+    async def test_find_recent_audit_entry_from_actions_uses_prioritized_overwrite_actions(self) -> None:
+        cog = AuditLogCog(MagicMock())
+        desired_entry = SimpleNamespace(user=SimpleNamespace(id=77, mention="<@77>"))
+        cog._find_recent_audit_entry = AsyncMock(side_effect=[None, desired_entry])
+
+        result = await cog._find_recent_audit_entry_from_actions(
+            SimpleNamespace(),
+            actions=["overwrite_update", "overwrite_create", "channel_update"],
+            target_id=123,
+            fallback_target_name="woof",
+        )
+
+        self.assertIs(result, desired_entry)
+        self.assertEqual(cog._find_recent_audit_entry.await_count, 2)
+
     async def test_member_ban_and_unban_are_logged(self) -> None:
         cog = AuditLogCog(MagicMock())
         cog._send_audit_embed = AsyncMock()

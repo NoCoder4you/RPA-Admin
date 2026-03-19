@@ -68,6 +68,27 @@ class AuditLogCog(commands.Cog):
             return None
         return fallback_entry
 
+    async def _find_recent_audit_entry_from_actions(
+        self,
+        guild: discord.Guild,
+        *,
+        actions: list[discord.AuditLogAction],
+        target_id: int,
+        fallback_target_name: str | None = None,
+    ) -> discord.AuditLogEntry | None:
+        """Return the first matching recent audit entry from a prioritized action list."""
+
+        for action in actions:
+            entry = await self._find_recent_audit_entry(
+                guild,
+                action=action,
+                target_id=target_id,
+                fallback_target_name=fallback_target_name,
+            )
+            if entry is not None:
+                return entry
+        return None
+
     @staticmethod
     def _format_actor(actor: discord.abc.User | None) -> str:
         """Return a readable actor display string for embeds."""
@@ -424,9 +445,15 @@ class AuditLogCog(commands.Cog):
         if before.overwrites == after.overwrites:
             return
 
-        audit_entry = await self._find_recent_audit_entry(
+        overwrite_actions = [
+            getattr(discord.AuditLogAction, "overwrite_update", discord.AuditLogAction.channel_update),
+            getattr(discord.AuditLogAction, "overwrite_create", discord.AuditLogAction.channel_update),
+            getattr(discord.AuditLogAction, "overwrite_delete", discord.AuditLogAction.channel_update),
+            discord.AuditLogAction.channel_update,
+        ]
+        audit_entry = await self._find_recent_audit_entry_from_actions(
             after.guild,
-            action=discord.AuditLogAction.channel_update,
+            actions=overwrite_actions,
             target_id=after.id,
             fallback_target_name=getattr(after, "name", None),
         )

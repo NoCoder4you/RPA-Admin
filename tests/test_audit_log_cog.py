@@ -94,6 +94,36 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Target: Moderators (`321`) [role]", fields[1][1])
         self.assertIn("send_messages", fields[1][1])
 
+    async def test_channel_permission_update_reads_direct_audit_change_objects(self) -> None:
+        cog = AuditLogCog(MagicMock())
+        cog._send_audit_embed = AsyncMock()
+
+        deny_before = discord.Permissions.none()
+        deny_after = discord.Permissions.none()
+        deny_after.manage_roles = True
+        deny_after.manage_webhooks = True
+
+        overwrite_target = SimpleNamespace(id=321, name="[2iC] Crown Directorate")
+        audit_entry = SimpleNamespace(
+            user=SimpleNamespace(id=12, mention="<@12>"),
+            extra=SimpleNamespace(overwrite=overwrite_target, overwrite_type="role"),
+            changes=[
+                SimpleNamespace(key="deny", before=deny_before, after=deny_after),
+            ],
+        )
+        cog._find_recent_audit_entry = AsyncMock(return_value=audit_entry)
+
+        guild = SimpleNamespace()
+        before = SimpleNamespace(overwrites={}, guild=guild, id=10, mention="#general", name="general")
+        after = SimpleNamespace(overwrites={}, guild=guild, id=10, mention="#general", name="general")
+
+        await cog.on_guild_channel_update(before, after)
+
+        fields = cog._send_audit_embed.await_args.kwargs["fields"]
+        self.assertIn("Target: [2iC] Crown Directorate (`321`) [role]", fields[1][1])
+        self.assertIn("manage_roles", fields[1][1])
+        self.assertIn("manage_webhooks", fields[1][1])
+
     async def test_find_recent_audit_entry_falls_back_to_recent_name_match(self) -> None:
         cog = AuditLogCog(MagicMock())
 

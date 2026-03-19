@@ -126,6 +126,34 @@ class AuditLogCog(commands.Cog):
                 target_label = f"{target_label} [{overwrite_target_type}]"
             change_lines.append(f"Target: {target_label}")
 
+        # First prefer the audit-log entry's explicit change list because that is the
+        # most direct representation of what Discord says changed.
+        raw_changes = getattr(audit_entry, "changes", None)
+        iterable_changes = getattr(raw_changes, "__iter__", None)
+        if callable(iterable_changes):
+            for change in raw_changes:
+                change_key = getattr(change, "key", None) or getattr(change, "attribute", None)
+                before_value = getattr(change, "before", getattr(change, "old", None))
+                after_value = getattr(change, "after", getattr(change, "new", None))
+
+                if change_key in {"allow", "deny"}:
+                    before_permissions = before_value or discord.Permissions.none()
+                    after_permissions = after_value or discord.Permissions.none()
+                    permission_changes = self._permission_delta_lines(
+                        before_permissions,
+                        after_permissions,
+                        limit=6,
+                    )
+                    if permission_changes:
+                        section_label = "Allowed changes:" if change_key == "allow" else "Denied changes:"
+                        change_lines.append(section_label)
+                        change_lines.extend(f"• {line}" for line in permission_changes)
+                elif before_value != after_value:
+                    change_lines.append(f"`{change_key}`: `{before_value}` ➜ `{after_value}`")
+
+        if change_lines:
+            return change_lines
+
         before_state = getattr(audit_entry, "before", None)
         after_state = getattr(audit_entry, "after", None)
         if before_state is not None and after_state is not None:

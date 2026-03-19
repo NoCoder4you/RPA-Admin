@@ -118,7 +118,18 @@ class ProfanityCog(commands.Cog):
         return False
 
     async def _send_user_notice(self, message: discord.Message) -> None:
-        """Send an explanatory embed in the same channel after a deletion."""
+        """Send an explanatory embed to the configured notice channel after a deletion."""
+
+        notice_channel = message.channel
+        if message.guild is not None:
+            notice_channel_id = self.server_config_store.get_profanity_notice_channel_id()
+
+            # Prefer a dedicated notice channel when configured so staff can separate
+            # public filter notices from the original message channel and log channel.
+            if notice_channel_id is not None:
+                configured_channel = message.guild.get_channel(notice_channel_id)
+                if configured_channel is not None:
+                    notice_channel = configured_channel
 
         embed = discord.Embed(
             title="Profanity Filter",
@@ -129,7 +140,7 @@ class ProfanityCog(commands.Cog):
             color=discord.Color.red(),
         )
         embed.add_field(
-            name="Channel",
+            name="Original Channel",
             value=message.channel.mention if hasattr(message.channel, "mention") else "Unknown",
             inline=True,
         )
@@ -138,7 +149,7 @@ class ProfanityCog(commands.Cog):
             value=message.guild.name if message.guild else "Direct Messages",
             inline=True,
         )
-        await message.channel.send(embed=embed)
+        await notice_channel.send(embed=embed)
 
     async def _send_log_notice(self, message: discord.Message) -> None:
         """Send an audit-style embed to the configured profanity log channel, if available."""

@@ -507,13 +507,15 @@ class AuditLogCog(commands.Cog):
         """Log nickname and role membership changes that impact moderation context."""
 
         changed_fields: list[tuple[str, str, bool]] = []
+        nickname_changed = before.nick != after.nick
 
-        if before.nick != after.nick:
+        if nickname_changed:
             changed_fields.append(("Nickname", f"`{before.nick or 'None'}` ➜ `{after.nick or 'None'}`", False))
 
         before_role_ids = {role.id for role in before.roles}
         after_role_ids = {role.id for role in after.roles}
-        if before_role_ids != after_role_ids:
+        roles_changed = before_role_ids != after_role_ids
+        if roles_changed:
             added = [f"<@&{role.id}>" for role in after.roles if role.id not in before_role_ids]
             removed = [f"<@&{role.id}>" for role in before.roles if role.id not in after_role_ids]
 
@@ -525,10 +527,17 @@ class AuditLogCog(commands.Cog):
         if not changed_fields:
             return
 
-        member_role_update_action = getattr(discord.AuditLogAction, "member_role_update", discord.AuditLogAction.member_update)
-        audit_entry = await self._find_recent_audit_entry(
+        audit_actions: list[discord.AuditLogAction] = []
+        if roles_changed:
+            audit_actions.append(
+                getattr(discord.AuditLogAction, "member_role_update", discord.AuditLogAction.member_update)
+            )
+        if nickname_changed or not audit_actions:
+            audit_actions.append(discord.AuditLogAction.member_update)
+
+        audit_entry = await self._find_recent_audit_entry_from_actions(
             after.guild,
-            action=member_role_update_action,
+            actions=audit_actions,
             target_id=after.id,
             fallback_target_name=str(after),
         )

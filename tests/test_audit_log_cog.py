@@ -273,7 +273,9 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
     async def test_member_update_logs_nickname_and_roles(self) -> None:
         cog = AuditLogCog(MagicMock())
         cog._send_audit_embed = AsyncMock()
-        cog._find_recent_audit_entry = AsyncMock(return_value=SimpleNamespace(user=SimpleNamespace(id=8, mention="<@8>")))
+        cog._find_recent_audit_entry_from_actions = AsyncMock(
+            return_value=SimpleNamespace(user=SimpleNamespace(id=8, mention="<@8>"))
+        )
 
         role_a = SimpleNamespace(id=1)
         role_b = SimpleNamespace(id=2)
@@ -288,6 +290,23 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(field[0] == "By" for field in fields))
         self.assertTrue(any(field[0] == "Nickname" for field in fields))
         self.assertTrue(any(field[0] == "Roles Added" for field in fields))
+
+    async def test_member_update_uses_member_update_action_for_nickname_only_changes(self) -> None:
+        cog = AuditLogCog(MagicMock())
+        cog._send_audit_embed = AsyncMock()
+        cog._find_recent_audit_entry_from_actions = AsyncMock(
+            return_value=SimpleNamespace(user=SimpleNamespace(id=10, mention="<@10>"))
+        )
+
+        guild = SimpleNamespace()
+        shared_role = SimpleNamespace(id=1)
+        before = SimpleNamespace(guild=guild, mention="<@22>", id=22, nick="Old", roles=[shared_role])
+        after = SimpleNamespace(guild=guild, mention="<@22>", id=22, nick="New", roles=[shared_role])
+
+        await cog.on_member_update(before, after)
+
+        actions = cog._find_recent_audit_entry_from_actions.await_args.kwargs["actions"]
+        self.assertEqual(actions, [discord.AuditLogAction.member_update])
 
     async def test_guild_update_logs_core_setting_changes(self) -> None:
         cog = AuditLogCog(MagicMock())

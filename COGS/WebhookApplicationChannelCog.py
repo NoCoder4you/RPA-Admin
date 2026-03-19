@@ -80,7 +80,7 @@ class WebhookApplicationChannelCog(commands.Cog):
     )
 
     # Restrict channel creation to the currently approved application prefixes provided by the user.
-    ALLOWED_UNIT_PREFIXES: Final[frozenset[str]] = frozenset({"IA", "FU", "MT", "ET", "EA", "TU"})
+    ALLOWED_UNIT_PREFIXES: Final[frozenset[str]] = frozenset({"IA", "MT", "ET", "EA", "TU"})
 
     NEW_APPLICATION_MESSAGE: Final[str] = "# New Unit Application Recieved"
 

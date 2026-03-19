@@ -171,7 +171,10 @@ class ServerConfigStore:
       "base_rpa_employee_role_id": "789",
       "verification_reaction_message_id": "101112",
       "request_channel_id": "121314",
-      "admin_role_id": "151617"
+      "admin_role_id": "151617",
+      "webhook_archive_channel_id": "181920",
+      "new_applications_channel_id": "212223",
+      "unit_leadership_role_id": "242526"
     }
     """
 
@@ -261,6 +264,45 @@ class ServerConfigStore:
 
         config = self._read_config()
         config["admin_role_id"] = str(role_id)
+        self._write_config(config)
+
+    def get_webhook_archive_channel_id(self) -> int | None:
+        """Return the configured archive channel ID used to source forwarded webhook embeds."""
+
+        config = self._read_config()
+        return self._safe_int(config.get("webhook_archive_channel_id"))
+
+    def set_webhook_archive_channel_id(self, channel_id: int) -> None:
+        """Persist the archive channel ID used for webhook application message forwarding."""
+
+        config = self._read_config()
+        config["webhook_archive_channel_id"] = str(channel_id)
+        self._write_config(config)
+
+    def get_new_applications_channel_id(self) -> int | None:
+        """Return the configured channel ID used for new-application claim notifications."""
+
+        config = self._read_config()
+        return self._safe_int(config.get("new_applications_channel_id"))
+
+    def set_new_applications_channel_id(self, channel_id: int) -> None:
+        """Persist the channel ID used to post new-application notifications and claim buttons."""
+
+        config = self._read_config()
+        config["new_applications_channel_id"] = str(channel_id)
+        self._write_config(config)
+
+    def get_unit_leadership_role_id(self) -> int | None:
+        """Return the configured Unit Leadership role ID mentioned on new-application notifications."""
+
+        config = self._read_config()
+        return self._safe_int(config.get("unit_leadership_role_id"))
+
+    def set_unit_leadership_role_id(self, role_id: int) -> None:
+        """Persist the Unit Leadership role ID used for new-application notification mentions."""
+
+        config = self._read_config()
+        config["unit_leadership_role_id"] = str(role_id)
         self._write_config(config)
 
     def _write_config(self, config: dict) -> None:

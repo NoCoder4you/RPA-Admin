@@ -232,6 +232,84 @@ def queue_background_log(title, color, **payload):
     loop.create_task(send_background_log(title, color, **payload))
 
 # ------------------------------------------------------------------
+# COMMAND LOGGING HELPERS
+# ------------------------------------------------------------------
+
+
+def safe_display_name(user):
+    """Return a readable username without failing if discord fields are unavailable."""
+    return getattr(user, "display_name", None) or getattr(user, "name", "Unknown User")
+
+
+
+def format_channel_location(channel):
+    """Describe the channel so logs show where a command was triggered."""
+    if channel is None:
+        return "Direct Message"
+
+    guild = getattr(channel, "guild", None)
+    guild_name = guild.name if guild else "Direct Message"
+    channel_name = getattr(channel, "name", str(channel))
+    return f"{guild_name} -> #{channel_name}"
+
+
+
+def format_command_arguments(positional_arguments=None, keyword_arguments=None):
+    """Build a compact argument summary for both prefix and slash commands."""
+    argument_parts = []
+
+    for value in positional_arguments or []:
+        argument_parts.append(repr(value))
+
+    for key, value in (keyword_arguments or {}).items():
+        argument_parts.append(f"{key}={value!r}")
+
+    return ", ".join(argument_parts) if argument_parts else "None"
+
+
+
+def build_prefix_command_log(ctx):
+    """Create a single structured log line for text command usage."""
+    return (
+        "Prefix command used | "
+        f"user={safe_display_name(ctx.author)} ({ctx.author.id}) | "
+        f"channel={format_channel_location(ctx.channel)} | "
+        f"command={ctx.command.qualified_name if ctx.command else ctx.invoked_with} | "
+        f"message={ctx.message.content} | "
+        f"arguments={format_command_arguments(ctx.args[2:], ctx.kwargs)}"
+    )
+
+
+
+def build_slash_command_log(interaction, command):
+    """Create a structured log line for slash command usage, including options."""
+    command_name = command.qualified_name if command else interaction.command.name
+    return (
+        "Slash command used | "
+        f"user={safe_display_name(interaction.user)} ({interaction.user.id}) | "
+        f"channel={format_channel_location(interaction.channel)} | "
+        f"command=/{command_name} | "
+        f"arguments={format_command_arguments(keyword_arguments=interaction.namespace.__dict__)}"
+    )
+
+
+
+def log_failed_command(command_type, command_name, actor, channel, error, *, raw_input=None, arguments=None):
+    """Capture failures with enough context to reproduce the command invocation."""
+    logger.error(
+        "%s failed | user=%s (%s) | channel=%s | command=%s | raw_input=%s | arguments=%s | error=%s",
+        command_type,
+        safe_display_name(actor),
+        getattr(actor, "id", "Unknown ID"),
+        format_channel_location(channel),
+        command_name,
+        raw_input or "None",
+        arguments or "None",
+        error,
+        exc_info=True,
+    )
+
+# ------------------------------------------------------------------
 # COG DISCOVERY / LOADING (from ./COGS)
 # ------------------------------------------------------------------
 

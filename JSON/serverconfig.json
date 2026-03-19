@@ -3,6 +3,10 @@
   "base_rpa_employee_role_id": 1479388404260012092,
   "muted_role_id": "1482964862056267827",
   "verification_reaction_message_id": "1481010999157981256",
+  "profanity_log_channel_id": "1479468485817139271",
   "request_channel_id": "1479465446632853524",
-  "admin_role_id": "1484029753185931336"
+  "admin_role_id": "1484029753185931336",
+  "webhook_archive_channel_id": "1484040953370120292",
+  "new_applications_channel_id": "1484035174357274704",
+  "unit_leadership_role_id": "1480712796772634715"
 }

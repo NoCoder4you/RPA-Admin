@@ -4,5 +4,6 @@
   "muted_role_id": "1482964862056267827",
   "verification_reaction_message_id": "1481010999157981256",
   "request_channel_id": "1479465446632853524",
-  "admin_role_id": "1484029753185931336"
+  "admin_role_id": "1484029753185931336",
+  "webhook_archive_channel_id": "1484040953370120292"
 }

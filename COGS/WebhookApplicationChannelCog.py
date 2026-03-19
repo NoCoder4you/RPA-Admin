@@ -143,7 +143,8 @@ class WebhookApplicationChannelCog(commands.Cog):
         leadership_mention = (
             f"<@&{unit_leadership_role_id}>" if unit_leadership_role_id is not None else "@Unit Leadership"
         )
-        return f"{leadership_mention}\n{self.build_new_application_message(request.unit_prefix)}"
+        guidance = "Please only claim this application if this unit is relevant to you and you can actively review it."
+        return f"{leadership_mention}\n{self.build_new_application_message(request.unit_prefix)}\n{guidance}"
 
     async def _create_application_channel(
         self,

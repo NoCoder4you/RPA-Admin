@@ -305,6 +305,36 @@ class ServerConfigStoreTests(unittest.TestCase):
             self.assertEqual(data.get("webhook_archive_channel_id"), "1484040953370120292")
             self.assertEqual(store.get_webhook_archive_channel_id(), 1484040953370120292)
 
+    def test_set_and_get_new_applications_channel_id(self) -> None:
+        """Ensure the new-applications channel ID is persisted in serverconfig.json."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "serverconfig.json"
+            file_path.write_text(json.dumps({"audit_log_channel_id": "456"}), encoding="utf-8")
+
+            store = ServerConfigStore(file_path=file_path)
+            store.set_new_applications_channel_id(1485000000000000000)
+
+            data = json.loads(file_path.read_text(encoding="utf-8"))
+            self.assertEqual(data.get("audit_log_channel_id"), "456")
+            self.assertEqual(data.get("new_applications_channel_id"), "1485000000000000000")
+            self.assertEqual(store.get_new_applications_channel_id(), 1485000000000000000)
+
+    def test_set_and_get_unit_leadership_role_id(self) -> None:
+        """Ensure the Unit Leadership role ID is persisted in serverconfig.json."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "serverconfig.json"
+            file_path.write_text(json.dumps({"audit_log_channel_id": "456"}), encoding="utf-8")
+
+            store = ServerConfigStore(file_path=file_path)
+            store.set_unit_leadership_role_id(1486000000000000000)
+
+            data = json.loads(file_path.read_text(encoding="utf-8"))
+            self.assertEqual(data.get("audit_log_channel_id"), "456")
+            self.assertEqual(data.get("unit_leadership_role_id"), "1486000000000000000")
+            self.assertEqual(store.get_unit_leadership_role_id(), 1486000000000000000)
+
 
 class BadgeRoleMapperTests(unittest.TestCase):
     """Validate role mapping and employee-role hierarchy behavior."""

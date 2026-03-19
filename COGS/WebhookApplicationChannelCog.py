@@ -20,6 +20,56 @@ class ChannelCreateRequest:
     username: str
 
 
+class ApplicationClaimView(discord.ui.View):
+    """Allow staff to grant themselves access to a newly created application channel."""
+
+    def __init__(self, *, application_channel_id: int) -> None:
+        # Keep the claim control active until staff no longer need to self-assign access.
+        super().__init__(timeout=None)
+        self.application_channel_id = application_channel_id
+
+    @discord.ui.button(label="Claim", style=discord.ButtonStyle.success, custom_id="application_channel:claim")
+    async def claim(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        """Grant the clicking staff member permission to view and speak in the application channel."""
+
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "This claim button can only be used inside a server.",
+                ephemeral=True,
+            )
+            return
+
+        target_channel = interaction.guild.get_channel(self.application_channel_id)
+        if target_channel is None:
+            target_channel = interaction.client.get_channel(self.application_channel_id)
+        if target_channel is None:
+            await interaction.response.send_message(
+                "I could not find the application channel tied to this claim button.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            # Grant the claimer the minimum permissions needed to work the application inside the target channel.
+            await target_channel.set_permissions(
+                interaction.user,
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True,
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            await interaction.response.send_message(
+                "I could not grant you access to that application channel.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            f"You can now view and respond in {target_channel.mention}.",
+            ephemeral=True,
+        )
+
+
 class WebhookApplicationChannelCog(commands.Cog):
     """Create a new application channel when a trusted webhook posts a channel-create command."""
 
@@ -32,10 +82,12 @@ class WebhookApplicationChannelCog(commands.Cog):
     # Restrict channel creation to the currently approved application prefixes provided by the user.
     ALLOWED_UNIT_PREFIXES: Final[frozenset[str]] = frozenset({"IA", "FU", "MT", "ET", "EA", "TU"})
 
+    NEW_APPLICATION_MESSAGE: Final[str] = "# New Unit Application Recieved"
+
     def __init__(self, bot: commands.Bot) -> None:
         # Store the bot reference for parity with the rest of the project and easier testing.
         self.bot = bot
-        # Resolve the archive channel from shared server configuration instead of hardcoding it in the cog.
+        # Resolve all channel and role IDs from shared server configuration instead of hardcoding them here.
         self.server_config_store = ServerConfigStore()
 
     @classmethod
@@ -69,6 +121,15 @@ class WebhookApplicationChannelCog(commands.Cog):
         if normalized_username:
             return normalized_username[:100]
         return "application"
+
+    def _build_new_application_notification(self) -> str:
+        """Build the staff notification posted into the configured new-applications channel."""
+
+        unit_leadership_role_id = self.server_config_store.get_unit_leadership_role_id()
+        leadership_mention = (
+            f"<@&{unit_leadership_role_id}>" if unit_leadership_role_id is not None else "@Unit Leadership"
+        )
+        return f"{leadership_mention}\n{self.NEW_APPLICATION_MESSAGE}"
 
     async def _create_application_channel(
         self,
@@ -143,6 +204,26 @@ class WebhookApplicationChannelCog(commands.Cog):
         except (discord.Forbidden, discord.HTTPException, IndexError, AttributeError):
             return False
 
+    async def _send_new_application_notification(self, created_channel: discord.TextChannel) -> bool:
+        """Post the Unit Leadership notification with a Claim button in the configured new-applications channel."""
+
+        new_applications_channel_id = self.server_config_store.get_new_applications_channel_id()
+        if new_applications_channel_id is None:
+            return False
+
+        new_applications_channel = self.bot.get_channel(new_applications_channel_id)
+        if new_applications_channel is None:
+            return False
+
+        try:
+            await new_applications_channel.send(
+                content=self._build_new_application_notification(),
+                view=ApplicationClaimView(application_channel_id=created_channel.id),
+            )
+            return True
+        except (discord.Forbidden, discord.HTTPException, AttributeError):
+            return False
+
     async def _delete_channel_create_message(self, message: discord.Message) -> None:
         """Delete the original webhook command message after the new channel is ready."""
 
@@ -172,15 +253,23 @@ class WebhookApplicationChannelCog(commands.Cog):
         if created_channel is None:
             return
 
-        if await self._send_archived_webhook_message(created_channel):
-            await self._delete_channel_create_message(message)
+        if not await self._send_archived_webhook_message(created_channel):
+            try:
+                # Remove the channel if the archived webhook message cannot be delivered, preventing incomplete setup.
+                await created_channel.delete(reason="Failed to forward archived webhook resources after channel creation")
+            except (discord.Forbidden, discord.HTTPException):
+                pass
             return
 
-        try:
-            # Remove the channel if the archived webhook message cannot be delivered, preventing incomplete setup.
-            await created_channel.delete(reason="Failed to forward archived webhook resources after channel creation")
-        except (discord.Forbidden, discord.HTTPException):
-            pass
+        if not await self._send_new_application_notification(created_channel):
+            try:
+                # Remove the channel if staff cannot be notified, preventing unseen application channels from piling up.
+                await created_channel.delete(reason="Failed to send new application notification after channel creation")
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+            return
+
+        await self._delete_channel_create_message(message)
 
 
 async def setup(bot: commands.Bot) -> None:

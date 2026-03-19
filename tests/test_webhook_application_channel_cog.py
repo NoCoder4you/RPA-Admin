@@ -32,6 +32,16 @@ class WebhookApplicationChannelCogTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(channel_name, "john-doe")
 
+    def test_build_application_embed_provides_resources_instead_of_questions(self) -> None:
+        embed = WebhookApplicationChannelCog.build_application_embed(
+            ChannelCreateRequest(unit_prefix="HR", username="Jane Smith")
+        )
+
+        self.assertEqual(embed.title, "HR Application Resources")
+        self.assertEqual(embed.fields[2].name, "Purpose")
+        self.assertIn("not for the bot to ask application questions", embed.fields[2].value)
+        self.assertEqual(embed.fields[3].name, "Resource Step 1")
+
     async def test_on_message_creates_channel_and_posts_application_embed(self) -> None:
         cog = WebhookApplicationChannelCog(MagicMock())
 
@@ -55,11 +65,12 @@ class WebhookApplicationChannelCogTests(unittest.IsolatedAsyncioTestCase):
 
         created_channel.send.assert_awaited_once()
         sent_embed = created_channel.send.await_args.kwargs["embed"]
-        self.assertEqual(sent_embed.title, "HR Application Form")
+        self.assertEqual(sent_embed.title, "HR Application Resources")
         self.assertEqual(sent_embed.fields[0].name, "Applicant Username")
         self.assertEqual(sent_embed.fields[0].value, "Jane Smith")
         self.assertEqual(sent_embed.fields[1].name, "Unit Prefix")
         self.assertEqual(sent_embed.fields[1].value, "HR")
+        self.assertEqual(sent_embed.fields[2].name, "Purpose")
 
     async def test_on_message_ignores_non_webhook_messages(self) -> None:
         cog = WebhookApplicationChannelCog(MagicMock())

@@ -27,13 +27,12 @@ class WebhookApplicationChannelCog(commands.Cog):
         re.IGNORECASE,
     )
 
-    # Keep the form content in one place so future unit-specific changes are easy to make.
-    DEFAULT_FORM_QUESTIONS: Final[tuple[str, ...]] = (
-        "What is your Habbo username and what rank/position are you applying for?",
-        "What prior experience do you have that is relevant to this unit?",
-        "Why do you want to join this unit within RPA?",
-        "What skills or strengths would you bring to the team?",
-        "What is your usual availability and timezone?",
+    # Store reusable resource guidance in one place so unit-specific copy can be updated later.
+    RESOURCE_STEPS: Final[tuple[str, ...]] = (
+        "Use this channel to gather the applicant's answers and supporting details.",
+        "Share the correct unit application link, document, or template for the applicant here.",
+        "Use the unit prefix and applicant username below when logging or reviewing the submission.",
+        "Close or archive the channel once the application review has been completed.",
     )
 
     def __init__(self, bot: commands.Bot) -> None:
@@ -67,28 +66,28 @@ class WebhookApplicationChannelCog(commands.Cog):
 
     @classmethod
     def build_application_embed(cls, request: ChannelCreateRequest) -> discord.Embed:
-        """Create the branded application embed posted inside the newly created channel."""
+        """Create the resource-oriented embed posted inside the newly created application channel."""
 
         embed = discord.Embed(
-            title=f"{request.unit_prefix} Application Form",
+            title=f"{request.unit_prefix} Application Resources",
             description=(
-                f"Welcome **{request.username}**. Please answer the questions below for the "
-                f"**{request.unit_prefix}** application process."
+                f"This channel has been prepared for **{request.username}**. Use the details below to provide the "
+                f"correct **{request.unit_prefix}** application resources."
             ),
             color=discord.Color.blue(),
         )
         embed.add_field(name="Applicant Username", value=request.username, inline=True)
         embed.add_field(name="Unit Prefix", value=request.unit_prefix, inline=True)
         embed.add_field(
-            name="Instructions",
+            name="Purpose",
             value=(
-                "Reply in this channel with complete answers to each question so staff can review your application."
+                "This channel is for sharing resources and instructions with the applicant, not for the bot to ask application questions."
             ),
             inline=False,
         )
 
-        for index, question in enumerate(cls.DEFAULT_FORM_QUESTIONS, start=1):
-            embed.add_field(name=f"Question {index}", value=question, inline=False)
+        for index, step in enumerate(cls.RESOURCE_STEPS, start=1):
+            embed.add_field(name=f"Resource Step {index}", value=step, inline=False)
 
         embed.set_footer(text="RPA Application Automation")
         return embed
@@ -142,9 +141,9 @@ class WebhookApplicationChannelCog(commands.Cog):
         try:
             await created_channel.send(embed=embed)
         except (discord.Forbidden, discord.HTTPException):
-            # If the initial form cannot be posted, remove the channel to avoid leaving broken stubs behind.
+            # If the initial resource message cannot be posted, remove the channel to avoid leaving broken stubs behind.
             try:
-                await created_channel.delete(reason="Failed to send application form after webhook channel creation")
+                await created_channel.delete(reason="Failed to send application resources after webhook channel creation")
             except (discord.Forbidden, discord.HTTPException):
                 pass
 

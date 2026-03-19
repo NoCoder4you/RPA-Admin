@@ -85,6 +85,151 @@ TOKEN = load_bot_token_from_env_file()
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="RPA ", intents=intents, help_command=None)
+BACKGROUND_LOG_CHANNEL_ID = 1484064305732259940
+
+# ------------------------------------------------------------------
+# COMMAND LOGGING HELPERS
+# ------------------------------------------------------------------
+
+
+def safe_display_name(user):
+    """Return a readable username without failing if discord fields are unavailable."""
+    return getattr(user, "display_name", None) or getattr(user, "name", "Unknown User")
+
+
+
+def format_channel_location(channel):
+    """Describe the channel so logs show where a command was triggered."""
+    if channel is None:
+        return "Direct Message"
+
+    guild = getattr(channel, "guild", None)
+    guild_name = guild.name if guild else "Direct Message"
+    channel_name = getattr(channel, "name", str(channel))
+    return f"{guild_name} -> #{channel_name}"
+
+
+
+def format_command_arguments(positional_arguments=None, keyword_arguments=None):
+    """Build a compact argument summary for both prefix and slash commands."""
+    argument_parts = []
+
+    for value in positional_arguments or []:
+        argument_parts.append(repr(value))
+
+    for key, value in (keyword_arguments or {}).items():
+        argument_parts.append(f"{key}={value!r}")
+
+    return ", ".join(argument_parts) if argument_parts else "None"
+
+
+
+def build_prefix_command_log(ctx):
+    """Create a single structured log line for text command usage."""
+    return (
+        "Prefix command used | "
+        f"user={safe_display_name(ctx.author)} ({ctx.author.id}) | "
+        f"channel={format_channel_location(ctx.channel)} | "
+        f"command={ctx.command.qualified_name if ctx.command else ctx.invoked_with} | "
+        f"message={ctx.message.content} | "
+        f"arguments={format_command_arguments(ctx.args[2:], ctx.kwargs)}"
+    )
+
+
+
+def build_slash_command_log(interaction, command):
+    """Create a structured log line for slash command usage, including options."""
+    command_name = command.qualified_name if command else interaction.command.name
+    return (
+        "Slash command used | "
+        f"user={safe_display_name(interaction.user)} ({interaction.user.id}) | "
+        f"channel={format_channel_location(interaction.channel)} | "
+        f"command=/{command_name} | "
+        f"arguments={format_command_arguments(keyword_arguments=interaction.namespace.__dict__)}"
+    )
+
+
+
+def log_failed_command(command_type, command_name, actor, channel, error, *, raw_input=None, arguments=None):
+    """Capture failures with enough context to reproduce the command invocation."""
+    logger.error(
+        "%s failed | user=%s (%s) | channel=%s | command=%s | raw_input=%s | arguments=%s | error=%s",
+        command_type,
+        safe_display_name(actor),
+        getattr(actor, "id", "Unknown ID"),
+        format_channel_location(channel),
+        command_name,
+        raw_input or "None",
+        arguments or "None",
+        error,
+        exc_info=True,
+    )
+
+
+def truncate_log_value(value, limit=1000):
+    """Keep embed fields within Discord limits without dropping the important context."""
+    if value is None:
+        return "None"
+
+    text_value = str(value)
+    if len(text_value) <= limit:
+        return text_value
+
+    return f"{text_value[:limit - 3]}..."
+
+
+async def send_background_log(title, color, *, actor=None, channel=None, command_name=None, arguments=None, raw_input=None, error_text=None):
+    """Mirror log events into the dedicated Discord background log channel."""
+    # Skip background logging until the bot cache is ready and the channel can be resolved safely.
+    if not bot.is_ready():
+        return
+
+    log_channel = bot.get_channel(BACKGROUND_LOG_CHANNEL_ID)
+    if log_channel is None:
+        try:
+            log_channel = await bot.fetch_channel(BACKGROUND_LOG_CHANNEL_ID)
+        except Exception as fetch_error:
+            logger.error(f"Failed to fetch background log channel: {fetch_error}", exc_info=True)
+            return
+
+    embed = discord.Embed(title=title, color=color)
+
+    if actor is not None:
+        embed.add_field(
+            name="User",
+            value=truncate_log_value(f"{safe_display_name(actor)} ({getattr(actor, 'id', 'Unknown ID')})"),
+            inline=False,
+        )
+
+    if command_name is not None:
+        embed.add_field(name="Command", value=truncate_log_value(command_name), inline=False)
+
+    if channel is not None:
+        embed.add_field(name="Channel", value=truncate_log_value(format_channel_location(channel)), inline=False)
+
+    if arguments is not None:
+        embed.add_field(name="Arguments", value=truncate_log_value(arguments), inline=False)
+
+    if raw_input is not None:
+        embed.add_field(name="Raw Input", value=truncate_log_value(raw_input), inline=False)
+
+    if error_text is not None:
+        embed.add_field(name="Error", value=truncate_log_value(error_text), inline=False)
+
+    try:
+        await log_channel.send(embed=embed)
+    except Exception as send_error:
+        logger.error(f"Failed to send background log message: {send_error}", exc_info=True)
+
+
+def queue_background_log(title, color, **payload):
+    """Schedule Discord log delivery without blocking the live command flow."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    loop.create_task(send_background_log(title, color, **payload))
 
 # ------------------------------------------------------------------
 # COMMAND LOGGING HELPERS
@@ -376,6 +521,15 @@ async def update_status():
 @bot.event
 async def on_command(ctx):
     logger.info(build_prefix_command_log(ctx))
+    queue_background_log(
+        "Command Used",
+        discord.Color.blue(),
+        actor=ctx.author,
+        channel=ctx.channel,
+        command_name=ctx.command.qualified_name if ctx.command else ctx.invoked_with,
+        arguments=format_command_arguments(ctx.args[2:], ctx.kwargs),
+        raw_input=ctx.message.content,
+    )
 
 @bot.event
 async def on_error(event_method, *args, **kwargs):
@@ -384,6 +538,7 @@ async def on_error(event_method, *args, **kwargs):
 @bot.event
 async def on_command_error(ctx, error):
     command_name = ctx.command.qualified_name if ctx.command else ctx.invoked_with
+    arguments = format_command_arguments(ctx.args[2:], ctx.kwargs)
     log_failed_command(
         "Prefix command",
         command_name,
@@ -391,7 +546,17 @@ async def on_command_error(ctx, error):
         ctx.channel,
         error,
         raw_input=ctx.message.content,
-        arguments=format_command_arguments(ctx.args[2:], ctx.kwargs),
+        arguments=arguments,
+    )
+    queue_background_log(
+        "Failed Command",
+        discord.Color.red(),
+        actor=ctx.author,
+        channel=ctx.channel,
+        command_name=command_name,
+        arguments=arguments,
+        raw_input=ctx.message.content,
+        error_text=str(error),
     )
 
 @bot.listen("on_interaction")
@@ -400,7 +565,16 @@ async def log_slash_command_usage(interaction: discord.Interaction):
     if interaction.type == discord.InteractionType.application_command:
         command = interaction.command
         if command is not None:
+            arguments = format_command_arguments(keyword_arguments=interaction.namespace.__dict__)
             logger.info(build_slash_command_log(interaction, command))
+            queue_background_log(
+                "Slash Command Used",
+                discord.Color.teal(),
+                actor=interaction.user,
+                channel=interaction.channel,
+                command_name=f"/{command.qualified_name}",
+                arguments=arguments,
+            )
 
 
 @bot.tree.error
@@ -410,6 +584,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: discord.
 
     command = interaction.command
     command_name = f"/{command.qualified_name}" if command else "/unknown"
+    arguments = format_command_arguments(keyword_arguments=interaction.namespace.__dict__)
     log_failed_command(
         "Slash command",
         command_name,
@@ -417,7 +592,16 @@ async def on_app_command_error(interaction: discord.Interaction, error: discord.
         interaction.channel,
         error,
         raw_input=None,
-        arguments=format_command_arguments(keyword_arguments=interaction.namespace.__dict__),
+        arguments=arguments,
+    )
+    queue_background_log(
+        "Failed Slash Command",
+        discord.Color.red(),
+        actor=interaction.user,
+        channel=interaction.channel,
+        command_name=command_name,
+        arguments=arguments,
+        error_text=str(error),
     )
 
 # ------------------------------------------------------------------

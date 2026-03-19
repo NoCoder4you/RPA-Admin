@@ -217,6 +217,28 @@ class HabboVerificationCog(commands.Cog):
             ephemeral=True,
         )
 
+    async def _sync_member_nickname(self, interaction: discord.Interaction, habbo_username: str) -> str:
+        """Rename the member in Discord so their nickname matches the verified Habbo username."""
+
+        if interaction.guild is None:
+            return "Skipped (nickname can only be changed inside a server)."
+
+        member = interaction.user
+        if getattr(member, "nick", None) == habbo_username:
+            return "No nickname change was required."
+
+        try:
+            await member.edit(
+                nick=habbo_username,
+                reason="Habbo verification nickname sync",
+            )
+        except discord.Forbidden:
+            return "Failed (bot lacks permission to manage this nickname)."
+        except discord.HTTPException:
+            return "Failed (Discord rejected the nickname update request)."
+
+        return "Nickname updated to verified Habbo username."
+
     async def _assign_roles_from_habbo_groups(
         self,
         interaction: discord.Interaction,

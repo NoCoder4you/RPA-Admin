@@ -196,6 +196,39 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Special Visitor (`654`) [role]", fields[1][1])
         self.assertIn("✅ `add_reactions`", fields[2][1])
 
+    async def test_channel_permission_update_resolves_affected_target_from_primitive_extra_fields(self) -> None:
+        cog = AuditLogCog(MagicMock())
+        cog._send_audit_embed = AsyncMock()
+
+        deny_before = discord.Permissions.none()
+        deny_after = discord.Permissions.none()
+        deny_after.embed_links = True
+
+        audit_entry = SimpleNamespace(
+            user=SimpleNamespace(id=12, mention="<@12>"),
+            extra=SimpleNamespace(
+                role_name="Special Visitor",
+                role_id=654,
+                overwrite_type="role",
+            ),
+            changes=[
+                SimpleNamespace(key="deny", before=deny_before, after=deny_after),
+            ],
+        )
+        cog._find_recent_audit_entry_from_actions = AsyncMock(return_value=audit_entry)
+
+        guild = SimpleNamespace()
+        before = SimpleNamespace(overwrites={"a": 1}, guild=guild, id=10, mention="#general", name="general")
+        after = SimpleNamespace(overwrites={"a": 2}, guild=guild, id=10, mention="#general", name="general")
+
+        await cog.on_guild_channel_update(before, after)
+
+        fields = cog._send_audit_embed.await_args.kwargs["fields"]
+        self.assertEqual(fields[1][0], "Affected")
+        self.assertIn("Special Visitor", fields[1][1])
+        self.assertIn("<@&654>", fields[1][1])
+        self.assertIn("❌ `embed_links`", fields[2][1])
+
     async def test_find_recent_audit_entry_falls_back_to_recent_name_match(self) -> None:
         cog = AuditLogCog(MagicMock())
 

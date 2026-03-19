@@ -155,6 +155,33 @@ class AuditLogCog(commands.Cog):
         extra = getattr(audit_entry, "extra", None)
         overwrite_target_type = getattr(extra, "overwrite_type", None)
 
+        def format_from_name_and_id(name: object | None, target_id: object | None) -> str | None:
+            normalized_name = str(name).strip() if name not in {None, ""} else None
+            normalized_id = None
+            try:
+                normalized_id = int(target_id) if target_id is not None else None
+            except (TypeError, ValueError):
+                normalized_id = None
+
+            if normalized_name is None and normalized_id is None:
+                return None
+
+            if overwrite_target_type == "role" and normalized_id is not None:
+                mention = f"<@&{normalized_id}>"
+            elif overwrite_target_type in {"member", "user"} and normalized_id is not None:
+                mention = f"<@{normalized_id}>"
+            else:
+                mention = normalized_name or str(normalized_id)
+
+            label_core = mention
+            if normalized_name and normalized_name not in mention:
+                label_core = f"{normalized_name} / {mention}"
+            if normalized_id is not None:
+                label_core = f"{label_core} (`{normalized_id}`)"
+            if overwrite_target_type is not None:
+                return f"{label_core} [{overwrite_target_type}]"
+            return label_core
+
         preferred_extra_keys = ("overwrite", "role", "member", "user", "target")
         for key in preferred_extra_keys:
             candidate = getattr(extra, key, None)
@@ -175,6 +202,27 @@ class AuditLogCog(commands.Cog):
                         return f"{label} [{overwrite_target_type}]"
                     return label
 
+            primitive_name_keys = ("role_name", "member_name", "user_name", "name")
+            primitive_id_keys = ("role_id", "member_id", "user_id", "id", "overwrite_id")
+            primitive_name = None
+            primitive_id = None
+
+            for key in primitive_name_keys:
+                candidate = getattr(extra, key, None)
+                if candidate not in {None, ""}:
+                    primitive_name = candidate
+                    break
+
+            for key in primitive_id_keys:
+                candidate = getattr(extra, key, None)
+                if candidate is not None:
+                    primitive_id = candidate
+                    break
+
+            primitive_label = format_from_name_and_id(primitive_name, primitive_id)
+            if primitive_label is not None:
+                return primitive_label
+
         raw_changes = getattr(audit_entry, "changes", None)
         iterable_changes = getattr(raw_changes, "__iter__", None)
         if callable(iterable_changes):
@@ -186,10 +234,16 @@ class AuditLogCog(commands.Cog):
                 candidate = after_value or before_value
                 if candidate is None:
                     continue
-                label = self._format_overwrite_target(candidate)
-                if overwrite_target_type is not None:
-                    return f"{label} [{overwrite_target_type}]"
-                return label
+                if hasattr(candidate, "id") or hasattr(candidate, "name") or hasattr(candidate, "mention"):
+                    label = self._format_overwrite_target(candidate)
+                    if overwrite_target_type is not None:
+                        return f"{label} [{overwrite_target_type}]"
+                    return label
+
+                if getattr(change, "key", None) in {"role", "member", "user", "overwrite"}:
+                    primitive_label = format_from_name_and_id(candidate, None)
+                    if primitive_label is not None:
+                        return primitive_label
 
         return None
 

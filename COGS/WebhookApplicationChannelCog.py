@@ -82,7 +82,7 @@ class WebhookApplicationChannelCog(commands.Cog):
     # Restrict channel creation to the currently approved application prefixes provided by the user.
     ALLOWED_UNIT_PREFIXES: Final[frozenset[str]] = frozenset({"IA", "MT", "ET", "EA", "TU"})
 
-    NEW_APPLICATION_MESSAGE: Final[str] = "# New Unit Application Recieved"
+    NEW_APPLICATION_MESSAGE: Final[str] = "# New Unit Application Received\n-# Please only claim applications that are relevant to you."
 
     def __init__(self, bot: commands.Bot) -> None:
         # Store the bot reference for parity with the rest of the project and easier testing.

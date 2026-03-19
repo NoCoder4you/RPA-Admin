@@ -10,13 +10,32 @@ import random
 # LOGGING
 # ------------------------------------------------------------------
 
+class UnicodeSafeStreamHandler(logging.StreamHandler):
+    """Write log messages to the console without crashing on Windows code pages."""
+
+    def emit(self, record):
+        try:
+            message = self.format(record)
+            stream = self.stream
+            try:
+                stream.write(message + self.terminator)
+            except UnicodeEncodeError:
+                # Fall back to an escaped representation so important log lines still reach the console.
+                encoding = getattr(stream, "encoding", None) or "utf-8"
+                safe_message = message.encode(encoding, errors="backslashreplace").decode(encoding)
+                stream.write(safe_message + self.terminator)
+            self.flush()
+        except Exception:
+            self.handleError(record)
+
+
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot_errors.log")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s:%(levelname)s:%(message)s",
     handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler()
+        logging.FileHandler(LOG_FILE, encoding="utf-8"),
+        UnicodeSafeStreamHandler()
     ]
 )
 logger = logging.getLogger("rpa_admin_bot")

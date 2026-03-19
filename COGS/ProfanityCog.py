@@ -97,27 +97,40 @@ class ProfanityCog(commands.Cog):
             collapsed_tokens.append(re.sub(r"(.)\1+", r"\1", token))
         return " ".join(collapsed_tokens)
 
-    def contains_profanity(self, content: str) -> bool:
-        """Return True when message content contains a blocked word or a simple variation."""
+    def _match_blocked_word(self, content: str) -> str | None:
+        """Return the blocked word that matched the message, if any."""
 
         normalized = self._normalize_for_detection(content)
         if not normalized:
-            return False
+            return None
 
         tokens = normalized.split()
         compact_text = "".join(tokens)
 
-        for blocked_word in self.blocked_words:
+        for blocked_word in sorted(self.blocked_words):
             # Match whole normalized tokens first to avoid overly broad false positives.
             if blocked_word in tokens:
-                return True
+                return blocked_word
 
             # Also inspect the separator-free content so forms like "f.u.c.k" are caught.
             if blocked_word in compact_text:
-                return True
-        return False
+                return blocked_word
+        return None
 
-    async def _send_user_notice(self, message: discord.Message) -> bool:
+    def contains_profanity(self, content: str) -> bool:
+        """Return True when message content contains a blocked word or a simple variation."""
+
+        return self._match_blocked_word(content) is not None
+
+    @staticmethod
+    def _truncate_field_value(value: str, *, limit: int = 1024) -> str:
+        """Trim embed field values so full message context fits within Discord limits."""
+
+        if len(value) <= limit:
+            return value
+        return value[: limit - 3] + "..."
+
+    async def _send_user_notice(self, message: discord.Message, *, blocked_word: str) -> bool:
         """Try to DM the affected user and return whether the notice was delivered."""
 
         embed = discord.Embed(
@@ -128,6 +141,7 @@ class ProfanityCog(commands.Cog):
             ),
             color=discord.Color.red(),
         )
+        embed.add_field(name="Blocked Word", value=f"`{blocked_word}`", inline=True)
         embed.add_field(
             name="Original Channel",
             value=message.channel.mention if hasattr(message.channel, "mention") else "Unknown",
@@ -138,6 +152,11 @@ class ProfanityCog(commands.Cog):
             value=message.guild.name if message.guild else "Direct Messages",
             inline=True,
         )
+        embed.add_field(
+            name="Deleted Message",
+            value=self._truncate_field_value(message.content or "*(no text content)*"),
+            inline=False,
+        )
         try:
             await message.author.send(embed=embed)
         except (discord.Forbidden, discord.HTTPException, AttributeError):
@@ -146,7 +165,7 @@ class ProfanityCog(commands.Cog):
             return False
         return True
 
-    async def _send_log_notice(self, message: discord.Message, *, dm_sent: bool) -> None:
+    async def _send_log_notice(self, message: discord.Message, *, blocked_word: str, dm_sent: bool) -> None:
         """Send an audit-style embed to the configured profanity log channel, if available."""
 
         if message.guild is None:
@@ -172,7 +191,12 @@ class ProfanityCog(commands.Cog):
             value=message.channel.mention if hasattr(message.channel, "mention") else f"`{getattr(message.channel, 'id', 'unknown')}`",
             inline=False,
         )
-        embed.add_field(name="Deleted Content", value=message.content[:1024] or "*(no text content)*", inline=False)
+        embed.add_field(name="Blocked Word", value=f"`{blocked_word}`", inline=False)
+        embed.add_field(
+            name="Deleted Content",
+            value=self._truncate_field_value(message.content or "*(no text content)*"),
+            inline=False,
+        )
         embed.add_field(
             name="User Notice",
             value=(
@@ -196,7 +220,8 @@ class ProfanityCog(commands.Cog):
         if message.guild is None or not message.content:
             return
 
-        if not self.contains_profanity(message.content):
+        blocked_word = self._match_blocked_word(message.content)
+        if blocked_word is None:
             return
 
         try:
@@ -205,8 +230,8 @@ class ProfanityCog(commands.Cog):
             # If the bot cannot delete the message, avoid sending misleading notices.
             return
 
-        dm_sent = await self._send_user_notice(message)
-        await self._send_log_notice(message, dm_sent=dm_sent)
+        dm_sent = await self._send_user_notice(message, blocked_word=blocked_word)
+        await self._send_log_notice(message, blocked_word=blocked_word, dm_sent=dm_sent)
 
 
 async def setup(bot: commands.Bot) -> None:

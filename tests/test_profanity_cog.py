@@ -71,14 +71,22 @@ class ProfanityCogTests(unittest.IsolatedAsyncioTestCase):
             user_embed = author.send.await_args.kwargs["embed"]
             self.assertEqual(user_embed.title, "Profanity Filter")
             self.assertIn("has been deleted", user_embed.description)
+            self.assertEqual(user_embed.fields[0].name, "Blocked Word")
+            self.assertIn("`shit`", user_embed.fields[0].value)
+            self.assertEqual(user_embed.fields[3].name, "Deleted Message")
+            self.assertIn("You are full of sh1t", user_embed.fields[3].value)
 
             log_channel.send.assert_awaited_once()
             log_embed = log_channel.send.await_args.kwargs["embed"]
             self.assertEqual(log_embed.title, "Profanity Filter Triggered")
             self.assertEqual(log_embed.fields[1].name, "Server")
             self.assertIn("RPA", log_embed.fields[1].value)
-            self.assertEqual(log_embed.fields[4].name, "User Notice")
-            self.assertIn("delivered successfully", log_embed.fields[4].value)
+            self.assertEqual(log_embed.fields[3].name, "Blocked Word")
+            self.assertIn("`shit`", log_embed.fields[3].value)
+            self.assertEqual(log_embed.fields[4].name, "Deleted Content")
+            self.assertIn("You are full of sh1t", log_embed.fields[4].value)
+            self.assertEqual(log_embed.fields[5].name, "User Notice")
+            self.assertIn("delivered successfully", log_embed.fields[5].value)
 
     async def test_on_message_logs_when_user_dm_cannot_be_delivered(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -108,8 +116,12 @@ class ProfanityCogTests(unittest.IsolatedAsyncioTestCase):
             user_notice_channel.send.assert_not_awaited()
             log_channel.send.assert_awaited_once()
             log_embed = log_channel.send.await_args.kwargs["embed"]
-            self.assertEqual(log_embed.fields[4].name, "User Notice")
-            self.assertIn("could not DM the user", log_embed.fields[4].value)
+            self.assertEqual(log_embed.fields[3].name, "Blocked Word")
+            self.assertIn("`damn`", log_embed.fields[3].value)
+            self.assertEqual(log_embed.fields[4].name, "Deleted Content")
+            self.assertIn("damn", log_embed.fields[4].value)
+            self.assertEqual(log_embed.fields[5].name, "User Notice")
+            self.assertIn("could not DM the user", log_embed.fields[5].value)
 
 
 if __name__ == "__main__":

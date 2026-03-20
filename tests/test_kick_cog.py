@@ -7,8 +7,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 try:
+    import discord
     from COGS.KickCog import KickCog
 except ModuleNotFoundError:
+    discord = None
     KickCog = None
 
 
@@ -42,12 +44,21 @@ class KickCogTests(unittest.IsolatedAsyncioTestCase):
         kick_reason = target_member.kick.await_args.kwargs.get("reason", "")
         self.assertTrue(kick_reason.endswith(" - rule violation"))
         target_member.send.assert_awaited_once()
-        dm_text = target_member.send.await_args.args[0]
-        self.assertIn("rule violation", dm_text)
-        interaction.response.send_message.assert_awaited_once_with(
-            "✅ Kicked <@202> for reason: rule violation\nI sent them a DM with the reason before kicking.",
-            ephemeral=True,
-        )
+        dm_embed = target_member.send.await_args.kwargs["embed"]
+        self.assertIsInstance(dm_embed, discord.Embed)
+        self.assertIn("You are being kicked from **Test Guild**.", dm_embed.description)
+        self.assertIn("**Reason:** rule violation", dm_embed.description)
+
+        interaction.response.send_message.assert_awaited_once()
+        send_kwargs = interaction.response.send_message.await_args.kwargs
+        self.assertTrue(send_kwargs["ephemeral"])
+        success_embed = send_kwargs["embed"]
+        self.assertEqual(success_embed.title, "Member Kicked")
+        self.assertEqual(success_embed.description, "✅ Kicked <@202>")
+        self.assertEqual(success_embed.fields[0].name, "Reason")
+        self.assertEqual(success_embed.fields[0].value, "rule violation")
+        self.assertEqual(success_embed.fields[1].name, "DM Status")
+        self.assertEqual(success_embed.fields[1].value, "I sent them a DM with the reason before kicking.")
 
     async def test_kick_rejects_self_kick(self) -> None:
         bot = MagicMock()
@@ -90,9 +101,13 @@ class KickCogTests(unittest.IsolatedAsyncioTestCase):
         await cog.kick.callback(cog, interaction, target_member, "rule violation")
 
         target_member.kick.assert_awaited_once()
-        interaction.response.send_message.assert_awaited_once_with(
-            "✅ Kicked <@202> for reason: rule violation\nI could not DM them first (likely due to their privacy settings).",
-            ephemeral=True,
+        interaction.response.send_message.assert_awaited_once()
+        send_kwargs = interaction.response.send_message.await_args.kwargs
+        self.assertTrue(send_kwargs["ephemeral"])
+        success_embed = send_kwargs["embed"]
+        self.assertEqual(
+            success_embed.fields[1].value,
+            "I could not DM them first (likely due to their privacy settings).",
         )
 
 

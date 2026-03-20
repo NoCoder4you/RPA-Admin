@@ -12,21 +12,14 @@ from habbo_verification_core import VerifyRestrictionStore
 class VerifyRestrictionsCog(commands.Cog):
     """Staff cog for maintaining the DNH and BoS username restriction lists."""
 
-    # Keep one parent command so all restriction-management actions stay discoverable together.
-    verifyrestrictions_group = app_commands.Group(
-        name="verifyrestrictions",
-        description="Manage Habbo usernames restricted during verification.",
-    )
-    # The user requested group-specific add/remove commands, so expose dedicated DNH and BoS subgroups.
+    # The user asked to remove `/verifyrestrictions`, so expose top-level `/dnh` and `/bos` groups instead.
     dnh_group = app_commands.Group(
         name="dnh",
         description="Manage the Do Not Hire verification restriction list.",
-        parent=verifyrestrictions_group,
     )
     bos_group = app_commands.Group(
         name="bos",
         description="Manage the Ban on Sight verification restriction list.",
-        parent=verifyrestrictions_group,
     )
 
     def __init__(self, bot: commands.Bot) -> None:
@@ -156,11 +149,11 @@ class VerifyRestrictionsCog(commands.Cog):
         interaction: discord.Interaction,
         error: app_commands.AppCommandError,
     ) -> None:
-        """Return clear permission guidance for the grouped restriction commands."""
+        """Return clear permission guidance for the DNH and BoS restriction commands."""
 
         if isinstance(error, app_commands.MissingPermissions):
             await interaction.response.send_message(
-                "You need the **Manage Server** permission to use `/verifyrestrictions`.",
+                "You need the **Manage Server** permission to use `/dnh` or `/bos`.",
                 ephemeral=True,
             )
             return

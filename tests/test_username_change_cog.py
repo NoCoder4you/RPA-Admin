@@ -88,17 +88,30 @@ class UsernameChangeCogTests(unittest.IsolatedAsyncioTestCase):
             "You cannot request the same Habbo username that is already saved for you.",
         )
 
-    async def test_apply_username_change_from_embed_updates_store_nickname_reload_and_log(self) -> None:
-        bot = SimpleNamespace(reload_extension=AsyncMock(), get_channel=lambda _cid: None)
+    async def test_apply_username_change_from_embed_updates_store_nickname_reload_and_logs_completion(self) -> None:
+        completion_messages: list[discord.Embed] = []
+
+        async def capture_send(*, embed=None, **_kwargs):
+            completion_messages.append(embed)
+
+        completion_channel = SimpleNamespace(send=AsyncMock(side_effect=capture_send))
+        bot = SimpleNamespace(
+            reload_extension=AsyncMock(),
+            get_channel=lambda channel_id: completion_channel if channel_id == 1479465446632853524 else None,
+        )
         cog = UsernameChangeCog(bot=bot)
         cog.verified_store = SimpleNamespace(
             get_habbo_username=lambda discord_id: "OldHabbo" if discord_id == "123" else None,
             save=MagicMock(),
         )
+        cog.server_config_store = SimpleNamespace(get_request_channel_id=lambda: 1479465446632853524)
         cog._sync_member_nickname = AsyncMock(return_value="Nickname updated to approved Habbo username.")
         cog._reload_autoroles_cog = AsyncMock(return_value="Reloaded AutoRoles cog successfully.")
         member = SimpleNamespace(id=123, nick="OldHabbo")
-        guild = SimpleNamespace(get_member=lambda member_id: member if member_id == 123 else None)
+        guild = SimpleNamespace(
+            get_member=lambda member_id: member if member_id == 123 else None,
+            get_channel=lambda channel_id: completion_channel if channel_id == 1479465446632853524 else None,
+        )
         interaction = SimpleNamespace(guild=guild)
         embed = discord.Embed(
             title="Habbo Username Change Request",
@@ -113,6 +126,10 @@ class UsernameChangeCogTests(unittest.IsolatedAsyncioTestCase):
         cog.verified_store.save.assert_called_once_with(discord_id="123", habbo_username="NewHabbo")
         cog._sync_member_nickname.assert_awaited_once()
         cog._reload_autoroles_cog.assert_awaited_once()
+        self.assertEqual(len(completion_messages), 1)
+        self.assertEqual(completion_messages[0].title, "Username Change Applied")
+        self.assertEqual(completion_messages[0].fields[1].value, "OldHabbo")
+        self.assertEqual(completion_messages[0].fields[2].value, "NewHabbo")
         self.assertIn("OldHabbo", result)
         self.assertIn("NewHabbo", result)
 
@@ -178,6 +195,28 @@ class UsernameChangeCogTests(unittest.IsolatedAsyncioTestCase):
         view = sent_messages[0]["view"]
         self.assertIsInstance(view, UsernameChangeRequestView)
         self.assertEqual([child.label for child in view.children], ["Approve", "Decline"])
+
+    async def test_usernamechange_sends_success_followup_as_embed(self) -> None:
+        interaction = SimpleNamespace(
+            response=SimpleNamespace(defer=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        cog = UsernameChangeCog(bot=SimpleNamespace())
+        cog._process_username_change = AsyncMock(
+            return_value=(
+                True,
+                "Your request to change **Siren** to **noah7479** was sent for admin review.",
+            )
+        )
+
+        await cog.usernamechange.callback(cog, interaction, "noah7479")
+
+        interaction.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
+        interaction.followup.send.assert_awaited_once()
+        kwargs = interaction.followup.send.await_args.kwargs
+        self.assertTrue(kwargs["ephemeral"])
+        self.assertEqual(kwargs["embed"].title, "Username Change Request Sent")
+        self.assertIn("sent for admin review", kwargs["embed"].description)
 
     async def test_usernamechange_sends_error_followup_as_embed(self) -> None:
         interaction = SimpleNamespace(

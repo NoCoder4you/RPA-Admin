@@ -168,7 +168,10 @@ class UsernameChangeCog(commands.Cog):
         await interaction.response.defer(ephemeral=True, thinking=True)
         was_successful, result_message = await self._process_username_change(interaction, username)
         if was_successful:
-            await interaction.followup.send(result_message, ephemeral=True)
+            await interaction.followup.send(
+                embed=self._build_success_embed(result_message),
+                ephemeral=True,
+            )
             return
 
         # Keep all error responses inside embeds so moderation and user feedback stay visually consistent.
@@ -218,6 +221,16 @@ class UsernameChangeCog(commands.Cog):
         )
 
     @staticmethod
+    def _build_success_embed(message: str) -> discord.Embed:
+        """Present successful request submissions in the same polished embed style as errors."""
+
+        return discord.Embed(
+            title="Username Change Request Sent",
+            description=message,
+            color=discord.Color.green(),
+        )
+
+    @staticmethod
     def _build_error_embed(message: str) -> discord.Embed:
         """Wrap user-facing errors in a consistent embed so failures are easy to spot."""
 
@@ -255,6 +268,14 @@ class UsernameChangeCog(commands.Cog):
 
         # Refresh the auto-role extension immediately so downstream role-sync behavior uses the new username.
         await self._reload_autoroles_cog()
+        # Mirror the approved result into the configured request/review channel as a standalone success log.
+        await self._send_username_change_completion_embed(
+            interaction=interaction,
+            member_id=member_id,
+            previous_username=current_saved_username,
+            requested_username=requested_username,
+            nickname_status=nickname_status,
+        )
         return (
             f"Username updated: **{current_saved_username}** → **{requested_username}**\n"
             f"Nickname: {nickname_status}"
@@ -298,6 +319,49 @@ class UsernameChangeCog(commands.Cog):
             return f"Failed ({exc})"
 
         return "Reloaded AutoRoles cog successfully."
+
+    async def _send_username_change_completion_embed(
+        self,
+        *,
+        interaction: discord.Interaction,
+        member_id: int,
+        previous_username: str,
+        requested_username: str,
+        nickname_status: str,
+    ) -> bool:
+        """Post a standalone approval result embed to the configured review channel when a change is applied."""
+
+        if interaction.guild is None:
+            return False
+
+        request_channel_id = self.server_config_store.get_request_channel_id()
+        if request_channel_id is None:
+            return False
+
+        channel = interaction.guild.get_channel(request_channel_id)
+        if channel is None:
+            channel = self.bot.get_channel(request_channel_id)
+        if channel is None:
+            return False
+
+        # Reuse the configured request channel because it is the only verification/review channel tracked by this cog.
+        embed = discord.Embed(
+            title="Username Change Applied",
+            description="An approved username change has been completed.",
+            color=discord.Color.green(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(name="Member", value=f"<@{member_id}>", inline=False)
+        embed.add_field(name="Previous Username", value=previous_username, inline=True)
+        embed.add_field(name="New Username", value=requested_username, inline=True)
+        embed.add_field(name="Nickname", value=nickname_status, inline=False)
+
+        try:
+            await channel.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            return False
+
+        return True
 
     async def _send_verification_log_embed(
         self,

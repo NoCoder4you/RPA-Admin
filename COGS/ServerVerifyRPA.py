@@ -21,6 +21,9 @@ from habbo_verification_core import (
 )
 
 
+WHITE_CHECK_MARK_EMOJI = "✅"
+
+
 class HabboVerificationCog(commands.Cog):
     """Cog for Discord users to verify ownership of a Habbo account via motto code."""
 
@@ -37,13 +40,13 @@ class HabboVerificationCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self) -> None:
-        """Ensure the configured verification message always has the bot-owned green-check reaction."""
+        """Ensure the configured verification message always has the bot-owned white check mark reaction."""
 
         # Keep the startup hook tiny and delegate to a dedicated helper for easier testing.
         await self._ensure_verification_message_reaction()
 
     async def _ensure_verification_message_reaction(self) -> None:
-        """Apply ✅ to the configured verification message ID when the bot comes online."""
+        """Apply the white check mark emoji to the configured verification message after startup."""
 
         configured_message_id = self.server_config_store.get_verification_reaction_message_id()
         if configured_message_id is None:
@@ -59,13 +62,39 @@ class HabboVerificationCog(commands.Cog):
                     continue
 
                 try:
-                    # Keep a single canonical green-check trigger visible on the target verification post.
-                    await message.add_reaction("✅")
+                    # Keep a single canonical white check mark trigger visible on the target verification post.
+                    if not self._message_has_bot_reaction(message, WHITE_CHECK_MARK_EMOJI):
+                        await message.add_reaction(WHITE_CHECK_MARK_EMOJI)
                 except (discord.Forbidden, discord.HTTPException):
                     return
 
                 # Stop once the configured message has been found and updated.
                 return
+
+
+    def _message_has_bot_reaction(self, message: discord.Message | object, emoji: str) -> bool:
+        """Return True when the bot already owns the requested reaction on the message."""
+
+        bot_user = getattr(self.bot, "user", None)
+        if bot_user is None:
+            return False
+
+        for reaction in getattr(message, "reactions", []):
+            if str(getattr(reaction, "emoji", "")) != emoji:
+                continue
+
+            if getattr(reaction, "me", False):
+                return True
+
+            users = getattr(reaction, "users", None)
+            if users is None:
+                continue
+
+            # Fall back to iterating the reaction users when the lightweight reaction object does not expose `.me`.
+            if hasattr(users, "__aiter__"):
+                return False
+
+        return False
 
     @app_commands.command(
         name="verify",
@@ -427,7 +456,7 @@ class HabboVerificationCog(commands.Cog):
         await self._remove_member_reaction_from_message(payload, member)
 
         emoji = str(payload.emoji)
-        allowed_green_checks = {"✅", "☑️", "✔️"}
+        allowed_green_checks = {WHITE_CHECK_MARK_EMOJI, "☑️", "✔️"}
         if emoji not in allowed_green_checks:
             return
 

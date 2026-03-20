@@ -97,7 +97,7 @@ class UsernameChangeCogTests(unittest.IsolatedAsyncioTestCase):
         completion_channel = SimpleNamespace(send=AsyncMock(side_effect=capture_send))
         bot = SimpleNamespace(
             reload_extension=AsyncMock(),
-            get_channel=lambda channel_id: completion_channel if channel_id == 1479465446632853524 else None,
+            get_channel=lambda channel_id: completion_channel if channel_id == 1481456997726425168 else None,
         )
         cog = UsernameChangeCog(bot=bot)
         cog.verified_store = SimpleNamespace(
@@ -110,7 +110,7 @@ class UsernameChangeCogTests(unittest.IsolatedAsyncioTestCase):
         member = SimpleNamespace(id=123, nick="OldHabbo")
         guild = SimpleNamespace(
             get_member=lambda member_id: member if member_id == 123 else None,
-            get_channel=lambda channel_id: completion_channel if channel_id == 1479465446632853524 else None,
+            get_channel=lambda channel_id: completion_channel if channel_id == 1481456997726425168 else None,
         )
         interaction = SimpleNamespace(guild=guild)
         embed = discord.Embed(
@@ -121,15 +121,24 @@ class UsernameChangeCogTests(unittest.IsolatedAsyncioTestCase):
         embed.add_field(name="Previous Username", value="OldHabbo", inline=True)
         embed.add_field(name="Requested Username", value="NewHabbo", inline=True)
 
-        result = await cog.apply_username_change_from_embed(interaction, embed)
+        from COGS import UsernameChangeCog as username_change_module
+        original_fetch = username_change_module.fetch_habbo_profile
+        username_change_module.fetch_habbo_profile = lambda _username: {"figureString": "hr-1-1"}
+        try:
+            result = await cog.apply_username_change_from_embed(interaction, embed)
+        finally:
+            username_change_module.fetch_habbo_profile = original_fetch
 
         cog.verified_store.save.assert_called_once_with(discord_id="123", habbo_username="NewHabbo")
         cog._sync_member_nickname.assert_awaited_once()
         cog._reload_autoroles_cog.assert_awaited_once()
         self.assertEqual(len(completion_messages), 1)
         self.assertEqual(completion_messages[0].title, "Username Change Applied")
+        self.assertIsNone(completion_messages[0].description)
+        self.assertEqual(len(completion_messages[0].fields), 3)
         self.assertEqual(completion_messages[0].fields[1].value, "OldHabbo")
         self.assertEqual(completion_messages[0].fields[2].value, "NewHabbo")
+        self.assertIn("figure=hr-1-1", completion_messages[0].thumbnail.url)
         self.assertIn("OldHabbo", result)
         self.assertIn("NewHabbo", result)
 

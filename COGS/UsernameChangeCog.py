@@ -149,6 +149,7 @@ class UsernameChangeCog(commands.Cog):
     """Self-service cog for requesting moderator-approved Habbo username changes."""
 
     AUTOROLES_EXTENSION = "COGS.ServerAutoRolesRPA"
+    VERIFICATION_LOG_CHANNEL_ID = 1481456997726425168
 
     def __init__(self, bot: commands.Bot) -> None:
         # Keep shared dependencies on the cog so tests can replace them with stubs.
@@ -274,7 +275,6 @@ class UsernameChangeCog(commands.Cog):
             member_id=member_id,
             previous_username=current_saved_username,
             requested_username=requested_username,
-            nickname_status=nickname_status,
         )
         return (
             f"Username updated: **{current_saved_username}** → **{requested_username}**\n"
@@ -320,41 +320,59 @@ class UsernameChangeCog(commands.Cog):
 
         return "Reloaded AutoRoles cog successfully."
 
+    @staticmethod
+    def _build_avatar_thumbnail_url(profile: dict) -> str | None:
+        """Build a Habbo avatar thumbnail URL from a profile payload when a figure string is available."""
+
+        figure_string = str(profile.get("figureString", "")).strip()
+        if not figure_string:
+            return None
+
+        from urllib.parse import quote
+
+        encoded_figure = quote(figure_string, safe="")
+        return (
+            "https://www.habbo.com/habbo-imaging/avatarimage"
+            f"?figure={encoded_figure}&size=l&direction=2&head_direction=3&gesture=sml"
+        )
+
     async def _send_username_change_completion_embed(
         self,
         *,
         interaction: discord.Interaction,
         member_id: int,
         previous_username: str,
-        requested_username: str,
-        nickname_status: str,
+        requested_username: str
     ) -> bool:
-        """Post a standalone approval result embed to the configured review channel when a change is applied."""
+        """Post a standalone approval result embed to the dedicated verification log channel."""
 
         if interaction.guild is None:
             return False
 
-        request_channel_id = self.server_config_store.get_request_channel_id()
-        if request_channel_id is None:
-            return False
-
-        channel = interaction.guild.get_channel(request_channel_id)
+        channel = interaction.guild.get_channel(self.VERIFICATION_LOG_CHANNEL_ID)
         if channel is None:
-            channel = self.bot.get_channel(request_channel_id)
+            channel = self.bot.get_channel(self.VERIFICATION_LOG_CHANNEL_ID)
         if channel is None:
             return False
 
-        # Reuse the configured request channel because it is the only verification/review channel tracked by this cog.
+        # The verification log channel ID is explicit so completion notices always land in the requested destination.
         embed = discord.Embed(
             title="Username Change Applied",
-            description="An approved username change has been completed.",
             color=discord.Color.green(),
             timestamp=datetime.now(timezone.utc),
         )
         embed.add_field(name="Member", value=f"<@{member_id}>", inline=False)
         embed.add_field(name="Previous Username", value=previous_username, inline=True)
         embed.add_field(name="New Username", value=requested_username, inline=True)
-        embed.add_field(name="Nickname", value=nickname_status, inline=False)
+
+        try:
+            profile = fetch_habbo_profile(requested_username)
+        except HabboApiError:
+            profile = None
+
+        thumbnail_url = self._build_avatar_thumbnail_url(profile or {})
+        if thumbnail_url:
+            embed.set_thumbnail(url=thumbnail_url)
 
         try:
             await channel.send(embed=embed)
@@ -375,13 +393,9 @@ class UsernameChangeCog(commands.Cog):
         if interaction.guild is None:
             return False
 
-        request_channel_id = self.server_config_store.get_request_channel_id()
-        if request_channel_id is None:
-            return False
-
-        channel = interaction.guild.get_channel(request_channel_id)
+        channel = interaction.guild.get_channel(self.VERIFICATION_LOG_CHANNEL_ID)
         if channel is None:
-            channel = self.bot.get_channel(request_channel_id)
+            channel = self.bot.get_channel(self.VERIFICATION_LOG_CHANNEL_ID)
         if channel is None:
             return False
 

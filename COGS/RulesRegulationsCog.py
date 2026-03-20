@@ -7,6 +7,7 @@ from discord.ext import commands
 from habbo_verification_core import ServerConfigStore, VerifiedUserStore
 
 WHITE_CHECK_MARK_EMOJI = "✅"
+AWAITING_VERIFICATION_CHANNEL_ID = 1479391662076723224
 
 
 class RulesRegulationsCog(commands.Cog):

@@ -80,6 +80,8 @@ class UsernameChangeRequestView(discord.ui.View):
         if status == "Accepted":
             action_summary = await self.cog.apply_username_change_from_embed(interaction, embed)
 
+        # Update the header copy as well so resolved requests no longer look pending at a glance.
+        self._set_resolution_description(embed, status=status)
         self._upsert_status_field(embed, status=status, moderator=interaction.user.mention)
         self._upsert_action_summary_field(embed, summary=action_summary)
         embed.color = color
@@ -99,6 +101,19 @@ class UsernameChangeRequestView(discord.ui.View):
         if match is None:
             return None
         return int(match.group(1))
+
+    @staticmethod
+    def _set_resolution_description(embed: discord.Embed, *, status: str) -> None:
+        """Keep the embed description aligned with the current moderation state."""
+
+        resolution_descriptions = {
+            "Accepted": "Accepted by admin. The approved username change has been processed.",
+            "Declined": "Declined by admin. No username or nickname changes were applied.",
+        }
+        embed.description = resolution_descriptions.get(
+            status,
+            "Pending admin review. No username or nickname changes have been applied.",
+        )
 
     @staticmethod
     def _upsert_status_field(embed: discord.Embed, *, status: str, moderator: str) -> None:

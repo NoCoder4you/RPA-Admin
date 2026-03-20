@@ -15,6 +15,7 @@ from habbo_verification_core import (
     VerificationManager,
     VerifiedUserStore,
     ServerConfigStore,
+    SpecialUnitStore,
     fetch_habbo_group_ids,
     fetch_habbo_profile,
     motto_contains_code,
@@ -180,6 +181,58 @@ class VerifiedUserStoreTests(unittest.TestCase):
                 ],
             )
 
+
+
+
+class SpecialUnitStoreTests(unittest.TestCase):
+    """Validate JSON persistence/parsing for special-unit auto-role mappings."""
+
+    def test_get_unit_config_returns_normalized_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "JSON" / "InterlinkedRoles.json"
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(
+                json.dumps([
+                    {
+                        "special_unit_server_id": "222",
+                        "main_server_id": "111",
+                        "main_server_role_id": "333",
+                        "special_unit_role_id": "444",
+                    }
+                ]),
+                encoding="utf-8",
+            )
+
+            store = SpecialUnitStore(file_path=file_path)
+            config = store.get_unit_config(222)
+
+            self.assertIsNotNone(config)
+            self.assertEqual(config.special_unit_server_id, 222)
+            self.assertEqual(config.main_server_id, 111)
+            self.assertEqual(config.main_server_role_id, 333)
+            self.assertEqual(config.special_unit_role_id, 444)
+
+    def test_get_all_unit_configs_skips_invalid_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "JSON" / "InterlinkedRoles.json"
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(
+                json.dumps([
+                    {
+                        "special_unit_server_id": "222",
+                        "main_server_id": "111",
+                        "main_server_role_id": "333",
+                        "special_unit_role_id": "444",
+                    },
+                    {"special_unit_server_id": "bad"},
+                    "not-a-dict",
+                ]),
+                encoding="utf-8",
+            )
+
+            store = SpecialUnitStore(file_path=file_path)
+
+            self.assertEqual(list(store.get_all_unit_configs().keys()), [222])
 
 class ServerConfigStoreTests(unittest.TestCase):
     """Validate single-server audit-channel resolution from serverconfig.json."""

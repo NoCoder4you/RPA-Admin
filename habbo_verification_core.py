@@ -91,6 +91,64 @@ class VerificationManager:
         return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
+
+
+@dataclass(frozen=True)
+class SpecialUnitConfig:
+    """Normalized rule describing how one special-unit server mirrors a main-server role."""
+
+    special_unit_server_id: int
+    main_server_id: int
+    main_server_role_id: int
+    special_unit_role_id: int
+
+
+class SpecialUnitStore:
+    """Persist special-unit auto-role mappings in JSON/InterlinkedRoles.json."""
+
+    def __init__(self, file_path: Path | None = None) -> None:
+        # Store special-unit settings alongside the bot's other JSON-backed configuration files.
+        self.file_path = file_path or json_file("InterlinkedRoles.json")
+
+    def get_unit_config(self, special_unit_server_id: int) -> SpecialUnitConfig | None:
+        """Return one normalized unit rule for the joining guild, if it exists."""
+
+        return self.get_all_unit_configs().get(int(special_unit_server_id))
+
+    def get_all_unit_configs(self) -> dict[int, SpecialUnitConfig]:
+        """Load and normalize every configured special-unit server mapping from disk."""
+
+        if not self.file_path.exists():
+            return {}
+
+        try:
+            raw_data = json.loads(self.file_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
+
+        if not isinstance(raw_data, list):
+            return {}
+
+        normalized: dict[int, SpecialUnitConfig] = {}
+        for entry in raw_data:
+            if not isinstance(entry, dict):
+                continue
+
+            try:
+                config = SpecialUnitConfig(
+                    special_unit_server_id=int(entry.get("special_unit_server_id")),
+                    main_server_id=int(entry.get("main_server_id")),
+                    main_server_role_id=int(entry.get("main_server_role_id")),
+                    special_unit_role_id=int(entry.get("special_unit_role_id")),
+                )
+            except (TypeError, ValueError):
+                # Skip incomplete or malformed rows so one bad config does not break the whole feature.
+                continue
+
+            normalized[config.special_unit_server_id] = config
+
+        return normalized
+
 class VerifiedUserStore:
     """Persist verified Discord-to-Habbo mappings in JSON/VerifiedUsers.json."""
 

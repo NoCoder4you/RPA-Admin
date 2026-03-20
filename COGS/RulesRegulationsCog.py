@@ -167,7 +167,10 @@ class RulesRegulationsCog(commands.Cog):
         # verification queue channel so the embed + ping always appears in one predictable place.
         channel = guild.get_channel(AWAITING_VERIFICATION_CHANNEL_ID)
         if channel is None:
-            return
+            try:
+                channel = await guild.fetch_channel(channel_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException, AttributeError):
+                return
 
         embed = discord.Embed(
             title="Awaiting Verification",
@@ -241,7 +244,7 @@ class RulesRegulationsCog(commands.Cog):
         if self.verified_store.is_verified(str(payload.user_id)):
             return
 
-        role = discord.utils.get(guild.roles, name="Awaiting Verification")
+        role = self._get_awaiting_verification_role(guild)
         if role is None or role in member.roles:
             return
 
@@ -251,8 +254,39 @@ class RulesRegulationsCog(commands.Cog):
         except (discord.Forbidden, discord.HTTPException):
             return
 
-        # Send one tailored onboarding embed per newly staged member so they know the exact next steps.
-        await self._send_awaiting_verification_embed(guild=guild, member=member)
+        # The actual onboarding embed is dispatched from on_member_update so the same behavior also
+        # runs for manual role grants and other automation flows.
+
+    def _get_awaiting_verification_role(self, guild: discord.Guild) -> discord.Role | None:
+        """Resolve the Awaiting Verification role from config first, then fall back to the legacy role name."""
+
+        configured_role_id = self.server_config_store.get_awaiting_verification_role_id()
+        if configured_role_id is not None:
+            configured_role = guild.get_role(configured_role_id)
+            if configured_role is not None:
+                return configured_role
+
+        # Preserve compatibility with existing deployments that have not stored the role ID yet.
+        return discord.utils.get(guild.roles, name="Awaiting Verification")
+
+    @commands.Cog.listener()
+    async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
+        """Send onboarding instructions whenever the Awaiting Verification role is newly added."""
+
+        awaiting_role = self._get_awaiting_verification_role(after.guild)
+        if awaiting_role is None:
+            return
+
+        before_role_ids = {role.id for role in before.roles}
+        if awaiting_role.id in before_role_ids:
+            return
+
+        after_role_ids = {role.id for role in after.roles}
+        if awaiting_role.id not in after_role_ids:
+            return
+
+        # This hook covers role grants from any source, including manual staff actions or other cogs.
+        await self._send_awaiting_verification_embed(guild=after.guild, member=after)
 
     async def _remove_member_reaction_from_message(
         self,

@@ -15,6 +15,7 @@ from habbo_verification_core import (
     VerificationManager,
     VerifiedUserStore,
     ServerConfigStore,
+    SpecialUnitStore,
     fetch_habbo_group_ids,
     fetch_habbo_profile,
     motto_contains_code,
@@ -181,6 +182,58 @@ class VerifiedUserStoreTests(unittest.TestCase):
             )
 
 
+
+
+class SpecialUnitStoreTests(unittest.TestCase):
+    """Validate JSON persistence/parsing for special-unit auto-role mappings."""
+
+    def test_get_unit_config_returns_normalized_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "JSON" / "InterlinkedRoles.json"
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(
+                json.dumps([
+                    {
+                        "special_unit_server_id": "222",
+                        "main_server_id": "111",
+                        "main_server_role_id": "333",
+                        "special_unit_role_id": "444",
+                    }
+                ]),
+                encoding="utf-8",
+            )
+
+            store = SpecialUnitStore(file_path=file_path)
+            config = store.get_unit_config(222)
+
+            self.assertIsNotNone(config)
+            self.assertEqual(config.special_unit_server_id, 222)
+            self.assertEqual(config.main_server_id, 111)
+            self.assertEqual(config.main_server_role_id, 333)
+            self.assertEqual(config.special_unit_role_id, 444)
+
+    def test_get_all_unit_configs_skips_invalid_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "JSON" / "InterlinkedRoles.json"
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(
+                json.dumps([
+                    {
+                        "special_unit_server_id": "222",
+                        "main_server_id": "111",
+                        "main_server_role_id": "333",
+                        "special_unit_role_id": "444",
+                    },
+                    {"special_unit_server_id": "bad"},
+                    "not-a-dict",
+                ]),
+                encoding="utf-8",
+            )
+
+            store = SpecialUnitStore(file_path=file_path)
+
+            self.assertEqual(list(store.get_all_unit_configs().keys()), [222])
+
 class ServerConfigStoreTests(unittest.TestCase):
     """Validate single-server audit-channel resolution from serverconfig.json."""
 
@@ -288,6 +341,21 @@ class ServerConfigStoreTests(unittest.TestCase):
             self.assertEqual(data.get("audit_log_channel_id"), "456")
             self.assertEqual(data.get("awaiting_verification_channel_id"), "1479391662076723224")
             self.assertEqual(store.get_awaiting_verification_channel_id(), 1479391662076723224)
+
+    def test_set_and_get_awaiting_verification_role_id(self) -> None:
+        """Ensure the Awaiting Verification role ID is persisted in serverconfig.json."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "serverconfig.json"
+            file_path.write_text(json.dumps({"audit_log_channel_id": "456"}), encoding="utf-8")
+
+            store = ServerConfigStore(file_path=file_path)
+            store.set_awaiting_verification_role_id(1481443898369900667)
+
+            data = json.loads(file_path.read_text(encoding="utf-8"))
+            self.assertEqual(data.get("audit_log_channel_id"), "456")
+            self.assertEqual(data.get("awaiting_verification_role_id"), "1481443898369900667")
+            self.assertEqual(store.get_awaiting_verification_role_id(), 1481443898369900667)
 
     def test_set_and_get_base_rpa_employee_role_id(self) -> None:
         """Ensure the shared employee role ID is persisted in serverconfig.json."""

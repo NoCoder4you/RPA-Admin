@@ -7,6 +7,76 @@ from discord import app_commands
 from discord.ext import commands
 
 
+class EmbedMakerModal(discord.ui.Modal):
+    """Collect embed details in a Discord modal before posting publicly."""
+
+    def __init__(self, cog: "EmbedMakerCog") -> None:
+        super().__init__(title="Embed Maker")
+        self.cog = cog
+
+        # Keep each field explicit so staff can quickly understand what information is required.
+        self.embed_title = discord.ui.TextInput(
+            label="Embed title",
+            placeholder="Facility Alert",
+            min_length=1,
+            max_length=256,
+        )
+        self.description = discord.ui.TextInput(
+            label="Embed description",
+            placeholder="Share the anonymous message here.",
+            style=discord.TextStyle.paragraph,
+            min_length=1,
+            max_length=4000,
+        )
+        self.color = discord.ui.TextInput(
+            label="Hex color (optional)",
+            placeholder="#ff0000",
+            required=False,
+            min_length=6,
+            max_length=7,
+        )
+
+        self.add_item(self.embed_title)
+        self.add_item(self.description)
+        self.add_item(self.color)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        """Validate modal input and post the requested anonymous embed."""
+
+        # Re-check context at submit time because the originating channel could have disappeared.
+        if interaction.guild is None or interaction.channel is None:
+            await interaction.response.send_message(
+                "This command can only be used in a server channel.",
+                ephemeral=True,
+            )
+            return
+
+        # Resolve the bot avatar during submission so the sent embed reflects the current bot identity.
+        bot_avatar = getattr(getattr(interaction.guild, "me", None), "display_avatar", None)
+        thumbnail_url = str(bot_avatar.url) if bot_avatar and getattr(bot_avatar, "url", None) else None
+
+        try:
+            embed = self.cog._build_embed(
+                title=str(self.embed_title),
+                description=str(self.description),
+                thumbnail_url=thumbnail_url,
+                color_hex=str(self.color) or None,
+            )
+        except ValueError:
+            await interaction.response.send_message(
+                "Please provide a valid 6-digit hex color such as `#ff0000`.",
+                ephemeral=True,
+            )
+            return
+
+        # Send publicly first, then confirm privately so the author remains anonymous to everyone else.
+        await interaction.channel.send(embed=embed)
+        await interaction.response.send_message(
+            "✅ Anonymous embed sent.",
+            ephemeral=True,
+        )
+
+
 class EmbedMakerCog(commands.Cog):
     """Community utility cog for sending branded anonymous embeds."""
 
@@ -59,22 +129,10 @@ class EmbedMakerCog(commands.Cog):
         return embed
 
     @app_commands.command(name="embedmaker", description="Create and post an anonymous branded embed.")
-    @app_commands.describe(
-        title="The title shown at the top of the embed",
-        description="The main message body shown inside the embed",
-        color="Optional hex color such as #ff0000",
-    )
     @app_commands.checks.has_permissions(manage_messages=True)
-    async def embedmaker(
-        self,
-        interaction: discord.Interaction,
-        title: app_commands.Range[str, 1, 256],
-        description: app_commands.Range[str, 1, 4000],
-        color: str | None = None,
-    ) -> None:
-        """Send a channel-visible embed without exposing who invoked the command."""
+    async def embedmaker(self, interaction: discord.Interaction) -> None:
+        """Open a modal so staff can compose the anonymous embed in a richer UI."""
 
-        # The command posts publicly in the current server channel, so require guild context.
         if interaction.guild is None or interaction.channel is None:
             await interaction.response.send_message(
                 "This command can only be used in a server channel.",
@@ -82,30 +140,8 @@ class EmbedMakerCog(commands.Cog):
             )
             return
 
-        # Resolve the bot avatar once so the embed uses the bot identity rather than the author's.
-        bot_avatar = getattr(getattr(interaction.guild, "me", None), "display_avatar", None)
-        thumbnail_url = str(bot_avatar.url) if bot_avatar and getattr(bot_avatar, "url", None) else None
-
-        try:
-            embed = self._build_embed(
-                title=title,
-                description=description,
-                thumbnail_url=thumbnail_url,
-                color_hex=color,
-            )
-        except ValueError:
-            await interaction.response.send_message(
-                "Please provide a valid 6-digit hex color such as `#ff0000`.",
-                ephemeral=True,
-            )
-            return
-
-        # Post the anonymous embed to the active channel, then privately confirm success.
-        await interaction.channel.send(embed=embed)
-        await interaction.response.send_message(
-            "✅ Anonymous embed sent.",
-            ephemeral=True,
-        )
+        # The modal keeps the slash command concise while still collecting all embed content.
+        await interaction.response.send_modal(EmbedMakerModal(self))
 
     @embedmaker.error
     async def embedmaker_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:

@@ -20,6 +20,8 @@ from habbo_verification_core import (
 class HabboRoleUpdaterCog(commands.Cog):
     """Cog that periodically syncs roles for all previously verified users."""
 
+    VERIFICATION_LOG_CHANNEL_ID = 1481456997726425168
+
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.verified_store = VerifiedUserStore()
@@ -369,14 +371,10 @@ class HabboRoleUpdaterCog(commands.Cog):
     ) -> None:
         """Post a verification-log summary whenever a stored verified user rejoins the server."""
 
-        verification_log_channel_id = self.server_config_store.get_request_channel_id()
-        if verification_log_channel_id is None:
-            return
-
-        # Resolve the verification log destination from serverconfig.json so staff can retarget it without code edits.
-        channel = guild.get_channel(verification_log_channel_id)
+        # Rejoin verification embeds are required to land in the dedicated staff verification log channel.
+        channel = guild.get_channel(self.VERIFICATION_LOG_CHANNEL_ID)
         if channel is None:
-            channel = self.bot.get_channel(verification_log_channel_id)
+            channel = self.bot.get_channel(self.VERIFICATION_LOG_CHANNEL_ID)
         if channel is None:
             return
 

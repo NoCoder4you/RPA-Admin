@@ -63,7 +63,6 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
 
         cog = HabboRoleUpdaterCog.__new__(HabboRoleUpdaterCog)
         cog.bot = SimpleNamespace(get_channel=lambda _channel_id: None)
-        cog.server_config_store = SimpleNamespace(get_request_channel_id=lambda: 303)
         cog.verified_store = SimpleNamespace(get_habbo_username=lambda discord_id: "Siren" if discord_id == "456" else None)
         cog.verify_restriction_store = SimpleNamespace(get_group_for_username=lambda _username: None)
         cog._assign_roles_to_member_from_profile = AsyncMock(
@@ -107,7 +106,6 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
 
         cog = HabboRoleUpdaterCog.__new__(HabboRoleUpdaterCog)
         cog.bot = SimpleNamespace(get_channel=lambda _channel_id: None)
-        cog.server_config_store = SimpleNamespace(get_request_channel_id=lambda: 303)
         cog.verified_store = SimpleNamespace(get_habbo_username=lambda discord_id: "Danger" if discord_id == "456" else None)
         cog.verify_restriction_store = SimpleNamespace(get_group_for_username=lambda username: "BoS" if username == "Danger" else None)
         cog._assign_roles_to_member_from_profile = AsyncMock()
@@ -161,9 +159,10 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
 
         cog = HabboRoleUpdaterCog.__new__(HabboRoleUpdaterCog)
         cog.bot = SimpleNamespace(get_channel=lambda _channel_id: None)
-        cog.server_config_store = SimpleNamespace(get_request_channel_id=lambda: 404)
         verification_channel = SimpleNamespace(send=AsyncMock())
-        guild = SimpleNamespace(get_channel=lambda channel_id: verification_channel if channel_id == 404 else None)
+        guild = SimpleNamespace(
+            get_channel=lambda channel_id: verification_channel if channel_id == cog.VERIFICATION_LOG_CHANNEL_ID else None
+        )
         member = SimpleNamespace(mention="<@789>")
 
         await cog._send_verification_rejoin_log(
@@ -188,12 +187,11 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fields["Added Roles"], "none")
         self.assertEqual(fields["Removed Roles"], "none")
 
-    async def test_send_verification_rejoin_log_skips_when_serverconfig_has_no_channel(self) -> None:
-        """Do not try to send a join-time verification log when no channel is configured yet."""
+    async def test_send_verification_rejoin_log_skips_when_fixed_log_channel_is_unavailable(self) -> None:
+        """Do not raise if the dedicated verification log channel cannot be resolved."""
 
         cog = HabboRoleUpdaterCog.__new__(HabboRoleUpdaterCog)
-        cog.bot = SimpleNamespace(get_channel=AsyncMock())
-        cog.server_config_store = SimpleNamespace(get_request_channel_id=lambda: None)
+        cog.bot = SimpleNamespace(get_channel=AsyncMock(return_value=None))
         guild = SimpleNamespace(get_channel=AsyncMock())
         member = SimpleNamespace(mention="<@999>")
 
@@ -207,7 +205,7 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
             removed_role_names=[],
         )
 
-        guild.get_channel.assert_not_called()
+        guild.get_channel.assert_called_once_with(cog.VERIFICATION_LOG_CHANNEL_ID)
 
 
 if __name__ == "__main__":

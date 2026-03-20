@@ -37,18 +37,19 @@ class UsernameChangeCogTests(unittest.IsolatedAsyncioTestCase):
         original_fetch = username_change_module.fetch_habbo_profile
         username_change_module.fetch_habbo_profile = lambda _username: {"name": "NewHabbo"}
         try:
-            result = await cog._process_username_change(interaction, " NewHabbo ")
+            was_successful, result = await cog._process_username_change(interaction, " NewHabbo ")
         finally:
             username_change_module.fetch_habbo_profile = original_fetch
 
+        self.assertTrue(was_successful)
         cog.verified_store.save.assert_not_called()
         cog._send_verification_log_embed.assert_awaited_once_with(
             interaction=interaction,
             previous_username="OldHabbo",
             requested_username="NewHabbo",
         )
-        self.assertIn("sent for admin approval", result)
-        self.assertIn("approve button", result.casefold())
+        self.assertIn("sent for admin review", result)
+        self.assertIn("nothing updates until an admin approves it", result.casefold())
 
     async def test_process_username_change_requires_existing_verified_user(self) -> None:
         cog = UsernameChangeCog(bot=SimpleNamespace())
@@ -63,8 +64,9 @@ class UsernameChangeCogTests(unittest.IsolatedAsyncioTestCase):
 
         interaction = SimpleNamespace(user=SimpleNamespace(id=123), guild=object())
 
-        result = await cog._process_username_change(interaction, "Anything")
+        was_successful, result = await cog._process_username_change(interaction, "Anything")
 
+        self.assertFalse(was_successful)
         self.assertEqual(
             result,
             "You must already exist in VerifiedUsers.json before you can request a username change.",
@@ -78,8 +80,9 @@ class UsernameChangeCogTests(unittest.IsolatedAsyncioTestCase):
         )
         interaction = SimpleNamespace(user=SimpleNamespace(id=123), guild=object())
 
-        result = await cog._process_username_change(interaction, " siren ")
+        was_successful, result = await cog._process_username_change(interaction, " siren ")
 
+        self.assertFalse(was_successful)
         self.assertEqual(
             result,
             "You cannot request the same Habbo username that is already saved for you.",
@@ -97,7 +100,10 @@ class UsernameChangeCogTests(unittest.IsolatedAsyncioTestCase):
         member = SimpleNamespace(id=123, nick="OldHabbo")
         guild = SimpleNamespace(get_member=lambda member_id: member if member_id == 123 else None)
         interaction = SimpleNamespace(guild=guild)
-        embed = discord.Embed(title="Habbo Username Change Request")
+        embed = discord.Embed(
+            title="Habbo Username Change Request",
+            description="Pending admin review. No username or nickname changes have been applied.",
+        )
         embed.add_field(name="Member", value="<@123>", inline=False)
         embed.add_field(name="Previous Username", value="OldHabbo", inline=True)
         embed.add_field(name="Requested Username", value="NewHabbo", inline=True)
@@ -167,10 +173,29 @@ class UsernameChangeCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(embed.title, "Habbo Username Change Request")
         self.assertEqual(embed.fields[1].value, "OldHabbo")
         self.assertEqual(embed.fields[2].value, "NewHabbo")
+        self.assertEqual(embed.fields[3].name, "Status")
         self.assertEqual(embed.fields[3].value, "Pending admin review")
         view = sent_messages[0]["view"]
         self.assertIsInstance(view, UsernameChangeRequestView)
         self.assertEqual([child.label for child in view.children], ["Approve", "Decline"])
+
+    async def test_usernamechange_sends_error_followup_as_embed(self) -> None:
+        interaction = SimpleNamespace(
+            response=SimpleNamespace(defer=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        cog = UsernameChangeCog(bot=SimpleNamespace())
+        cog._process_username_change = AsyncMock(return_value=(False, "Please provide a valid Habbo username."))
+
+        await cog.usernamechange.callback(cog, interaction, "")
+
+        interaction.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
+        interaction.followup.send.assert_awaited_once()
+        kwargs = interaction.followup.send.await_args.kwargs
+        self.assertTrue(kwargs["ephemeral"])
+        self.assertEqual(kwargs["embed"].title, "Username Change Error")
+        self.assertEqual(kwargs["embed"].description, "Please provide a valid Habbo username.")
+
 
 
 class UsernameChangeRequestViewTests(unittest.IsolatedAsyncioTestCase):
@@ -184,16 +209,20 @@ class UsernameChangeRequestViewTests(unittest.IsolatedAsyncioTestCase):
         allowed = await view.interaction_check(interaction)
 
         self.assertFalse(allowed)
-        response.send_message.assert_awaited_once_with(
-            "You need the configured Discord Admin role to use these buttons.",
-            ephemeral=True,
-        )
+        response.send_message.assert_awaited_once()
+        self.assertTrue(response.send_message.await_args.kwargs["ephemeral"])
+        error_embed = response.send_message.await_args.kwargs["embed"]
+        self.assertEqual(error_embed.title, "Username Change Error")
+        self.assertEqual(error_embed.description, "You need the configured Discord Admin role to use these buttons.")
 
     async def test_accept_button_marks_embed_as_accepted_disables_buttons_and_applies_change(self) -> None:
         cog = SimpleNamespace(apply_username_change_from_embed=AsyncMock(return_value="Applied change."))
         view = UsernameChangeRequestView(cog, admin_role_id=1484029753185931336)
-        embed = discord.Embed(title="Habbo Username Change Request")
-        embed.add_field(name="Request Status", value="Pending admin review", inline=False)
+        embed = discord.Embed(
+            title="Habbo Username Change Request",
+            description="Pending admin review. No username or nickname changes have been applied.",
+        )
+        embed.add_field(name="Status", value="Pending admin review", inline=False)
         response = SimpleNamespace(edit_message=AsyncMock())
         interaction = SimpleNamespace(
             user=SimpleNamespace(mention="<@555>"),
@@ -207,7 +236,13 @@ class UsernameChangeRequestViewTests(unittest.IsolatedAsyncioTestCase):
         response.edit_message.assert_awaited_once()
         edited_embed = response.edit_message.await_args.kwargs["embed"]
         edited_view = response.edit_message.await_args.kwargs["view"]
+        self.assertEqual(
+            edited_embed.description,
+            "Accepted by admin. The approved username change has been processed.",
+        )
+        self.assertEqual(edited_embed.fields[0].name, "Status")
         self.assertEqual(edited_embed.fields[0].value, "Accepted by <@555>")
+        self.assertEqual(edited_embed.fields[1].name, "Outcome")
         self.assertEqual(edited_embed.fields[1].value, "Applied change.")
         self.assertTrue(all(child.disabled for child in edited_view.children))
 
@@ -224,9 +259,14 @@ class UsernameChangeRequestViewTests(unittest.IsolatedAsyncioTestCase):
         await view.decline.callback(interaction)
 
         edited_embed = response.edit_message.await_args.kwargs["embed"]
-        self.assertEqual(edited_embed.fields[0].name, "Request Status")
+        self.assertEqual(
+            edited_embed.description,
+            "Declined by admin. No username or nickname changes were applied.",
+        )
+        self.assertEqual(edited_embed.fields[0].name, "Status")
         self.assertEqual(edited_embed.fields[0].value, "Declined by <@777>")
-        self.assertEqual(edited_embed.fields[1].value, "No username or nickname changes were applied.")
+        self.assertEqual(edited_embed.fields[1].name, "Outcome")
+        self.assertEqual(edited_embed.fields[1].value, "No changes applied.")
 
 
 if __name__ == "__main__":

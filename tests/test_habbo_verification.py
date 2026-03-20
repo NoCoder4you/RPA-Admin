@@ -289,6 +289,21 @@ class ServerConfigStoreTests(unittest.TestCase):
             self.assertEqual(data.get("awaiting_verification_channel_id"), "1479391662076723224")
             self.assertEqual(store.get_awaiting_verification_channel_id(), 1479391662076723224)
 
+    def test_set_and_get_awaiting_verification_role_id(self) -> None:
+        """Ensure the Awaiting Verification role ID is persisted in serverconfig.json."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "serverconfig.json"
+            file_path.write_text(json.dumps({"audit_log_channel_id": "456"}), encoding="utf-8")
+
+            store = ServerConfigStore(file_path=file_path)
+            store.set_awaiting_verification_role_id(1481443898369900667)
+
+            data = json.loads(file_path.read_text(encoding="utf-8"))
+            self.assertEqual(data.get("audit_log_channel_id"), "456")
+            self.assertEqual(data.get("awaiting_verification_role_id"), "1481443898369900667")
+            self.assertEqual(store.get_awaiting_verification_role_id(), 1481443898369900667)
+
     def test_set_and_get_base_rpa_employee_role_id(self) -> None:
         """Ensure the shared employee role ID is persisted in serverconfig.json."""
 

@@ -172,6 +172,7 @@ class ServerConfigStore:
       "base_rpa_employee_role_id": "789",
       "verification_reaction_message_id": "101112",
       "rules_acknowledgement_message_id": "111213",
+      "awaiting_verification_channel_id": "111214",
       "request_channel_id": "121314",
       "admin_role_id": "151617",
       "webhook_archive_channel_id": "181920",
@@ -266,6 +267,19 @@ class ServerConfigStore:
 
         config = self._read_config()
         config["rules_acknowledgement_message_id"] = str(message_id)
+        self._write_config(config)
+
+    def get_awaiting_verification_channel_id(self) -> int | None:
+        """Return the configured channel ID used for per-user Awaiting Verification onboarding embeds."""
+
+        config = self._read_config()
+        return self._safe_int(config.get("awaiting_verification_channel_id"))
+
+    def set_awaiting_verification_channel_id(self, channel_id: int) -> None:
+        """Persist the Awaiting Verification onboarding channel ID while preserving existing config keys."""
+
+        config = self._read_config()
+        config["awaiting_verification_channel_id"] = str(channel_id)
         self._write_config(config)
 
     def get_request_channel_id(self) -> int | None:

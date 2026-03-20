@@ -7,7 +7,6 @@ from discord.ext import commands
 from habbo_verification_core import ServerConfigStore, VerifiedUserStore
 
 WHITE_CHECK_MARK_EMOJI = "✅"
-AWAITING_VERIFICATION_CHANNEL_ID = 1479391662076723224
 
 
 class RulesRegulationsCog(commands.Cog):
@@ -163,8 +162,14 @@ class RulesRegulationsCog(commands.Cog):
     ) -> None:
         """Post a per-member onboarding embed in the verification channel after staging."""
 
-        # Route all staging notices into the dedicated verification-help channel requested by staff.
-        channel = guild.get_channel(AWAITING_VERIFICATION_CHANNEL_ID)
+        # Resolve the help-channel destination from shared serverconfig.json so staff can retarget it
+        # without touching code again.
+        channel_id = self.server_config_store.get_awaiting_verification_channel_id()
+        if channel_id is None:
+            return
+
+        # Route all staging notices into the configured verification-help channel requested by staff.
+        channel = guild.get_channel(channel_id)
         if channel is None:
             return
 

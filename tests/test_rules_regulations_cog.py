@@ -7,15 +7,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 try:
-    from COGS.RulesRegulationsCog import (
-        AWAITING_VERIFICATION_CHANNEL_ID,
-        RulesRegulationsCog,
-        WHITE_CHECK_MARK_EMOJI,
-    )
+    from COGS.RulesRegulationsCog import RulesRegulationsCog, WHITE_CHECK_MARK_EMOJI
 except Exception:  # pragma: no cover - environment without discord.py
     RulesRegulationsCog = None
-    AWAITING_VERIFICATION_CHANNEL_ID = 1479391662076723224
     WHITE_CHECK_MARK_EMOJI = "✅"
+
+AWAITING_VERIFICATION_CHANNEL_ID = 1479391662076723224
 
 
 @unittest.skipIf(RulesRegulationsCog is None, "discord.py is not installed in the test environment")
@@ -146,6 +143,7 @@ class RulesRegulationsCogTests(unittest.IsolatedAsyncioTestCase):
         cog.server_config_store = MagicMock()
         cog.verified_store = MagicMock(is_verified=MagicMock(return_value=False))
         cog.server_config_store.get_rules_acknowledgement_message_id.return_value = 555
+        cog.server_config_store.get_awaiting_verification_channel_id.return_value = AWAITING_VERIFICATION_CHANNEL_ID
 
         payload = MagicMock(guild_id=123, user_id=111, message_id=555, channel_id=222, emoji=WHITE_CHECK_MARK_EMOJI)
 
@@ -157,6 +155,7 @@ class RulesRegulationsCogTests(unittest.IsolatedAsyncioTestCase):
             role,
             reason="Reacted with white check mark on rules acknowledgement message",
         )
+        cog.server_config_store.get_awaiting_verification_channel_id.assert_called_once_with()
         guild.get_channel.assert_called_once_with(AWAITING_VERIFICATION_CHANNEL_ID)
         verification_channel.send.assert_awaited_once()
         self.assertEqual(verification_channel.send.await_args.kwargs["content"], member.mention)
@@ -188,6 +187,7 @@ class RulesRegulationsCogTests(unittest.IsolatedAsyncioTestCase):
         cog.server_config_store = MagicMock()
         cog.verified_store = MagicMock(is_verified=MagicMock(return_value=True))
         cog.server_config_store.get_rules_acknowledgement_message_id.return_value = 555
+        cog.server_config_store.get_awaiting_verification_channel_id.return_value = AWAITING_VERIFICATION_CHANNEL_ID
 
         payload = MagicMock(guild_id=123, user_id=111, message_id=555, channel_id=222, emoji=WHITE_CHECK_MARK_EMOJI)
 
@@ -201,6 +201,7 @@ class RulesRegulationsCogTests(unittest.IsolatedAsyncioTestCase):
         """Avoid raising errors if the configured verification help channel is unavailable."""
 
         cog = RulesRegulationsCog(bot=MagicMock())
+        cog.server_config_store = MagicMock(get_awaiting_verification_channel_id=MagicMock(return_value=AWAITING_VERIFICATION_CHANNEL_ID))
         guild = MagicMock()
         guild.get_channel.return_value = None
         member = MagicMock(mention="<@111>")
@@ -208,6 +209,19 @@ class RulesRegulationsCogTests(unittest.IsolatedAsyncioTestCase):
         await cog._send_awaiting_verification_embed(guild=guild, member=member)
 
         guild.get_channel.assert_called_once_with(AWAITING_VERIFICATION_CHANNEL_ID)
+
+    async def test_send_awaiting_verification_embed_skips_when_channel_id_is_not_configured(self) -> None:
+        """Do not try to resolve or send to a channel when serverconfig has no onboarding channel ID yet."""
+
+        cog = RulesRegulationsCog(bot=MagicMock())
+        cog.server_config_store = MagicMock(get_awaiting_verification_channel_id=MagicMock(return_value=None))
+        guild = MagicMock()
+        member = MagicMock(mention="<@111>")
+
+        await cog._send_awaiting_verification_embed(guild=guild, member=member)
+
+        cog.server_config_store.get_awaiting_verification_channel_id.assert_called_once_with()
+        guild.get_channel.assert_not_called()
 
 
 if __name__ == "__main__":

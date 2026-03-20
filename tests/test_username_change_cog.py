@@ -47,8 +47,8 @@ class UsernameChangeCogTests(unittest.IsolatedAsyncioTestCase):
             previous_username="OldHabbo",
             requested_username="NewHabbo",
         )
-        self.assertIn("sent for admin approval", result)
-        self.assertIn("approve button", result.casefold())
+        self.assertIn("sent for admin review", result)
+        self.assertIn("nothing updates until an admin approves it", result.casefold())
 
     async def test_process_username_change_requires_existing_verified_user(self) -> None:
         cog = UsernameChangeCog(bot=SimpleNamespace())
@@ -167,6 +167,7 @@ class UsernameChangeCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(embed.title, "Habbo Username Change Request")
         self.assertEqual(embed.fields[1].value, "OldHabbo")
         self.assertEqual(embed.fields[2].value, "NewHabbo")
+        self.assertEqual(embed.fields[3].name, "Status")
         self.assertEqual(embed.fields[3].value, "Pending admin review")
         view = sent_messages[0]["view"]
         self.assertIsInstance(view, UsernameChangeRequestView)
@@ -193,7 +194,7 @@ class UsernameChangeRequestViewTests(unittest.IsolatedAsyncioTestCase):
         cog = SimpleNamespace(apply_username_change_from_embed=AsyncMock(return_value="Applied change."))
         view = UsernameChangeRequestView(cog, admin_role_id=1484029753185931336)
         embed = discord.Embed(title="Habbo Username Change Request")
-        embed.add_field(name="Request Status", value="Pending admin review", inline=False)
+        embed.add_field(name="Status", value="Pending admin review", inline=False)
         response = SimpleNamespace(edit_message=AsyncMock())
         interaction = SimpleNamespace(
             user=SimpleNamespace(mention="<@555>"),
@@ -207,7 +208,9 @@ class UsernameChangeRequestViewTests(unittest.IsolatedAsyncioTestCase):
         response.edit_message.assert_awaited_once()
         edited_embed = response.edit_message.await_args.kwargs["embed"]
         edited_view = response.edit_message.await_args.kwargs["view"]
+        self.assertEqual(edited_embed.fields[0].name, "Status")
         self.assertEqual(edited_embed.fields[0].value, "Accepted by <@555>")
+        self.assertEqual(edited_embed.fields[1].name, "Outcome")
         self.assertEqual(edited_embed.fields[1].value, "Applied change.")
         self.assertTrue(all(child.disabled for child in edited_view.children))
 
@@ -224,9 +227,10 @@ class UsernameChangeRequestViewTests(unittest.IsolatedAsyncioTestCase):
         await view.decline.callback(interaction)
 
         edited_embed = response.edit_message.await_args.kwargs["embed"]
-        self.assertEqual(edited_embed.fields[0].name, "Request Status")
+        self.assertEqual(edited_embed.fields[0].name, "Status")
         self.assertEqual(edited_embed.fields[0].value, "Declined by <@777>")
-        self.assertEqual(edited_embed.fields[1].value, "No username or nickname changes were applied.")
+        self.assertEqual(edited_embed.fields[1].name, "Outcome")
+        self.assertEqual(edited_embed.fields[1].value, "No changes applied.")
 
 
 if __name__ == "__main__":

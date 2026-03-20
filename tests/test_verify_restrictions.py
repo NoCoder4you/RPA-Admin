@@ -55,9 +55,9 @@ class VerifyRestrictionStoreTests(unittest.TestCase):
 
 @unittest.skipIf(VerifyRestrictionsCog is None, "discord.py is not installed in the test environment")
 class VerifyRestrictionsCogCommandTests(unittest.IsolatedAsyncioTestCase):
-    """Validate grouped slash commands for maintaining verification restriction lists."""
+    """Validate the combined slash commands for maintaining verification restriction lists."""
 
-    async def test_dnh_add_reports_success(self) -> None:
+    async def test_dnh_command_add_reports_success(self) -> None:
         cog = VerifyRestrictionsCog(bot=MagicMock())
         cog.restriction_store = SimpleNamespace(
             add_username=MagicMock(return_value=True),
@@ -66,14 +66,14 @@ class VerifyRestrictionsCogCommandTests(unittest.IsolatedAsyncioTestCase):
         )
         interaction = SimpleNamespace(response=SimpleNamespace(send_message=AsyncMock()))
 
-        await cog.dnh_add.callback(cog, interaction, "Siren")
+        await cog.dnh.callback(cog, interaction, "add", "Siren")
 
         interaction.response.send_message.assert_awaited_once_with(
             "✅ Added **Siren** to **DNH** verification restrictions.",
             ephemeral=True,
         )
 
-    async def test_bos_remove_reports_missing_entry(self) -> None:
+    async def test_bos_command_remove_reports_missing_entry(self) -> None:
         cog = VerifyRestrictionsCog(bot=MagicMock())
         cog.restriction_store = SimpleNamespace(
             remove_username=MagicMock(return_value=False),
@@ -82,7 +82,7 @@ class VerifyRestrictionsCogCommandTests(unittest.IsolatedAsyncioTestCase):
         )
         interaction = SimpleNamespace(response=SimpleNamespace(send_message=AsyncMock()))
 
-        await cog.bos_remove.callback(cog, interaction, "Danger")
+        await cog.bos.callback(cog, interaction, "remove", "Danger")
 
         interaction.response.send_message.assert_awaited_once_with(
             "**Danger** was not listed in **BoS**.",

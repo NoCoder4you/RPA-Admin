@@ -12,16 +12,6 @@ from habbo_verification_core import VerifyRestrictionStore
 class VerifyRestrictionsCog(commands.Cog):
     """Staff cog for maintaining the DNH and BoS username restriction lists."""
 
-    # The user asked to remove `/verifyrestrictions`, so expose top-level `/dnh` and `/bos` groups instead.
-    dnh_group = app_commands.Group(
-        name="dnh",
-        description="Manage the Do Not Hire verification restriction list.",
-    )
-    bos_group = app_commands.Group(
-        name="bos",
-        description="Manage the Ban on Sight verification restriction list.",
-    )
-
     def __init__(self, bot: commands.Bot) -> None:
         # Keep shared state on the cog so command callbacks stay easy to test and mock.
         self.bot = bot
@@ -72,84 +62,68 @@ class VerifyRestrictionsCog(commands.Cog):
 
         raise ValueError(f"Unsupported restriction action: {action}")
 
-    @dnh_group.command(name="add", description="Add a Habbo username to the DNH restriction list.")
-    @app_commands.describe(username="Habbo username that should be marked Do Not Hire during verification")
+    @app_commands.command(name="dnh", description="Add or remove a Habbo username from the DNH restriction list.")
+    @app_commands.describe(
+        action="Whether to add or remove the Habbo username from the DNH list",
+        username="Habbo username that should be updated in the DNH restriction list",
+    )
+    @app_commands.choices(
+        action=[
+            app_commands.Choice(name="add", value="add"),
+            app_commands.Choice(name="remove", value="remove"),
+        ]
+    )
     @app_commands.checks.has_permissions(manage_guild=True)
-    async def dnh_add(
+    async def dnh(
         self,
         interaction: discord.Interaction,
+        action: str,
         username: str,
     ) -> None:
-        """Add one Habbo username to the DNH restriction group."""
+        """Add or remove one Habbo username from the DNH restriction list."""
 
         await self._handle_restriction_update(
             interaction,
             group_name=VerifyRestrictionStore.GROUP_DNH,
             username=username,
-            action="add",
+            action=action,
         )
 
-    @dnh_group.command(name="remove", description="Remove a Habbo username from the DNH restriction list.")
-    @app_commands.describe(username="Habbo username that should no longer be marked Do Not Hire during verification")
+    @app_commands.command(name="bos", description="Add or remove a Habbo username from the BoS restriction list.")
+    @app_commands.describe(
+        action="Whether to add or remove the Habbo username from the BoS list",
+        username="Habbo username that should be updated in the BoS restriction list",
+    )
+    @app_commands.choices(
+        action=[
+            app_commands.Choice(name="add", value="add"),
+            app_commands.Choice(name="remove", value="remove"),
+        ]
+    )
     @app_commands.checks.has_permissions(manage_guild=True)
-    async def dnh_remove(
+    async def bos(
         self,
         interaction: discord.Interaction,
+        action: str,
         username: str,
     ) -> None:
-        """Remove one Habbo username from the DNH restriction group."""
-
-        await self._handle_restriction_update(
-            interaction,
-            group_name=VerifyRestrictionStore.GROUP_DNH,
-            username=username,
-            action="remove",
-        )
-
-    @bos_group.command(name="add", description="Add a Habbo username to the BoS restriction list.")
-    @app_commands.describe(username="Habbo username that should be marked Ban on Sight during verification")
-    @app_commands.checks.has_permissions(manage_guild=True)
-    async def bos_add(
-        self,
-        interaction: discord.Interaction,
-        username: str,
-    ) -> None:
-        """Add one Habbo username to the BoS restriction group."""
+        """Add or remove one Habbo username from the BoS restriction list."""
 
         await self._handle_restriction_update(
             interaction,
             group_name=VerifyRestrictionStore.GROUP_BOS,
             username=username,
-            action="add",
+            action=action,
         )
 
-    @bos_group.command(name="remove", description="Remove a Habbo username from the BoS restriction list.")
-    @app_commands.describe(username="Habbo username that should no longer be marked Ban on Sight during verification")
-    @app_commands.checks.has_permissions(manage_guild=True)
-    async def bos_remove(
-        self,
-        interaction: discord.Interaction,
-        username: str,
-    ) -> None:
-        """Remove one Habbo username from the BoS restriction group."""
-
-        await self._handle_restriction_update(
-            interaction,
-            group_name=VerifyRestrictionStore.GROUP_BOS,
-            username=username,
-            action="remove",
-        )
-
-    @dnh_add.error
-    @dnh_remove.error
-    @bos_add.error
-    @bos_remove.error
+    @dnh.error
+    @bos.error
     async def verifyrestrictions_error(
         self,
         interaction: discord.Interaction,
         error: app_commands.AppCommandError,
     ) -> None:
-        """Return clear permission guidance for the DNH and BoS restriction commands."""
+        """Return clear permission guidance for the combined DNH and BoS restriction commands."""
 
         if isinstance(error, app_commands.MissingPermissions):
             await interaction.response.send_message(

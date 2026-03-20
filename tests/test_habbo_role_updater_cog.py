@@ -65,6 +65,7 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
         cog.bot = SimpleNamespace(get_channel=lambda _channel_id: None)
         cog.server_config_store = SimpleNamespace(get_request_channel_id=lambda: 303)
         cog.verified_store = SimpleNamespace(get_habbo_username=lambda discord_id: "Siren" if discord_id == "456" else None)
+        cog.verify_restriction_store = SimpleNamespace(get_group_for_username=lambda _username: None)
         cog._assign_roles_to_member_from_profile = AsyncMock(
             return_value=("Added: Role A | Removed: none", ["Role A"], [])
         )
@@ -98,6 +99,43 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
             role_status="Added: Role A | Removed: none | Verified Role: Verified role added.",
             nickname_status="Nickname updated to verified Habbo username.",
             added_role_names=["Role A", "Verified"],
+            removed_role_names=[],
+        )
+
+    async def test_member_join_skips_resync_for_restricted_verified_user(self) -> None:
+        """Do not restore verified access on join when the saved Habbo username is restricted."""
+
+        cog = HabboRoleUpdaterCog.__new__(HabboRoleUpdaterCog)
+        cog.bot = SimpleNamespace(get_channel=lambda _channel_id: None)
+        cog.server_config_store = SimpleNamespace(get_request_channel_id=lambda: 303)
+        cog.verified_store = SimpleNamespace(get_habbo_username=lambda discord_id: "Danger" if discord_id == "456" else None)
+        cog.verify_restriction_store = SimpleNamespace(get_group_for_username=lambda username: "BoS" if username == "Danger" else None)
+        cog._assign_roles_to_member_from_profile = AsyncMock()
+        cog._ensure_verified_role = AsyncMock()
+        cog._sync_member_nickname = AsyncMock()
+        cog._send_role_change_embed_for_guild = AsyncMock()
+        cog._send_verification_rejoin_log = AsyncMock()
+
+        member = SimpleNamespace(
+            id=456,
+            mention="<@456>",
+            guild=SimpleNamespace(),
+        )
+
+        with unittest.mock.patch("COGS.ServerAutoRolesRPA.fetch_habbo_profile", return_value={"name": "Danger"}):
+            await cog.on_member_join(member)
+
+        cog._assign_roles_to_member_from_profile.assert_not_awaited()
+        cog._ensure_verified_role.assert_not_awaited()
+        cog._sync_member_nickname.assert_not_awaited()
+        cog._send_role_change_embed_for_guild.assert_not_awaited()
+        cog._send_verification_rejoin_log.assert_awaited_once_with(
+            guild=member.guild,
+            member=member,
+            habbo_username="Danger",
+            role_status="Skipped (member is restricted under BoS).",
+            nickname_status="Skipped (restricted members are not resynced on join).",
+            added_role_names=[],
             removed_role_names=[],
         )
 

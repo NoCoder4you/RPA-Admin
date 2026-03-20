@@ -11,6 +11,7 @@ from habbo_verification_core import (
     HabboApiError,
     ServerConfigStore,
     VerifiedUserStore,
+    VerifyRestrictionStore,
     fetch_habbo_group_ids,
     fetch_habbo_profile,
 )
@@ -24,6 +25,7 @@ class HabboRoleUpdaterCog(commands.Cog):
         self.verified_store = VerifiedUserStore()
         self.badge_role_mapper = BadgeRoleMapper()
         self.server_config_store = ServerConfigStore()
+        self.verify_restriction_store = VerifyRestrictionStore()
 
         # Background updater is intentionally separate from /verify command flow.
         self.automatic_role_updater.start()
@@ -151,6 +153,21 @@ class HabboRoleUpdaterCog(commands.Cog):
             # Avoid raising from join events; the user can still be resynced later by the updater.
             return
 
+        verified_habbo_username = str(profile.get("name", stored_habbo_username))
+        restriction_group = self.verify_restriction_store.get_group_for_username(verified_habbo_username)
+        if restriction_group is not None:
+            # Do not reapply verified/member access if the saved Habbo account is now on a restriction list.
+            await self._send_verification_rejoin_log(
+                guild=member.guild,
+                member=member,
+                habbo_username=verified_habbo_username,
+                role_status=f"Skipped (member is restricted under {restriction_group}).",
+                nickname_status="Skipped (restricted members are not resynced on join).",
+                added_role_names=[],
+                removed_role_names=[],
+            )
+            return
+
         role_status, added_role_names, removed_role_names = await self._assign_roles_to_member_from_profile(
             member.guild,
             member,
@@ -166,7 +183,7 @@ class HabboRoleUpdaterCog(commands.Cog):
                 role_status = f"{role_status} | Verified Role: {verified_role_status}"
         nickname_status = await self._sync_member_nickname(
             member=member,
-            habbo_username=str(profile.get("name", stored_habbo_username)),
+            habbo_username=verified_habbo_username,
         )
 
         # Reuse the existing role-delta audit embed for moderator visibility when roles changed.
@@ -179,7 +196,7 @@ class HabboRoleUpdaterCog(commands.Cog):
         await self._send_verification_rejoin_log(
             guild=member.guild,
             member=member,
-            habbo_username=str(profile.get("name", stored_habbo_username)),
+            habbo_username=verified_habbo_username,
             role_status=role_status,
             nickname_status=nickname_status,
             added_role_names=added_role_names,

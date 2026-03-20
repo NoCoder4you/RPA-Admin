@@ -7,15 +7,13 @@ import random
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
-
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 LOGGER = logging.getLogger(__name__)
 GIVEAWAY_CHANNEL_ID = 1479462940825489408
-DEFAULT_STORAGE_PATH = Path(__file__).resolve().parent.parent / "data" / "giveaways.json"
+DEFAULT_STORAGE_PATH = Path(__file__).resolve().parent.parent / "JSON" / "giveaways.json"
 
 
 @dataclass
@@ -87,6 +85,7 @@ class GiveawayCog(commands.Cog):
         self._restored = asyncio.Event()
 
     async def cog_load(self) -> None:
+        # Restore persisted giveaways asynchronously so bot startup is not blocked by disk I/O.
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
         self._restore_task = asyncio.create_task(self._restore_giveaways())
 
@@ -144,6 +143,7 @@ class GiveawayCog(commands.Cog):
         return records
 
     async def _save_records(self) -> None:
+        # Serialize writes so concurrent button presses cannot corrupt the JSON file.
         async with self._storage_lock:
             payload = [asdict(record) for record in self._giveaways.values()]
             self.storage_path.parent.mkdir(parents=True, exist_ok=True)

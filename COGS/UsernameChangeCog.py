@@ -28,7 +28,9 @@ class UsernameChangeRequestView(discord.ui.View):
 
         if self.admin_role_id is None:
             await interaction.response.send_message(
-                "This request cannot be actioned because the admin role is not configured.",
+                embed=UsernameChangeCog._build_error_embed(
+                    "This request cannot be actioned because the admin role is not configured.",
+                ),
                 ephemeral=True,
             )
             return False
@@ -38,7 +40,9 @@ class UsernameChangeRequestView(discord.ui.View):
             return True
 
         await interaction.response.send_message(
-            "You need the configured Discord Admin role to use these buttons.",
+            embed=UsernameChangeCog._build_error_embed(
+                "You need the configured Discord Admin role to use these buttons.",
+            ),
             ephemeral=True,
         )
         return False
@@ -69,7 +73,9 @@ class UsernameChangeRequestView(discord.ui.View):
         message = interaction.message
         if message is None or not message.embeds:
             await interaction.response.send_message(
-                "I could not find the original username-change embed to update.",
+                embed=UsernameChangeCog._build_error_embed(
+                    "I could not find the original username-change embed to update.",
+                ),
                 ephemeral=True,
             )
             return
@@ -160,35 +166,43 @@ class UsernameChangeCog(commands.Cog):
 
         # Defer because the command performs API fetches before responding.
         await interaction.response.defer(ephemeral=True, thinking=True)
-        result_message = await self._process_username_change(interaction, username)
-        await interaction.followup.send(result_message, ephemeral=True)
+        was_successful, result_message = await self._process_username_change(interaction, username)
+        if was_successful:
+            await interaction.followup.send(result_message, ephemeral=True)
+            return
 
-    async def _process_username_change(self, interaction: discord.Interaction, username: str) -> str:
+        # Keep all error responses inside embeds so moderation and user feedback stay visually consistent.
+        await interaction.followup.send(
+            embed=self._build_error_embed(result_message),
+            ephemeral=True,
+        )
+
+    async def _process_username_change(self, interaction: discord.Interaction, username: str) -> tuple[bool, str]:
         """Validate the request and post it for review without mutating saved verification data."""
 
         discord_id = str(interaction.user.id)
         if not self.verified_store.is_verified(discord_id):
-            return "You must already exist in VerifiedUsers.json before you can request a username change."
+            return False, "You must already exist in VerifiedUsers.json before you can request a username change."
 
         stored_username = self.verified_store.get_habbo_username(discord_id)
         if not stored_username:
-            return "You must already exist in VerifiedUsers.json before you can request a username change."
+            return False, "You must already exist in VerifiedUsers.json before you can request a username change."
 
         normalized_username = username.strip()
         if not normalized_username:
-            return "Please provide a valid Habbo username."
+            return False, "Please provide a valid Habbo username."
 
         if normalized_username.casefold() == stored_username.casefold():
-            return "You cannot request the same Habbo username that is already saved for you."
+            return False, "You cannot request the same Habbo username that is already saved for you."
 
         try:
             profile = fetch_habbo_profile(normalized_username)
         except HabboApiError as exc:
-            return f"I could not fetch that Habbo profile right now: {exc}"
+            return False, f"I could not fetch that Habbo profile right now: {exc}"
 
         requested_habbo_username = str(profile.get("name", normalized_username)).strip() or normalized_username
         if requested_habbo_username.casefold() == stored_username.casefold():
-            return "You cannot request the same Habbo username that is already saved for you."
+            return False, "You cannot request the same Habbo username that is already saved for you."
 
         posted = await self._send_verification_log_embed(
             interaction=interaction,
@@ -196,11 +210,21 @@ class UsernameChangeCog(commands.Cog):
             requested_username=requested_habbo_username,
         )
         if not posted:
-            return "Your request could not be submitted because the request channel is unavailable."
+            return False, "Your request could not be submitted because the request channel is unavailable."
 
-        return (
+        return True, (
             f"Your request to change **{stored_username}** to **{requested_habbo_username}** was sent for admin review. "
             "Nothing updates until an admin approves it."
+        )
+
+    @staticmethod
+    def _build_error_embed(message: str) -> discord.Embed:
+        """Wrap user-facing errors in a consistent embed so failures are easy to spot."""
+
+        return discord.Embed(
+            title="Username Change Error",
+            description=message,
+            color=discord.Color.red(),
         )
 
     async def apply_username_change_from_embed(self, interaction: discord.Interaction, embed: discord.Embed) -> str:

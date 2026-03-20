@@ -37,10 +37,11 @@ class UsernameChangeCogTests(unittest.IsolatedAsyncioTestCase):
         original_fetch = username_change_module.fetch_habbo_profile
         username_change_module.fetch_habbo_profile = lambda _username: {"name": "NewHabbo"}
         try:
-            result = await cog._process_username_change(interaction, " NewHabbo ")
+            was_successful, result = await cog._process_username_change(interaction, " NewHabbo ")
         finally:
             username_change_module.fetch_habbo_profile = original_fetch
 
+        self.assertTrue(was_successful)
         cog.verified_store.save.assert_not_called()
         cog._send_verification_log_embed.assert_awaited_once_with(
             interaction=interaction,
@@ -63,8 +64,9 @@ class UsernameChangeCogTests(unittest.IsolatedAsyncioTestCase):
 
         interaction = SimpleNamespace(user=SimpleNamespace(id=123), guild=object())
 
-        result = await cog._process_username_change(interaction, "Anything")
+        was_successful, result = await cog._process_username_change(interaction, "Anything")
 
+        self.assertFalse(was_successful)
         self.assertEqual(
             result,
             "You must already exist in VerifiedUsers.json before you can request a username change.",
@@ -78,8 +80,9 @@ class UsernameChangeCogTests(unittest.IsolatedAsyncioTestCase):
         )
         interaction = SimpleNamespace(user=SimpleNamespace(id=123), guild=object())
 
-        result = await cog._process_username_change(interaction, " siren ")
+        was_successful, result = await cog._process_username_change(interaction, " siren ")
 
+        self.assertFalse(was_successful)
         self.assertEqual(
             result,
             "You cannot request the same Habbo username that is already saved for you.",
@@ -176,6 +179,24 @@ class UsernameChangeCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(view, UsernameChangeRequestView)
         self.assertEqual([child.label for child in view.children], ["Approve", "Decline"])
 
+    async def test_usernamechange_sends_error_followup_as_embed(self) -> None:
+        interaction = SimpleNamespace(
+            response=SimpleNamespace(defer=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        cog = UsernameChangeCog(bot=SimpleNamespace())
+        cog._process_username_change = AsyncMock(return_value=(False, "Please provide a valid Habbo username."))
+
+        await cog.usernamechange.callback(cog, interaction, "")
+
+        interaction.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
+        interaction.followup.send.assert_awaited_once()
+        kwargs = interaction.followup.send.await_args.kwargs
+        self.assertTrue(kwargs["ephemeral"])
+        self.assertEqual(kwargs["embed"].title, "Username Change Error")
+        self.assertEqual(kwargs["embed"].description, "Please provide a valid Habbo username.")
+
+
 
 class UsernameChangeRequestViewTests(unittest.IsolatedAsyncioTestCase):
     """Validate request-button authorization and embed status updates."""
@@ -188,10 +209,11 @@ class UsernameChangeRequestViewTests(unittest.IsolatedAsyncioTestCase):
         allowed = await view.interaction_check(interaction)
 
         self.assertFalse(allowed)
-        response.send_message.assert_awaited_once_with(
-            "You need the configured Discord Admin role to use these buttons.",
-            ephemeral=True,
-        )
+        response.send_message.assert_awaited_once()
+        self.assertTrue(response.send_message.await_args.kwargs["ephemeral"])
+        error_embed = response.send_message.await_args.kwargs["embed"]
+        self.assertEqual(error_embed.title, "Username Change Error")
+        self.assertEqual(error_embed.description, "You need the configured Discord Admin role to use these buttons.")
 
     async def test_accept_button_marks_embed_as_accepted_disables_buttons_and_applies_change(self) -> None:
         cog = SimpleNamespace(apply_username_change_from_embed=AsyncMock(return_value="Applied change."))

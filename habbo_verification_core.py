@@ -167,6 +167,7 @@ class ServerConfigStore:
     {
       "audit_log_channel_id": "123",
       "profanity_log_channel_id": "234",
+      "message_log_channel_id": "345",
       "muted_role_id": "456",
       "base_rpa_employee_role_id": "789",
       "verification_reaction_message_id": "101112",
@@ -199,6 +200,19 @@ class ServerConfigStore:
 
         config = self._read_config()
         config["profanity_log_channel_id"] = str(channel_id)
+        self._write_config(config)
+
+    def get_message_log_channel_id(self) -> int | None:
+        """Return the configured channel ID used for message delete/edit event logs."""
+
+        config = self._read_config()
+        return self._safe_int(config.get("message_log_channel_id"))
+
+    def set_message_log_channel_id(self, channel_id: int) -> None:
+        """Persist the message-event log channel ID while preserving other config keys."""
+
+        config = self._read_config()
+        config["message_log_channel_id"] = str(channel_id)
         self._write_config(config)
 
     def get_muted_role_id(self) -> int | None:

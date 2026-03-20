@@ -378,6 +378,66 @@ class AuditLogCog(commands.Cog):
 
         return affected_target, ["Discord audit log did not expose granular overwrite details for this change."]
 
+    @staticmethod
+    def _truncate_field_value(value: str, *, limit: int = 1024) -> str:
+        """Trim long message snapshots so they always fit inside Discord embed fields."""
+
+        normalized_value = value.strip() or "No content"
+        if len(normalized_value) <= limit:
+            return normalized_value
+        return f"{normalized_value[: limit - 1]}…"
+
+    @staticmethod
+    def _attachment_summary(message: discord.Message) -> str:
+        """Return a compact attachment summary for message audit events."""
+
+        attachments = getattr(message, "attachments", []) or []
+        if not attachments:
+            return "None"
+        attachment_names = [getattr(attachment, "filename", "attachment") for attachment in attachments]
+        return ", ".join(attachment_names)[:1024]
+
+    @staticmethod
+    def _message_author_label(message: discord.Message) -> str:
+        """Return a readable author label for deleted/edited message embeds."""
+
+        author = getattr(message, "author", None)
+        if author is None:
+            return "Unknown"
+        mention = getattr(author, "mention", str(author))
+        author_id = getattr(author, "id", "unknown")
+        return f"{mention} (`{author_id}`)"
+
+    async def _send_message_log_embed(
+        self,
+        guild: discord.Guild,
+        *,
+        title: str,
+        description: str,
+        fields: list[tuple[str, str, bool]],
+        color: discord.Color,
+    ) -> None:
+        """Deliver message deletion/edit audit embeds to the dedicated configured channel."""
+
+        message_log_channel_id = self.server_config_store.get_message_log_channel_id()
+        if message_log_channel_id is None:
+            return
+
+        message_log_channel = guild.get_channel(message_log_channel_id)
+        if message_log_channel is None:
+            return
+
+        embed = discord.Embed(title=title, description=description, color=color)
+        embed.add_field(
+            name="When",
+            value=f"{self._full_timestamp_markdown()} • {self._relative_timestamp_markdown()}",
+            inline=False,
+        )
+        for name, value, inline in fields:
+            embed.add_field(name=name, value=value, inline=inline)
+
+        await message_log_channel.send(embed=embed)
+
     async def _send_audit_embed(
         self,
         guild: discord.Guild,
@@ -409,6 +469,62 @@ class AuditLogCog(commands.Cog):
             embed.add_field(name=name, value=value, inline=inline)
 
         await audit_channel.send(embed=embed)
+
+    @commands.Cog.listener()
+    async def on_message_delete(self, message: discord.Message) -> None:
+        """Log deleted guild messages to the dedicated message-event channel."""
+
+        # Ignore DMs and bot chatter so the channel stays focused on staff-relevant events.
+        if message.guild is None or getattr(message.author, "bot", False):
+            return
+
+        channel_label = getattr(message.channel, "mention", f"`#{getattr(message.channel, 'name', 'unknown')}`")
+        await self._send_message_log_embed(
+            message.guild,
+            title="Message Deleted",
+            description=f"A message from {self._message_author_label(message)} was deleted in {channel_label}.",
+            fields=[
+                ("Author", self._message_author_label(message), False),
+                ("Channel", f"{channel_label} (`{getattr(message.channel, 'id', 'unknown')}`)", False),
+                ("Content", self._truncate_field_value(getattr(message, "content", "")), False),
+                ("Attachments", self._attachment_summary(message), False),
+            ],
+            color=discord.Color.red(),
+        )
+
+    @commands.Cog.listener()
+    async def on_message_edit(self, before: discord.Message, after: discord.Message) -> None:
+        """Log message edits when the actual visible content/attachments changed."""
+
+        if before.guild is None or getattr(before.author, "bot", False):
+            return
+
+        before_content = getattr(before, "content", "") or ""
+        after_content = getattr(after, "content", "") or ""
+        before_attachments = [getattr(attachment, "filename", "attachment") for attachment in getattr(before, "attachments", []) or []]
+        after_attachments = [getattr(attachment, "filename", "attachment") for attachment in getattr(after, "attachments", []) or []]
+
+        # Skip embed-only or metadata-only edits so staff do not get noisy false positives.
+        if before_content == after_content and before_attachments == after_attachments:
+            return
+
+        channel_label = getattr(after.channel, "mention", f"`#{getattr(after.channel, 'name', 'unknown')}`")
+        fields = [
+            ("Author", self._message_author_label(after), False),
+            ("Channel", f"{channel_label} (`{getattr(after.channel, 'id', 'unknown')}`)", False),
+            ("Before", self._truncate_field_value(before_content), False),
+            ("After", self._truncate_field_value(after_content), False),
+        ]
+        if before_attachments != after_attachments:
+            fields.append(("Attachments", f"Before: {', '.join(before_attachments) or 'None'}\nAfter: {', '.join(after_attachments) or 'None'}"[:1024], False))
+
+        await self._send_message_log_embed(
+            after.guild,
+            title="Message Edited",
+            description=f"A message from {self._message_author_label(after)} was edited in {channel_label}.",
+            fields=fields,
+            color=discord.Color.gold(),
+        )
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member) -> None:

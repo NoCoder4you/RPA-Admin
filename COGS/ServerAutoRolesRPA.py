@@ -19,6 +19,8 @@ from habbo_verification_core import (
 class HabboRoleUpdaterCog(commands.Cog):
     """Cog that periodically syncs roles for all previously verified users."""
 
+    VERIFICATION_LOG_CHANNEL_ID = 1481456997726425168
+
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.verified_store = VerifiedUserStore()
@@ -136,12 +138,72 @@ class HabboRoleUpdaterCog(commands.Cog):
 
         return summary
 
+    @commands.Cog.listener()
+    async def on_member_join(self, member: discord.Member) -> None:
+        """Reapply saved verification state as soon as a previously verified member rejoins."""
+
+        # Only re-sync members who already exist in the persisted verified-user store.
+        stored_habbo_username = self.verified_store.get_habbo_username(str(member.id))
+        if not stored_habbo_username:
+            return
+
+        try:
+            profile = fetch_habbo_profile(stored_habbo_username)
+        except HabboApiError:
+            # Avoid raising from join events; the user can still be resynced later by the updater.
+            return
+
+        role_status, added_role_names, removed_role_names = await self._assign_roles_to_member_from_profile(
+            member.guild,
+            member,
+            profile,
+        )
+        nickname_status = await self._sync_member_nickname(
+            member=member,
+            habbo_username=str(profile.get("name", stored_habbo_username)),
+        )
+
+        # Reuse the existing role-delta audit embed for moderator visibility when roles changed.
+        await self._send_role_change_embed_for_guild(
+            guild=member.guild,
+            member=member,
+            added_role_names=added_role_names,
+            removed_role_names=removed_role_names,
+        )
+        await self._send_verification_rejoin_log(
+            guild=member.guild,
+            member=member,
+            habbo_username=str(profile.get("name", stored_habbo_username)),
+            role_status=role_status,
+            nickname_status=nickname_status,
+            added_role_names=added_role_names,
+            removed_role_names=removed_role_names,
+        )
+
     def _get_primary_guild(self) -> discord.Guild | None:
         """Return the first guild because this bot is configured for one server."""
 
         if not self.bot.guilds:
             return None
         return self.bot.guilds[0]
+
+    async def _sync_member_nickname(self, *, member: discord.Member, habbo_username: str) -> str:
+        """Rename a rejoining verified member so their nickname still matches their Habbo name."""
+
+        if getattr(member, "nick", None) == habbo_username:
+            return "No nickname change was required."
+
+        try:
+            await member.edit(
+                nick=habbo_username,
+                reason="Habbo automatic role updater nickname sync on member join",
+            )
+        except discord.Forbidden:
+            return "Failed (bot lacks permission to manage this nickname)."
+        except discord.HTTPException:
+            return "Failed (Discord rejected the nickname update request)."
+
+        return "Nickname updated to verified Habbo username."
 
     async def _assign_roles_to_member_from_profile(
         self,
@@ -245,6 +307,48 @@ class HabboRoleUpdaterCog(commands.Cog):
             embed.add_field(name="Added Roles", value="\n".join(added_role_names), inline=False)
         if removed_role_names:
             embed.add_field(name="Removed Roles", value="\n".join(removed_role_names), inline=False)
+
+        try:
+            await channel.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            return
+
+    async def _send_verification_rejoin_log(
+        self,
+        *,
+        guild: discord.Guild,
+        member: discord.Member,
+        habbo_username: str,
+        role_status: str,
+        nickname_status: str,
+        added_role_names: list[str],
+        removed_role_names: list[str],
+    ) -> None:
+        """Post a verification-log summary whenever a stored verified user rejoins the server."""
+
+        channel = guild.get_channel(self.VERIFICATION_LOG_CHANNEL_ID)
+        if channel is None:
+            channel = self.bot.get_channel(self.VERIFICATION_LOG_CHANNEL_ID)
+        if channel is None:
+            return
+
+        embed = discord.Embed(
+            title="Verified Member Rejoined",
+            description="Reapplied saved verification data for a returning member.",
+            color=discord.Color.green(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        # Keep the summary explicit so moderators can confirm join-time sync behavior quickly.
+        embed.add_field(name="Member", value=member.mention, inline=False)
+        embed.add_field(name="Habbo Username", value=habbo_username, inline=True)
+        embed.add_field(name="Role Sync", value=role_status, inline=False)
+        embed.add_field(name="Nickname Sync", value=nickname_status, inline=False)
+        embed.add_field(name="Added Roles", value=", ".join(added_role_names) if added_role_names else "none", inline=False)
+        embed.add_field(
+            name="Removed Roles",
+            value=", ".join(removed_role_names) if removed_role_names else "none",
+            inline=False,
+        )
 
         try:
             await channel.send(embed=embed)

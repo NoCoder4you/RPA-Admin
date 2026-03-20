@@ -219,12 +219,9 @@ class UsernameChangeCog(commands.Cog):
         return (
             f"Saved username updated from **{current_saved_username}** to **{requested_username}**.\n"
             f"Nickname: {nickname_status}\n"
-            f"AutoRoles reload: {reload_status}"
         )
 
     async def _sync_member_nickname(self, interaction: discord.Interaction, habbo_username: str) -> str:
-        """Rename the member in Discord so their nickname matches the approved Habbo username."""
-
         if interaction.guild is None:
             return "Skipped (nickname can only be changed inside a server)."
 
@@ -292,8 +289,8 @@ class UsernameChangeCog(commands.Cog):
             color=discord.Color.orange(),
             timestamp=datetime.now(timezone.utc),
             description=(
-                "This request has not been applied yet. The saved Habbo username and Discord nickname must only "
-                "change after a moderator presses Approve."
+                "This request has not been applied yet."
+                "The saved Habbo username and Discord nickname must only change after a Discord Admin presses Approve."
             ),
         )
         embed.add_field(name="Member", value=interaction.user.mention, inline=False)

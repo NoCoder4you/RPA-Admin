@@ -33,6 +33,7 @@ class MentionForwardCog(commands.Cog):
 
         A message is forwarded only when:
         * it is not authored by a bot,
+        * it was not authored by the configured bot owner,
         * the bot itself was directly mentioned in the message, and
         * the author matches the configured user ID or holds the configured role.
         """
@@ -45,6 +46,11 @@ class MentionForwardCog(commands.Cog):
             return False
 
         author_id = getattr(message.author, "id", None)
+
+        # Never forward the owner's own bot mentions back to the owner.
+        if author_id == BOT_OWNER_ID:
+            return False
+
         return author_id == TARGET_USER_ID or self._member_has_target_role(message)
 
     @staticmethod

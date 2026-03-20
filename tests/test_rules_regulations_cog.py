@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 try:
-    from COGS.RulesRegulationsCog import RulesRegulationsCog, WHITE_CHECK_MARK_EMOJI
+    from COGS.RulesRegulationsCog import (
+        AWAITING_VERIFICATION_CHANNEL_ID,
+        RulesRegulationsCog,
+        WHITE_CHECK_MARK_EMOJI,
+    )
 except Exception:  # pragma: no cover - environment without discord.py
     RulesRegulationsCog = None
+    AWAITING_VERIFICATION_CHANNEL_ID = 1479391662076723224
     WHITE_CHECK_MARK_EMOJI = "✅"
 
 
@@ -122,11 +128,13 @@ class RulesRegulationsCogTests(unittest.IsolatedAsyncioTestCase):
         bot = MagicMock()
         bot.user = MagicMock(id=999)
 
-        role = MagicMock(name="Awaiting Verification")
+        role = SimpleNamespace(name="Awaiting Verification")
         member = MagicMock(roles=[], add_roles=AsyncMock())
         guild = MagicMock()
         guild.roles = [role]
         guild.get_member.return_value = member
+        verification_channel = MagicMock(send=AsyncMock())
+        guild.get_channel.return_value = verification_channel
         bot.get_guild.return_value = guild
 
         message = AsyncMock()
@@ -149,6 +157,13 @@ class RulesRegulationsCogTests(unittest.IsolatedAsyncioTestCase):
             role,
             reason="Reacted with white check mark on rules acknowledgement message",
         )
+        guild.get_channel.assert_called_once_with(AWAITING_VERIFICATION_CHANNEL_ID)
+        verification_channel.send.assert_awaited_once()
+        self.assertEqual(verification_channel.send.await_args.kwargs["content"], member.mention)
+        self.assertEqual(
+            verification_channel.send.await_args.kwargs["embed"].title,
+            "Awaiting Verification",
+        )
 
     async def test_reaction_listener_skips_role_for_verified_members_and_only_cleans_up_reaction(self) -> None:
         """Verified users should not be re-staged after acknowledging the rules message."""
@@ -156,11 +171,12 @@ class RulesRegulationsCogTests(unittest.IsolatedAsyncioTestCase):
         bot = MagicMock()
         bot.user = MagicMock(id=999)
 
-        role = MagicMock(name="Awaiting Verification")
+        role = SimpleNamespace(name="Awaiting Verification")
         member = MagicMock(roles=[], add_roles=AsyncMock())
         guild = MagicMock()
         guild.roles = [role]
         guild.get_member.return_value = member
+        guild.get_channel.return_value = MagicMock(send=AsyncMock())
         bot.get_guild.return_value = guild
 
         message = AsyncMock()
@@ -180,6 +196,18 @@ class RulesRegulationsCogTests(unittest.IsolatedAsyncioTestCase):
         message.remove_reaction.assert_awaited_once_with(WHITE_CHECK_MARK_EMOJI, member)
         cog.verified_store.is_verified.assert_called_once_with("111")
         member.add_roles.assert_not_awaited()
+
+    async def test_send_awaiting_verification_embed_skips_when_channel_is_missing(self) -> None:
+        """Avoid raising errors if the configured verification help channel is unavailable."""
+
+        cog = RulesRegulationsCog(bot=MagicMock())
+        guild = MagicMock()
+        guild.get_channel.return_value = None
+        member = MagicMock(mention="<@111>")
+
+        await cog._send_awaiting_verification_embed(guild=guild, member=member)
+
+        guild.get_channel.assert_called_once_with(AWAITING_VERIFICATION_CHANNEL_ID)
 
 
 if __name__ == "__main__":

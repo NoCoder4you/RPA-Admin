@@ -171,6 +171,7 @@ class ServerConfigStore:
       "muted_role_id": "456",
       "base_rpa_employee_role_id": "789",
       "verification_reaction_message_id": "101112",
+      "rules_acknowledgement_message_id": "111213",
       "request_channel_id": "121314",
       "admin_role_id": "151617",
       "webhook_archive_channel_id": "181920",
@@ -252,6 +253,19 @@ class ServerConfigStore:
 
         config = self._read_config()
         config["verification_reaction_message_id"] = str(message_id)
+        self._write_config(config)
+
+    def get_rules_acknowledgement_message_id(self) -> int | None:
+        """Return the rules acknowledgement embed message ID that members should react to."""
+
+        config = self._read_config()
+        return self._safe_int(config.get("rules_acknowledgement_message_id"))
+
+    def set_rules_acknowledgement_message_id(self, message_id: int) -> None:
+        """Persist the final rules acknowledgement message ID while preserving existing config keys."""
+
+        config = self._read_config()
+        config["rules_acknowledgement_message_id"] = str(message_id)
         self._write_config(config)
 
     def get_request_channel_id(self) -> int | None:

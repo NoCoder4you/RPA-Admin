@@ -376,6 +376,131 @@ class ServerConfigStore:
             return None
 
 
+class VerifyRestrictionStore:
+    """Persist Habbo usernames that should trigger verification restrictions."""
+
+    GROUP_DNH = "DNH"
+    GROUP_BOS = "BoS"
+    VALID_GROUPS = (GROUP_DNH, GROUP_BOS)
+
+    def __init__(self, file_path: Path | None = None) -> None:
+        # Keep restriction data in the shared JSON folder with the bot's other persisted state.
+        self.file_path = file_path or json_file("VerifyRestrictions.json")
+
+    def add_username(self, group_name: str, username: str) -> bool:
+        """Add a Habbo username to one restriction group, returning True when it was new."""
+
+        normalized_group = self._normalize_group_name(group_name)
+        normalized_username = self._normalize_username(username)
+        normalized_username_key = normalized_username.lower()
+
+        data = self._read_data()
+        usernames = data[normalized_group]
+        if any(existing_username.lower() == normalized_username_key for existing_username in usernames):
+            return False
+
+        usernames.append(normalized_username)
+        usernames.sort(key=str.lower)
+        self._write_data(data)
+        return True
+
+    def remove_username(self, group_name: str, username: str) -> bool:
+        """Remove a username from one restriction group, returning True when it existed."""
+
+        normalized_group = self._normalize_group_name(group_name)
+        normalized_username = self._normalize_username(username)
+        normalized_username_key = normalized_username.lower()
+
+        data = self._read_data()
+        usernames = data[normalized_group]
+        existing_username = next((entry for entry in usernames if entry.lower() == normalized_username_key), None)
+        if existing_username is None:
+            return False
+
+        usernames.remove(existing_username)
+        self._write_data(data)
+        return True
+
+    def get_group_for_username(self, username: str) -> str | None:
+        """Return the restriction group a Habbo username belongs to, if any."""
+
+        normalized_username_key = self._normalize_username(username).lower()
+        data = self._read_data()
+        for group_name in self.VALID_GROUPS:
+            if any(entry.lower() == normalized_username_key for entry in data[group_name]):
+                return group_name
+        return None
+
+    def is_username_restricted(self, username: str, group_name: str) -> bool:
+        """Return True when the normalized username exists in the selected restriction group."""
+
+        normalized_group = self._normalize_group_name(group_name)
+        normalized_username_key = self._normalize_username(username).lower()
+        return any(entry.lower() == normalized_username_key for entry in self._read_data()[normalized_group])
+
+    def get_all_usernames(self, group_name: str) -> list[str]:
+        """Return all usernames saved for one group in stable order."""
+
+        normalized_group = self._normalize_group_name(group_name)
+        return list(self._read_data()[normalized_group])
+
+    def _read_data(self) -> dict[str, list[str]]:
+        """Load the restrictions JSON with safe defaults for missing or invalid files."""
+
+        default = {group_name: [] for group_name in self.VALID_GROUPS}
+        if not self.file_path.exists():
+            return default
+
+        try:
+            raw_data = json.loads(self.file_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return default
+
+        if not isinstance(raw_data, dict):
+            return default
+
+        normalized_data = {group_name: [] for group_name in self.VALID_GROUPS}
+        for group_name in self.VALID_GROUPS:
+            group_entries = raw_data.get(group_name, [])
+            if not isinstance(group_entries, list):
+                continue
+
+            seen: set[str] = set()
+            for entry in group_entries:
+                normalized_username = self._normalize_username(str(entry))
+                normalized_username_key = normalized_username.lower()
+                if not normalized_username or normalized_username_key in seen:
+                    continue
+                normalized_data[group_name].append(normalized_username)
+                seen.add(normalized_username_key)
+
+            normalized_data[group_name].sort(key=str.lower)
+
+        return normalized_data
+
+    def _write_data(self, data: dict[str, list[str]]) -> None:
+        """Persist normalized restriction data to disk."""
+
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        self.file_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def _normalize_group_name(self, group_name: str) -> str:
+        """Normalize user-supplied group names to the store's canonical keys."""
+
+        collapsed = str(group_name).strip().lower()
+        alias_map = {"dnh": self.GROUP_DNH, "bos": self.GROUP_BOS, "ban on sight": self.GROUP_BOS}
+        normalized = alias_map.get(collapsed)
+        if normalized is None:
+            raise ValueError(f"Unsupported restriction group: {group_name}")
+        return normalized
+
+    @staticmethod
+    def _normalize_username(username: str) -> str:
+        """Normalize Habbo usernames for case-insensitive storage and comparison."""
+
+        return str(username).strip()
+
+
 class BadgeRoleMapper:
     """Map Habbo group memberships to Discord role IDs via JSON/BadgesToRoles.json."""
 

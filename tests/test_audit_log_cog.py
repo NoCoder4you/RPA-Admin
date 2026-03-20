@@ -488,6 +488,61 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
         actions = cog._find_recent_audit_entry_from_actions.await_args.kwargs["actions"]
         self.assertEqual(actions, [discord.AuditLogAction.member_update])
 
+    async def test_message_delete_logs_to_message_log_channel(self) -> None:
+        cog = AuditLogCog(MagicMock())
+        cog._send_message_log_embed = AsyncMock()
+
+        author = SimpleNamespace(id=5, mention="<@5>", bot=False)
+        channel = SimpleNamespace(id=99, mention="#general", name="general")
+        guild = SimpleNamespace()
+        message = SimpleNamespace(
+            guild=guild,
+            author=author,
+            channel=channel,
+            content="deleted text",
+            attachments=[SimpleNamespace(filename="proof.png")],
+        )
+
+        await cog.on_message_delete(message)
+
+        cog._send_message_log_embed.assert_awaited_once()
+        kwargs = cog._send_message_log_embed.await_args.kwargs
+        self.assertEqual(kwargs["title"], "Message Deleted")
+        self.assertEqual(kwargs["fields"][2], ("Content", "deleted text", False))
+        self.assertEqual(kwargs["fields"][3], ("Attachments", "proof.png", False))
+
+    async def test_message_edit_logs_before_and_after_content(self) -> None:
+        cog = AuditLogCog(MagicMock())
+        cog._send_message_log_embed = AsyncMock()
+
+        author = SimpleNamespace(id=6, mention="<@6>", bot=False)
+        channel = SimpleNamespace(id=100, mention="#reports", name="reports")
+        guild = SimpleNamespace()
+        before = SimpleNamespace(guild=guild, author=author, channel=channel, content="before", attachments=[])
+        after = SimpleNamespace(guild=guild, author=author, channel=channel, content="after", attachments=[])
+
+        await cog.on_message_edit(before, after)
+
+        cog._send_message_log_embed.assert_awaited_once()
+        kwargs = cog._send_message_log_embed.await_args.kwargs
+        self.assertEqual(kwargs["title"], "Message Edited")
+        self.assertEqual(kwargs["fields"][2], ("Before", "before", False))
+        self.assertEqual(kwargs["fields"][3], ("After", "after", False))
+
+    async def test_message_edit_skips_when_no_visible_change_happened(self) -> None:
+        cog = AuditLogCog(MagicMock())
+        cog._send_message_log_embed = AsyncMock()
+
+        author = SimpleNamespace(id=7, mention="<@7>", bot=False)
+        channel = SimpleNamespace(id=101, mention="#audit", name="audit")
+        guild = SimpleNamespace()
+        before = SimpleNamespace(guild=guild, author=author, channel=channel, content="same", attachments=[])
+        after = SimpleNamespace(guild=guild, author=author, channel=channel, content="same", attachments=[])
+
+        await cog.on_message_edit(before, after)
+
+        cog._send_message_log_embed.assert_not_awaited()
+
     async def test_guild_update_logs_core_setting_changes(self) -> None:
         cog = AuditLogCog(MagicMock())
         cog._send_audit_embed = AsyncMock()

@@ -208,9 +208,8 @@ class ProfanityCog(commands.Cog):
         )
         await log_channel.send(embed=embed)
 
-    @commands.Cog.listener()
-    async def on_message(self, message: discord.Message) -> None:
-        """Delete matching profanity messages and notify both the user and moderators."""
+    async def _handle_message_for_profanity(self, message: discord.Message) -> None:
+        """Delete a profane guild message, then notify the user and moderators."""
 
         # Ignore bots/webhooks so the filter only targets member-authored chat.
         if message.author.bot or message.webhook_id is not None:
@@ -232,6 +231,22 @@ class ProfanityCog(commands.Cog):
 
         dm_sent = await self._send_user_notice(message, blocked_word=blocked_word)
         await self._send_log_notice(message, blocked_word=blocked_word, dm_sent=dm_sent)
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        """Run profanity enforcement for newly created guild messages."""
+
+        await self._handle_message_for_profanity(message)
+
+    @commands.Cog.listener()
+    async def on_message_edit(self, before: discord.Message, after: discord.Message) -> None:
+        """Re-check edited messages so profanity added after posting is still removed."""
+
+        # Skip no-op edit events to avoid duplicate delete attempts from embed/cache updates.
+        if before.content == after.content:
+            return
+
+        await self._handle_message_for_profanity(after)
 
 
 async def setup(bot: commands.Bot) -> None:

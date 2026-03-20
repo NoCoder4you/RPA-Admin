@@ -123,6 +123,45 @@ class ProfanityCogTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(log_embed.fields[5].name, "User Notice")
             self.assertIn("could not DM the user", log_embed.fields[5].value)
 
+    async def test_on_message_edit_deletes_when_profanity_is_added(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            words_path = Path(temp_dir) / "profanity_words.json"
+            words_path.write_text(json.dumps(["fuck"]), encoding="utf-8")
+
+            cog = ProfanityCog(MagicMock(), blocked_words_path=words_path)
+
+            log_channel = SimpleNamespace(send=AsyncMock())
+            guild = SimpleNamespace(id=321, name="RPA", get_channel=MagicMock(return_value=log_channel))
+            author = SimpleNamespace(id=456, bot=False, mention="<@456>", send=AsyncMock())
+            before = SimpleNamespace(content="hello there")
+            after = SimpleNamespace(
+                author=author,
+                webhook_id=None,
+                guild=guild,
+                channel=SimpleNamespace(mention="#general", send=AsyncMock()),
+                content="hello fuck",
+                delete=AsyncMock(),
+            )
+
+            cog.server_config_store = SimpleNamespace(get_profanity_log_channel_id=MagicMock(return_value=999))
+
+            await cog.on_message_edit(before, after)
+
+            after.delete.assert_awaited_once()
+            author.send.assert_awaited_once()
+            log_channel.send.assert_awaited_once()
+
+    async def test_on_message_edit_skips_when_content_did_not_change(self) -> None:
+        cog = ProfanityCog(MagicMock())
+        cog._handle_message_for_profanity = AsyncMock()
+
+        before = SimpleNamespace(content="same")
+        after = SimpleNamespace(content="same")
+
+        await cog.on_message_edit(before, after)
+
+        cog._handle_message_for_profanity.assert_not_awaited()
+
 
 if __name__ == "__main__":
     unittest.main()

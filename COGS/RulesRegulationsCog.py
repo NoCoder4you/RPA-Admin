@@ -163,15 +163,9 @@ class RulesRegulationsCog(commands.Cog):
     ) -> None:
         """Post a per-member onboarding embed in the verification channel after staging."""
 
-        # Resolve the help-channel destination from shared serverconfig.json so staff can retarget it
-        # without touching code again.
-        channel_id = self.server_config_store.get_awaiting_verification_channel_id()
-        if channel_id is None:
-            return
-
-        # Prefer an in-memory channel lookup, but fall back to an API fetch because large bots may not
-        # have every channel cached at the exact moment a role update event arrives.
-        channel = guild.get_channel(channel_id)
+        # Staff requested that every Awaiting Verification onboarding notice land in the fixed
+        # verification queue channel so the embed + ping always appears in one predictable place.
+        channel = guild.get_channel(AWAITING_VERIFICATION_CHANNEL_ID)
         if channel is None:
             try:
                 channel = await guild.fetch_channel(channel_id)
@@ -197,7 +191,7 @@ class RulesRegulationsCog(commands.Cog):
         )
         embed.add_field(
             name="Step 3",
-            value="Come back here and run `/verify` again so the bot can confirm your motto.",
+            value="Come back here and run `/verify` with your Habbo username so the bot can confirm your motto.",
             inline=False,
         )
         embed.add_field(

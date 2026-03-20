@@ -106,6 +106,7 @@ class RulesRegulationsCogTests(unittest.IsolatedAsyncioTestCase):
 
         cog = RulesRegulationsCog(bot=bot)
         cog.server_config_store = MagicMock()
+        cog.verified_store = MagicMock(is_verified=MagicMock(return_value=False))
         cog.server_config_store.get_rules_acknowledgement_message_id.return_value = 555
 
         payload = MagicMock(guild_id=123, user_id=111, message_id=555, channel_id=222, emoji="🔥")
@@ -114,6 +115,71 @@ class RulesRegulationsCogTests(unittest.IsolatedAsyncioTestCase):
 
         channel.fetch_message.assert_awaited_once_with(555)
         message.remove_reaction.assert_awaited_once_with("🔥", member)
+
+    async def test_reaction_listener_grants_awaiting_verification_role_for_unverified_checkmark(self) -> None:
+        """Grant the staging role only for members who acknowledged rules and are not yet verified."""
+
+        bot = MagicMock()
+        bot.user = MagicMock(id=999)
+
+        role = MagicMock(name="Awaiting Verification")
+        member = MagicMock(roles=[], add_roles=AsyncMock())
+        guild = MagicMock()
+        guild.roles = [role]
+        guild.get_member.return_value = member
+        bot.get_guild.return_value = guild
+
+        message = AsyncMock()
+        channel = MagicMock()
+        channel.fetch_message = AsyncMock(return_value=message)
+        bot.get_channel.return_value = channel
+
+        cog = RulesRegulationsCog(bot=bot)
+        cog.server_config_store = MagicMock()
+        cog.verified_store = MagicMock(is_verified=MagicMock(return_value=False))
+        cog.server_config_store.get_rules_acknowledgement_message_id.return_value = 555
+
+        payload = MagicMock(guild_id=123, user_id=111, message_id=555, channel_id=222, emoji=WHITE_CHECK_MARK_EMOJI)
+
+        await cog.on_raw_reaction_add(payload)
+
+        message.remove_reaction.assert_awaited_once_with(WHITE_CHECK_MARK_EMOJI, member)
+        cog.verified_store.is_verified.assert_called_once_with("111")
+        member.add_roles.assert_awaited_once_with(
+            role,
+            reason="Reacted with white check mark on rules acknowledgement message",
+        )
+
+    async def test_reaction_listener_skips_role_for_verified_members_and_only_cleans_up_reaction(self) -> None:
+        """Verified users should not be re-staged after acknowledging the rules message."""
+
+        bot = MagicMock()
+        bot.user = MagicMock(id=999)
+
+        role = MagicMock(name="Awaiting Verification")
+        member = MagicMock(roles=[], add_roles=AsyncMock())
+        guild = MagicMock()
+        guild.roles = [role]
+        guild.get_member.return_value = member
+        bot.get_guild.return_value = guild
+
+        message = AsyncMock()
+        channel = MagicMock()
+        channel.fetch_message = AsyncMock(return_value=message)
+        bot.get_channel.return_value = channel
+
+        cog = RulesRegulationsCog(bot=bot)
+        cog.server_config_store = MagicMock()
+        cog.verified_store = MagicMock(is_verified=MagicMock(return_value=True))
+        cog.server_config_store.get_rules_acknowledgement_message_id.return_value = 555
+
+        payload = MagicMock(guild_id=123, user_id=111, message_id=555, channel_id=222, emoji=WHITE_CHECK_MARK_EMOJI)
+
+        await cog.on_raw_reaction_add(payload)
+
+        message.remove_reaction.assert_awaited_once_with(WHITE_CHECK_MARK_EMOJI, member)
+        cog.verified_store.is_verified.assert_called_once_with("111")
+        member.add_roles.assert_not_awaited()
 
 
 if __name__ == "__main__":

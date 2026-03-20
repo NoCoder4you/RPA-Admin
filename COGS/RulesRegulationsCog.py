@@ -4,7 +4,7 @@ import asyncio
 import discord
 from discord.ext import commands
 
-from habbo_verification_core import ServerConfigStore
+from habbo_verification_core import ServerConfigStore, VerifiedUserStore
 
 WHITE_CHECK_MARK_EMOJI = "✅"
 
@@ -18,6 +18,9 @@ class RulesRegulationsCog(commands.Cog):
         # Reuse the shared JSON-backed config store so the rules acknowledgement message ID
         # survives bot restarts without introducing a one-off file format.
         self.server_config_store = ServerConfigStore()
+        # Reuse the existing verified-user persistence so the rules acknowledgement listener can
+        # avoid re-queueing members who have already completed the verification flow.
+        self.verified_store = VerifiedUserStore()
 
     def _build_rule_embeds(
         self,
@@ -153,7 +156,7 @@ class RulesRegulationsCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
-        """Listen only to the configured rules acknowledgement message and ignore every other reaction event."""
+        """Handle only the saved rules message and route ✅ acknowledgements into verification staging."""
 
         if payload.guild_id is None:
             return
@@ -163,10 +166,6 @@ class RulesRegulationsCog(commands.Cog):
 
         configured_message_id = self.server_config_store.get_rules_acknowledgement_message_id()
         if configured_message_id is None or payload.message_id != configured_message_id:
-            return
-
-        # The white check mark is the only intended acknowledgement reaction on the rules post.
-        if str(payload.emoji) == WHITE_CHECK_MARK_EMOJI:
             return
 
         guild = self.bot.get_guild(payload.guild_id)
@@ -179,6 +178,36 @@ class RulesRegulationsCog(commands.Cog):
                 member = await guild.fetch_member(payload.user_id)
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 return
+
+        # Always clean up the user's acknowledgement reaction so the rules message keeps a single
+        # canonical bot-owned check mark instead of growing a long per-user reaction roster.
+        await self._remove_member_reaction_from_message(payload, member)
+
+        # Ignore all non-checkmark reactions after cleanup so only ✅ can trigger staging logic.
+        if str(payload.emoji) != WHITE_CHECK_MARK_EMOJI:
+            return
+
+        # Members already stored in VerifiedUsers.json have already completed verification, so
+        # the rules acknowledgement should not reassign their staging role.
+        if self.verified_store.is_verified(str(payload.user_id)):
+            return
+
+        role = discord.utils.get(guild.roles, name="Awaiting Verification")
+        if role is None or role in member.roles:
+            return
+
+        try:
+            # Grant the staging role only after rules acknowledgement for users who still need verification.
+            await member.add_roles(role, reason="Reacted with white check mark on rules acknowledgement message")
+        except (discord.Forbidden, discord.HTTPException):
+            return
+
+    async def _remove_member_reaction_from_message(
+        self,
+        payload: discord.RawReactionActionEvent,
+        member: discord.Member,
+    ) -> None:
+        """Remove the reacting member's reaction so the saved rules message stays bot-owned."""
 
         channel = self.bot.get_channel(payload.channel_id)
         if channel is None:

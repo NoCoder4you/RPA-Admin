@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 try:
     import discord
-    from COGS.ServerVerifyRPA import HabboVerificationCog
+    from COGS.ServerVerifyRPA import HabboVerificationCog, WHITE_CHECK_MARK_EMOJI
 except ModuleNotFoundError as exc:  # pragma: no cover - environment-dependent test skip
     raise unittest.SkipTest(f"discord.py is not installed in this environment: {exc}")
 
@@ -135,14 +135,32 @@ class HabboVerificationCogReactionRoleTests(unittest.IsolatedAsyncioTestCase):
         cog.bot = bot
         cog.server_config_store = SimpleNamespace(get_verification_reaction_message_id=lambda: 1481010999157981256)
 
-        message = SimpleNamespace(add_reaction=AsyncMock())
+        message = SimpleNamespace(add_reaction=AsyncMock(), reactions=[])
         matching_channel = SimpleNamespace(fetch_message=AsyncMock(return_value=message))
         missing_channel = SimpleNamespace(fetch_message=AsyncMock(side_effect=discord.NotFound(MagicMock(), "missing")))
         bot.guilds = [SimpleNamespace(text_channels=[missing_channel, matching_channel])]
 
         await cog._ensure_verification_message_reaction()
 
-        message.add_reaction.assert_awaited_once_with("✅")
+        message.add_reaction.assert_awaited_once_with(WHITE_CHECK_MARK_EMOJI)
+
+
+    async def test_ensure_verification_message_reaction_skips_duplicate_bot_white_check_mark(self) -> None:
+        # If the bot already owns the white check mark reaction, startup should not add a duplicate request.
+        reaction = SimpleNamespace(emoji=WHITE_CHECK_MARK_EMOJI, me=True)
+        message = SimpleNamespace(add_reaction=AsyncMock(), reactions=[reaction])
+
+        bot = SimpleNamespace(user=SimpleNamespace(id=999), guilds=[])
+        cog = HabboVerificationCog.__new__(HabboVerificationCog)
+        cog.bot = bot
+        cog.server_config_store = SimpleNamespace(get_verification_reaction_message_id=lambda: 1481010999157981256)
+
+        matching_channel = SimpleNamespace(fetch_message=AsyncMock(return_value=message))
+        bot.guilds = [SimpleNamespace(text_channels=[matching_channel])]
+
+        await cog._ensure_verification_message_reaction()
+
+        message.add_reaction.assert_not_awaited()
 
     async def test_ensure_verification_message_reaction_noops_without_configured_message_id(self) -> None:
         # Guardrail: without a configured target message ID, startup should not issue fetch requests.

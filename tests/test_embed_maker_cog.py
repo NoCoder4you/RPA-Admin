@@ -7,9 +7,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 try:
-    from COGS.EmbedMakerCog import EmbedMakerCog
+    from COGS.EmbedMakerCog import EmbedMakerCog, EmbedMakerModal
 except Exception:  # pragma: no cover - environment without discord.py
     EmbedMakerCog = None
+    EmbedMakerModal = None
 
 
 @unittest.skipIf(EmbedMakerCog is None, "discord.py is not installed in the test environment")
@@ -34,8 +35,24 @@ class EmbedMakerCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(embed.footer.text, "Royal Protection Agency - Royal Guard")
         self.assertEqual(embed.color.value, 0x112233)
 
-    async def test_embedmaker_posts_embed_and_confirms_privately(self) -> None:
-        """The slash command should send the embed to the channel and keep the author anonymous."""
+    async def test_embedmaker_opens_modal_for_staff_input(self) -> None:
+        """The slash command should open the modal instead of collecting long text in slash options."""
+
+        cog = EmbedMakerCog(bot=MagicMock())
+        interaction = SimpleNamespace(
+            guild=SimpleNamespace(),
+            channel=SimpleNamespace(),
+            response=SimpleNamespace(send_modal=AsyncMock()),
+        )
+
+        await cog.embedmaker.callback(cog, interaction)
+
+        interaction.response.send_modal.assert_awaited_once()
+        sent_modal = interaction.response.send_modal.await_args.args[0]
+        self.assertIsInstance(sent_modal, EmbedMakerModal)
+
+    async def test_embedmaker_modal_posts_embed_and_confirms_privately(self) -> None:
+        """Submitting the modal should send the embed to the channel and keep the author anonymous."""
 
         cog = EmbedMakerCog(bot=MagicMock())
         channel = SimpleNamespace(send=AsyncMock())
@@ -45,7 +62,12 @@ class EmbedMakerCogTests(unittest.IsolatedAsyncioTestCase):
             response=SimpleNamespace(send_message=AsyncMock()),
         )
 
-        await cog.embedmaker.callback(cog, interaction, "Shift Update", "Line up at the gate.", "#abcdef")
+        modal = EmbedMakerModal(cog)
+        modal.embed_title._value = "Shift Update"
+        modal.description._value = "Line up at the gate."
+        modal.color._value = "#abcdef"
+
+        await modal.on_submit(interaction)
 
         channel.send.assert_awaited_once()
         sent_embed = channel.send.await_args.kwargs["embed"]
@@ -56,7 +78,7 @@ class EmbedMakerCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent_embed.color.value, 0xABCDEF)
         interaction.response.send_message.assert_awaited_once_with("✅ Anonymous embed sent.", ephemeral=True)
 
-    async def test_embedmaker_rejects_invalid_hex_color(self) -> None:
+    async def test_embedmaker_modal_rejects_invalid_hex_color(self) -> None:
         """Invalid color input should return an ephemeral validation error instead of sending the embed."""
 
         cog = EmbedMakerCog(bot=MagicMock())
@@ -67,7 +89,12 @@ class EmbedMakerCogTests(unittest.IsolatedAsyncioTestCase):
             response=SimpleNamespace(send_message=AsyncMock()),
         )
 
-        await cog.embedmaker.callback(cog, interaction, "Alert", "Message", "nothex")
+        modal = EmbedMakerModal(cog)
+        modal.embed_title._value = "Alert"
+        modal.description._value = "Message"
+        modal.color._value = "nothex"
+
+        await modal.on_submit(interaction)
 
         channel.send.assert_not_awaited()
         interaction.response.send_message.assert_awaited_once_with(
@@ -85,7 +112,7 @@ class EmbedMakerCogTests(unittest.IsolatedAsyncioTestCase):
             response=SimpleNamespace(send_message=AsyncMock()),
         )
 
-        await cog.embedmaker.callback(cog, interaction, "Alert", "Message", None)
+        await cog.embedmaker.callback(cog, interaction)
 
         interaction.response.send_message.assert_awaited_once_with(
             "This command can only be used in a server channel.",

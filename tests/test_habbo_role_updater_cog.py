@@ -68,6 +68,7 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
         cog._assign_roles_to_member_from_profile = AsyncMock(
             return_value=("Added: Role A | Removed: none", ["Role A"], [])
         )
+        cog._ensure_verified_role = AsyncMock(return_value=("Verified role added.", ["Verified"]))
         cog._sync_member_nickname = AsyncMock(return_value="Nickname updated to verified Habbo username.")
         cog._send_role_change_embed_for_guild = AsyncMock()
         cog._send_verification_rejoin_log = AsyncMock()
@@ -82,21 +83,39 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
             await cog.on_member_join(member)
 
         cog._assign_roles_to_member_from_profile.assert_awaited_once_with(member.guild, member, {"name": "Siren"})
+        cog._ensure_verified_role.assert_awaited_once_with(member.guild, member)
         cog._sync_member_nickname.assert_awaited_once_with(member=member, habbo_username="Siren")
         cog._send_role_change_embed_for_guild.assert_awaited_once_with(
             guild=member.guild,
             member=member,
-            added_role_names=["Role A"],
+            added_role_names=["Role A", "Verified"],
             removed_role_names=[],
         )
         cog._send_verification_rejoin_log.assert_awaited_once_with(
             guild=member.guild,
             member=member,
             habbo_username="Siren",
-            role_status="Added: Role A | Removed: none",
+            role_status="Added: Role A | Removed: none | Verified Role: Verified role added.",
             nickname_status="Nickname updated to verified Habbo username.",
-            added_role_names=["Role A"],
+            added_role_names=["Role A", "Verified"],
             removed_role_names=[],
+        )
+
+    async def test_ensure_verified_role_adds_verified_role_when_missing(self) -> None:
+        """A rejoining saved user should regain the Discord Verified role if it is available."""
+
+        cog = HabboRoleUpdaterCog.__new__(HabboRoleUpdaterCog)
+        verified_role = SimpleNamespace(name="Verified")
+        guild = SimpleNamespace(roles=[verified_role])
+        member = SimpleNamespace(roles=[], add_roles=AsyncMock())
+
+        status, added_roles = await cog._ensure_verified_role(guild, member)
+
+        self.assertEqual(status, "Verified role added.")
+        self.assertEqual(added_roles, ["Verified"])
+        member.add_roles.assert_awaited_once_with(
+            verified_role,
+            reason="Habbo automatic role updater verified-role sync on member join",
         )
 
     async def test_send_verification_rejoin_log_posts_expected_summary(self) -> None:

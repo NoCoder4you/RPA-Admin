@@ -156,6 +156,14 @@ class HabboRoleUpdaterCog(commands.Cog):
             member,
             profile,
         )
+        verified_role_status, verified_role_names = await self._ensure_verified_role(member.guild, member)
+        if verified_role_names:
+            added_role_names.extend(verified_role_names)
+            # Fold the guaranteed Verified role grant into the human-readable role summary shown in logs.
+            if role_status == "No role changes were required.":
+                role_status = f"Added: {', '.join(verified_role_names)} | Removed: none"
+            else:
+                role_status = f"{role_status} | Verified Role: {verified_role_status}"
         nickname_status = await self._sync_member_nickname(
             member=member,
             habbo_username=str(profile.get("name", stored_habbo_username)),
@@ -202,6 +210,26 @@ class HabboRoleUpdaterCog(commands.Cog):
             return "Failed (Discord rejected the nickname update request)."
 
         return "Nickname updated to verified Habbo username."
+
+    async def _ensure_verified_role(self, guild: discord.Guild, member: discord.Member) -> tuple[str, list[str]]:
+        """Ensure rejoining verified members also receive the Discord Verified role."""
+
+        verified_role = discord.utils.get(guild.roles, name="Verified")
+        if verified_role is None:
+            return "Skipped (Verified role does not exist in this server).", []
+
+        if verified_role in member.roles:
+            return "No Verified role change was required.", []
+
+        try:
+            # Re-add the stable Verified role on join so previously verified members immediately regain baseline access.
+            await member.add_roles(verified_role, reason="Habbo automatic role updater verified-role sync on member join")
+        except discord.Forbidden:
+            return "Failed (bot lacks permission to manage the Verified role).", []
+        except discord.HTTPException:
+            return "Failed (Discord rejected the Verified role update request).", []
+
+        return "Verified role added.", [verified_role.name]
 
     async def _assign_roles_to_member_from_profile(
         self,

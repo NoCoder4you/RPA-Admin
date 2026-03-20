@@ -9,5 +9,9 @@
   "webhook_archive_channel_id": "1484040953370120292",
   "new_applications_channel_id": "1484035174357274704",
   "unit_leadership_role_id": "1480712796772634715",
-  "message_log_channel_id": "1484025952706232450"
+  "message_log_channel_id": "1484025952706232450",
+  "rules_acknowledgement_message_id": "1484409562684588236",
+  "message_log_channel_id": "1484025952706232450",
+  "awaiting_verification_channel_id": "1479391662076723224",
+  "awaiting_verification_role_id": "1481443898369900667"
 }

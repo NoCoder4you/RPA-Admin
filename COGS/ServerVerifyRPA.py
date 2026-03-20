@@ -42,6 +42,54 @@ class HabboVerificationCog(commands.Cog):
         # Read JSON-backed DNH/BoS verification restrictions managed by staff slash commands.
         self.verify_restriction_store = VerifyRestrictionStore()
 
+    async def _send_awaiting_verification_embed(
+        self,
+        *,
+        guild: discord.Guild,
+        member: discord.Member,
+    ) -> None:
+        """Post a standardized onboarding embed in the fixed Awaiting Verification channel."""
+
+        # Keep all staging notifications in the exact moderation channel requested by staff so
+        # every newly queued member gets the same visible ping and instructions.
+        channel = guild.get_channel(AWAITING_VERIFICATION_CHANNEL_ID)
+        if channel is None:
+            return
+
+        embed = discord.Embed(
+            title="Awaiting Verification",
+            description=(
+                f"{member.mention}, you're now queued for verification. Follow the steps below to verify your account."
+            ),
+            color=discord.Color.gold(),
+        )
+        embed.add_field(
+            name="Step 1",
+            value="Open Habbo and copy the verification code provided by the bot.",
+            inline=False,
+        )
+        embed.add_field(
+            name="Step 2",
+            value="Paste that code into your Habbo motto and save the change.",
+            inline=False,
+        )
+        embed.add_field(
+            name="Step 3",
+            value="Come back here and run `/verify` with your Habbo username so the bot can confirm your motto.",
+            inline=False,
+        )
+        embed.add_field(
+            name="Need Help?",
+            value="If the code does not work, double-check the spelling in your motto and ask staff for help in this channel.",
+            inline=False,
+        )
+
+        try:
+            # Mention the member in the message body too so Discord triggers the expected notification.
+            await channel.send(content=member.mention, embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            return
+
     @app_commands.command(
         name="verify",
         description="Verify your Habbo account by putting a temporary code in your motto.",

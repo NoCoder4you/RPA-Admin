@@ -259,6 +259,21 @@ class ServerConfigStoreTests(unittest.TestCase):
             self.assertEqual(data.get("verification_reaction_message_id"), "1481010999157981256")
             self.assertEqual(store.get_verification_reaction_message_id(), 1481010999157981256)
 
+    def test_set_and_get_rules_acknowledgement_message_id(self) -> None:
+        """Ensure the rules acknowledgement message ID is persisted in serverconfig.json."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "serverconfig.json"
+            file_path.write_text(json.dumps({"audit_log_channel_id": "456"}), encoding="utf-8")
+
+            store = ServerConfigStore(file_path=file_path)
+            store.set_rules_acknowledgement_message_id(1481010999157981257)
+
+            data = json.loads(file_path.read_text(encoding="utf-8"))
+            self.assertEqual(data.get("audit_log_channel_id"), "456")
+            self.assertEqual(data.get("rules_acknowledgement_message_id"), "1481010999157981257")
+            self.assertEqual(store.get_rules_acknowledgement_message_id(), 1481010999157981257)
+
     def test_set_and_get_base_rpa_employee_role_id(self) -> None:
         """Ensure the shared employee role ID is persisted in serverconfig.json."""
 

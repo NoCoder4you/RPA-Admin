@@ -4,6 +4,10 @@ import asyncio
 import discord
 from discord.ext import commands
 
+from habbo_verification_core import ServerConfigStore
+
+WHITE_CHECK_MARK_EMOJI = "✅"
+
 
 class RulesRegulationsCog(commands.Cog):
     """Community cog exposing a text `rules` command with section-by-section embeds."""
@@ -11,6 +15,9 @@ class RulesRegulationsCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         # Keep a bot reference so this cog matches the structure used in other project cogs.
         self.bot = bot
+        # Reuse the shared JSON-backed config store so the rules acknowledgement message ID
+        # survives bot restarts without introducing a one-off file format.
+        self.server_config_store = ServerConfigStore()
 
     def _build_rule_embeds(
         self,
@@ -104,6 +111,85 @@ class RulesRegulationsCog(commands.Cog):
 
         return embeds
 
+    @commands.Cog.listener()
+    async def on_ready(self) -> None:
+        """Re-apply the white check mark to the configured rules acknowledgement message on startup."""
+
+        await self._ensure_rules_message_reaction()
+
+    async def _ensure_rules_message_reaction(self) -> None:
+        """Ensure the saved rules acknowledgement message still has the canonical white check mark."""
+
+        configured_message_id = self.server_config_store.get_rules_acknowledgement_message_id()
+        if configured_message_id is None:
+            return
+
+        # Search accessible guild text channels so the config only needs the message ID.
+        for guild in self.bot.guilds:
+            for channel in guild.text_channels:
+                try:
+                    message = await channel.fetch_message(configured_message_id)
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    continue
+
+                if self._message_has_bot_reaction(message, WHITE_CHECK_MARK_EMOJI):
+                    return
+
+                try:
+                    await message.add_reaction(WHITE_CHECK_MARK_EMOJI)
+                except (discord.Forbidden, discord.HTTPException):
+                    return
+                return
+
+    def _message_has_bot_reaction(self, message: discord.Message | object, emoji: str) -> bool:
+        """Return True when the bot already owns the requested reaction on the message."""
+
+        for reaction in getattr(message, "reactions", []):
+            if str(getattr(reaction, "emoji", "")) != emoji:
+                continue
+            if getattr(reaction, "me", False):
+                return True
+        return False
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
+        """Listen only to the configured rules acknowledgement message and ignore every other reaction event."""
+
+        if payload.guild_id is None:
+            return
+
+        if self.bot.user is not None and payload.user_id == self.bot.user.id:
+            return
+
+        configured_message_id = self.server_config_store.get_rules_acknowledgement_message_id()
+        if configured_message_id is None or payload.message_id != configured_message_id:
+            return
+
+        # The white check mark is the only intended acknowledgement reaction on the rules post.
+        if str(payload.emoji) == WHITE_CHECK_MARK_EMOJI:
+            return
+
+        guild = self.bot.get_guild(payload.guild_id)
+        if guild is None:
+            return
+
+        member = guild.get_member(payload.user_id)
+        if member is None:
+            try:
+                member = await guild.fetch_member(payload.user_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                return
+
+        channel = self.bot.get_channel(payload.channel_id)
+        if channel is None:
+            return
+
+        try:
+            message = await channel.fetch_message(payload.message_id)
+            await message.remove_reaction(payload.emoji, member)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return
+
     @commands.command(name="rules", help="Display the RPA rules and regulations in separate embeds.")
     async def rules(self, ctx: commands.Context) -> None:
         """Send the full ruleset in ordered embeds, one embed per section."""
@@ -122,10 +208,25 @@ class RulesRegulationsCog(commands.Cog):
 
         embeds = self._build_rule_embeds(thumbnail_url=thumbnail_url, footer_text=footer_text)
 
-        # Send one embed per message so each rule section stays visually separated in chat.
-        for embed in embeds:
+        closing_message: discord.Message | None = None
+        for index, embed in enumerate(embeds):
             await asyncio.sleep(1)
-            await ctx.send(embed=embed)
+            sent_message = await ctx.send(embed=embed)
+
+            # Persist only the final agreement embed message ID because that is the one users
+            # should react to later and the only one the listener should watch.
+            if index == len(embeds) - 1:
+                closing_message = sent_message
+
+        if closing_message is None:
+            return
+
+        try:
+            await closing_message.add_reaction(WHITE_CHECK_MARK_EMOJI)
+        except (discord.Forbidden, discord.HTTPException):
+            return
+
+        self.server_config_store.set_rules_acknowledgement_message_id(closing_message.id)
 
 
 async def setup(bot: commands.Bot) -> None:

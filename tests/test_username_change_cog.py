@@ -104,6 +104,7 @@ class UsernameChangeCogTests(unittest.IsolatedAsyncioTestCase):
             get_habbo_username=lambda discord_id: "OldHabbo" if discord_id == "123" else None,
             save=MagicMock(),
         )
+        cog.server_config_store = SimpleNamespace(get_request_channel_id=lambda: 1479465446632853524)
         cog._sync_member_nickname = AsyncMock(return_value="Nickname updated to approved Habbo username.")
         cog._reload_autoroles_cog = AsyncMock(return_value="Reloaded AutoRoles cog successfully.")
         member = SimpleNamespace(id=123, nick="OldHabbo")

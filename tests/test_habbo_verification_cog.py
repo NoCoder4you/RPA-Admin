@@ -13,6 +13,9 @@ except ModuleNotFoundError as exc:  # pragma: no cover - environment-dependent t
     raise unittest.SkipTest(f"discord.py is not installed in this environment: {exc}")
 
 
+AWAITING_VERIFICATION_CHANNEL_ID = 1479391662076723224
+
+
 class HabboVerificationCogNicknameTests(unittest.IsolatedAsyncioTestCase):
     """Validate nickname synchronization outcomes used by /verify flows."""
 
@@ -62,21 +65,27 @@ class HabboVerificationCogReactionRoleTests(unittest.IsolatedAsyncioTestCase):
         cog.server_config_store = SimpleNamespace(get_verification_reaction_message_id=lambda: 1481010999157981256)
 
         role = SimpleNamespace(name="Awaiting Verification")
-        member = SimpleNamespace(roles=[], add_roles=AsyncMock())
+        member = SimpleNamespace(roles=[], add_roles=AsyncMock(), mention="<@555>")
 
         message = SimpleNamespace(remove_reaction=AsyncMock())
-        channel = SimpleNamespace(fetch_message=AsyncMock(return_value=message))
-        guild = SimpleNamespace(roles=[role], get_member=lambda _uid: member, fetch_member=AsyncMock())
+        reaction_channel = SimpleNamespace(fetch_message=AsyncMock(return_value=message))
+        verification_channel = SimpleNamespace(send=AsyncMock())
+        guild = SimpleNamespace(
+            roles=[role],
+            get_member=lambda _uid: member,
+            fetch_member=AsyncMock(),
+            get_channel=lambda channel_id: verification_channel if channel_id == AWAITING_VERIFICATION_CHANNEL_ID else None,
+        )
 
         bot.user = SimpleNamespace(id=999)
         bot.get_guild = lambda _gid: guild
-        bot.get_channel = lambda _cid: channel
+        bot.get_channel = lambda _cid: reaction_channel
 
-        return cog, member, channel, message
+        return cog, member, reaction_channel, message, verification_channel
 
     async def test_reaction_add_assigns_awaiting_verification_role_and_removes_user_reaction(self) -> None:
         # Build a lightweight cog test double without running full bot startup logic.
-        cog, member, _channel, message = self._build_reaction_test_context()
+        cog, member, _channel, message, verification_channel = self._build_reaction_test_context()
 
         payload = SimpleNamespace(
             guild_id=123,
@@ -92,10 +101,14 @@ class HabboVerificationCogReactionRoleTests(unittest.IsolatedAsyncioTestCase):
         member.add_roles.assert_awaited_once()
         # User reaction should be removed so only bot-owned reaction persists.
         message.remove_reaction.assert_awaited_once_with("✅", member)
+        verification_channel.send.assert_awaited_once_with(
+            content=member.mention,
+            embed=unittest.mock.ANY,
+        )
 
     async def test_reaction_add_skips_role_when_message_id_does_not_match(self) -> None:
         # Ensure role assignment and reaction cleanup are gated to the configured verification message ID.
-        cog, member, channel, message = self._build_reaction_test_context()
+        cog, member, channel, message, verification_channel = self._build_reaction_test_context()
 
         payload = SimpleNamespace(
             guild_id=123,
@@ -110,10 +123,11 @@ class HabboVerificationCogReactionRoleTests(unittest.IsolatedAsyncioTestCase):
         member.add_roles.assert_not_awaited()
         channel.fetch_message.assert_not_awaited()
         message.remove_reaction.assert_not_awaited()
+        verification_channel.send.assert_not_awaited()
 
     async def test_reaction_add_removes_non_green_check_without_assigning_role(self) -> None:
         # Any non-green-check reaction on the configured message should be removed but not grant roles.
-        cog, member, _channel, message = self._build_reaction_test_context()
+        cog, member, _channel, message, verification_channel = self._build_reaction_test_context()
 
         payload = SimpleNamespace(
             guild_id=123,
@@ -127,6 +141,7 @@ class HabboVerificationCogReactionRoleTests(unittest.IsolatedAsyncioTestCase):
 
         member.add_roles.assert_not_awaited()
         message.remove_reaction.assert_awaited_once_with("❌", member)
+        verification_channel.send.assert_not_awaited()
 
 
 if __name__ == "__main__":

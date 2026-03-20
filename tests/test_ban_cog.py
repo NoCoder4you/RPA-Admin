@@ -7,8 +7,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 try:
+    import discord
     from COGS.BanCog import BanCog
 except ModuleNotFoundError:
+    discord = None
     BanCog = None
 
 
@@ -38,16 +40,26 @@ class BanCogTests(unittest.IsolatedAsyncioTestCase):
 
         await cog.ban.callback(cog, interaction, target_member, "major rule violation")
 
-        target_member.send.assert_awaited_once_with(
-            "You are being banned from **Test Guild** by **namespace(id=101, top_role=5)** for: **major rule violation**"
-        )
+        target_member.send.assert_awaited_once()
+        dm_embed = target_member.send.await_args.kwargs["embed"]
+        self.assertIsInstance(dm_embed, discord.Embed)
+        self.assertIn("You are being banned from **Test Guild**.", dm_embed.description)
+        self.assertIn("**Reason:** major rule violation", dm_embed.description)
+
         target_member.ban.assert_awaited_once()
         ban_reason = target_member.ban.await_args.kwargs.get("reason", "")
         self.assertTrue(ban_reason.endswith(" - major rule violation"))
-        interaction.response.send_message.assert_awaited_once_with(
-            "✅ Banned <@202> for reason: major rule violation\nThe user was notified via DM before the ban.",
-            ephemeral=True,
-        )
+
+        interaction.response.send_message.assert_awaited_once()
+        send_kwargs = interaction.response.send_message.await_args.kwargs
+        self.assertTrue(send_kwargs["ephemeral"])
+        success_embed = send_kwargs["embed"]
+        self.assertEqual(success_embed.title, "Member Banned")
+        self.assertEqual(success_embed.description, "✅ Banned <@202>")
+        self.assertEqual(success_embed.fields[0].name, "Reason")
+        self.assertEqual(success_embed.fields[0].value, "major rule violation")
+        self.assertEqual(success_embed.fields[1].name, "DM Status")
+        self.assertEqual(success_embed.fields[1].value, "The user was notified via DM before the ban.")
 
     async def test_ban_rejects_self_ban(self) -> None:
         bot = MagicMock()
@@ -90,10 +102,11 @@ class BanCogTests(unittest.IsolatedAsyncioTestCase):
         await cog.ban.callback(cog, interaction, target_member, "major rule violation")
 
         target_member.ban.assert_awaited_once()
-        interaction.response.send_message.assert_awaited_once_with(
-            "✅ Banned <@202> for reason: major rule violation\nI could not DM the user before ban.",
-            ephemeral=True,
-        )
+        interaction.response.send_message.assert_awaited_once()
+        send_kwargs = interaction.response.send_message.await_args.kwargs
+        self.assertTrue(send_kwargs["ephemeral"])
+        success_embed = send_kwargs["embed"]
+        self.assertEqual(success_embed.fields[1].value, "I could not DM the user before ban.")
 
 
 if __name__ == "__main__":

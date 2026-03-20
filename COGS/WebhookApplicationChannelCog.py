@@ -141,7 +141,7 @@ class WebhookApplicationChannelCog(commands.Cog):
 
         unit_leadership_role_id = self.server_config_store.get_unit_leadership_role_id()
         leadership_mention = (
-            f"<@&{unit_leadership_role_id}>" if unit_leadership_role_id is not None else "@Unit Leadership"
+            f"-# <@&{unit_leadership_role_id}>" if unit_leadership_role_id is not None else "@Unit Leadership"
         )
         guidance = "Please only claim this application if this unit is relevant to you and you can actively review it."
         return f"{leadership_mention}\n{self.build_new_application_message(request.unit_prefix)}\n{guidance}"

@@ -14,6 +14,35 @@ class KickCog(commands.Cog):
         # Keep a bot reference for consistency with the project's other cogs.
         self.bot = bot
 
+    @staticmethod
+    def _build_kick_dm_embed(guild_name: str, moderator: object, reason: str) -> discord.Embed:
+        """Create the direct-message embed shown to members before they are kicked."""
+
+        # Keep moderation DMs consistent and easier to read than a plain text block.
+        return discord.Embed(
+            description=(
+                f"You are being kicked from **{guild_name}**.\n"
+                f"**Moderator:** {moderator}\n"
+                f"**Reason:** {reason}"
+            ),
+            color=discord.Color.orange(),
+        )
+
+    @staticmethod
+    def _build_kick_success_embed(member_mention: str, reason: str, dm_status_note: str) -> discord.Embed:
+        """Create the confirmation embed sent after a successful kick."""
+
+        # Surface the outcome and DM status inside one structured moderation response.
+        return discord.Embed(
+            title="Member Kicked",
+            description=f"✅ Kicked {member_mention}",
+            color=discord.Color.orange(),
+        ).add_field(name="Reason", value=reason, inline=False).add_field(
+            name="DM Status",
+            value=dm_status_note,
+            inline=False,
+        )
+
     @app_commands.command(name="kick", description="Kick a member from the server with an optional reason.")
     @app_commands.describe(
         mention="The member to remove from this server",
@@ -60,13 +89,7 @@ class KickCog(commands.Cog):
         # If DMs are closed (or Discord rejects the DM), continue with the kick instead of blocking moderation.
         pre_kick_dm_sent = False
         try:
-            await mention.send(
-                (
-                    f"You are being kicked from **{interaction.guild.name}**.\n"
-                    f"**Moderator:** {interaction.user}\n"
-                    f"**Reason:** {reason}"
-                )
-            )
+            await mention.send(embed=self._build_kick_dm_embed(interaction.guild.name, interaction.user, reason))
             pre_kick_dm_sent = True
         except Exception:
             # DM delivery is best-effort; any error should not prevent the moderation action.
@@ -94,7 +117,7 @@ class KickCog(commands.Cog):
             else "I could not DM them first (likely due to their privacy settings)."
         )
         await interaction.response.send_message(
-            f"✅ Kicked {mention.mention} for reason: {reason}\n{dm_status_note}",
+            embed=self._build_kick_success_embed(mention.mention, reason, dm_status_note),
             ephemeral=True,
         )
 

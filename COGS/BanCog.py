@@ -12,6 +12,35 @@ class BanCog(commands.Cog):
         # Keep a bot reference for consistency with the project's other cogs.
         self.bot = bot
 
+    @staticmethod
+    def _build_ban_dm_embed(guild_name: str, moderator: object, reason: str) -> discord.Embed:
+        """Create the direct-message embed shown to members before they are banned."""
+
+        # Match kick/ban notifications so disciplinary messages have one consistent style.
+        return discord.Embed(
+            description=(
+                f"You are being banned from **{guild_name}**.\n"
+                f"**Moderator:** {moderator}\n"
+                f"**Reason:** {reason}"
+            ),
+            color=discord.Color.red(),
+        )
+
+    @staticmethod
+    def _build_ban_success_embed(member_mention: str, reason: str, dm_notice: str) -> discord.Embed:
+        """Create the confirmation embed sent after a successful ban."""
+
+        # Keep moderation confirmations easy to scan in-channel for staff.
+        return discord.Embed(
+            title="Member Banned",
+            description=f"✅ Banned {member_mention}",
+            color=discord.Color.red(),
+        ).add_field(name="Reason", value=reason, inline=False).add_field(
+            name="DM Status",
+            value=dm_notice,
+            inline=False,
+        )
+
     @app_commands.command(name="ban", description="Ban a member from the server with a reason.")
     @app_commands.describe(
         mention="The member to ban from this server",
@@ -57,10 +86,7 @@ class BanCog(commands.Cog):
         # Attempt to DM the target before the ban so they receive context and appeal details.
         dm_sent = False
         try:
-            await mention.send(
-                "You are being banned from "
-                f"**{interaction.guild.name}** by **{interaction.user}** for: **{reason}**"
-            )
+            await mention.send(embed=self._build_ban_dm_embed(interaction.guild.name, interaction.user, reason))
             dm_sent = True
         except Exception:
             # Continue with the ban even when the DM cannot be delivered for any reason.
@@ -84,7 +110,7 @@ class BanCog(commands.Cog):
         # Confirm success with a concise moderation message visible to command invoker.
         dm_notice = "The user was notified via DM before the ban." if dm_sent else "I could not DM the user before ban."
         await interaction.response.send_message(
-            f"✅ Banned {mention.mention} for reason: {reason}\n{dm_notice}",
+            embed=self._build_ban_success_embed(mention.mention, reason, dm_notice),
             ephemeral=True,
         )
 

@@ -23,6 +23,7 @@ from habbo_verification_core import (
 
 
 WHITE_CHECK_MARK_EMOJI = "✅"
+AWAITING_VERIFICATION_CHANNEL_ID = 1479391662076723224
 
 
 class HabboVerificationCog(commands.Cog):
@@ -505,6 +506,10 @@ class HabboVerificationCog(commands.Cog):
             await member.add_roles(role, reason="Reacted with green check on verification message")
         except (discord.Forbidden, discord.HTTPException):
             return
+
+        # Mirror the rules-flow onboarding notice so any path that grants the staging role also posts
+        # the required embed and ping in the dedicated verification queue channel.
+        await self._send_awaiting_verification_embed(guild=guild, member=member)
 
     async def _remove_member_reaction_from_message(
         self,

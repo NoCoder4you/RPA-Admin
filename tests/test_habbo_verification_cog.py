@@ -8,9 +8,16 @@ from unittest.mock import AsyncMock, MagicMock
 
 try:
     import discord
-    from COGS.ServerVerifyRPA import HabboVerificationCog, WHITE_CHECK_MARK_EMOJI
+    from COGS.ServerVerifyRPA import (
+        HabboVerificationCog,
+        VERIFICATION_LOG_CHANNEL_ID,
+        WHITE_CHECK_MARK_EMOJI,
+    )
 except ModuleNotFoundError as exc:  # pragma: no cover - environment-dependent test skip
     raise unittest.SkipTest(f"discord.py is not installed in this environment: {exc}")
+
+
+AWAITING_VERIFICATION_CHANNEL_ID = 1479391662076723224
 
 
 class HabboVerificationCogNicknameTests(unittest.IsolatedAsyncioTestCase):
@@ -49,6 +56,63 @@ class HabboVerificationCogNicknameTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, "Failed (bot lacks permission to manage this nickname).")
 
 
+class HabboVerificationCogAuditLogTests(unittest.IsolatedAsyncioTestCase):
+    """Validate the staff-facing verification audit embed output."""
+
+    async def test_send_audit_log_posts_to_fixed_verification_channel(self) -> None:
+        cog = HabboVerificationCog.__new__(HabboVerificationCog)
+        verification_channel = SimpleNamespace(send=AsyncMock())
+        cog.bot = SimpleNamespace(get_channel=lambda channel_id: verification_channel if channel_id == VERIFICATION_LOG_CHANNEL_ID else None)
+        cog.server_config_store = MagicMock()
+
+        guild = SimpleNamespace(get_channel=lambda _channel_id: None)
+        interaction = SimpleNamespace(guild=guild, user=SimpleNamespace(mention="<@123>"))
+
+        await cog._send_audit_log(
+            interaction,
+            action="habbo_verification_success",
+            details={
+                "discord_user_id": "123",
+                "discord_user": "Tester",
+                "habbo_username": "Siren",
+                "role_sync_status": "Added: VIP",
+                "roles_added": "VIP",
+                "roles_removed": "none",
+                "figure_string": "hr-100-42",
+            },
+        )
+
+        verification_channel.send.assert_awaited_once()
+        embed = verification_channel.send.await_args.kwargs["embed"]
+        fields = {field.name: field.value for field in embed.fields}
+
+        self.assertEqual(embed.title, "Habbo Verification Audit")
+        self.assertEqual(fields["User"], "<@123>")
+        self.assertEqual(fields["Discord User Id"], "123")
+        self.assertEqual(fields["Discord User"], "Tester")
+        self.assertEqual(fields["Habbo Username"], "Siren")
+        self.assertNotIn("Action", fields)
+        self.assertNotIn("Role Sync Status", fields)
+        self.assertNotIn("Roles Added", fields)
+        self.assertNotIn("Roles Removed", fields)
+        self.assertEqual(embed.thumbnail.url.split("?", 1)[0], "https://www.habbo.com/habbo-imaging/avatarimage")
+
+    async def test_send_audit_log_skips_when_fixed_channel_is_unavailable(self) -> None:
+        cog = HabboVerificationCog.__new__(HabboVerificationCog)
+        cog.bot = SimpleNamespace(get_channel=lambda _channel_id: None)
+        cog.server_config_store = MagicMock()
+        guild = SimpleNamespace(get_channel=lambda _channel_id: None)
+        interaction = SimpleNamespace(guild=guild, user=SimpleNamespace(mention="<@123>"))
+
+        await cog._send_audit_log(
+            interaction,
+            action="habbo_verification_success",
+            details={"discord_user_id": "123", "habbo_username": "Siren", "figure_string": ""},
+        )
+
+        self.assertTrue(True)
+
+
 @unittest.skipIf(HabboVerificationCog is None, "discord.py is not installed in the test environment")
 class HabboVerificationCogReactionRoleTests(unittest.IsolatedAsyncioTestCase):
     """Validate reaction-based Awaiting Verification role assignment flow."""
@@ -62,21 +126,27 @@ class HabboVerificationCogReactionRoleTests(unittest.IsolatedAsyncioTestCase):
         cog.server_config_store = SimpleNamespace(get_verification_reaction_message_id=lambda: 1481010999157981256)
 
         role = SimpleNamespace(name="Awaiting Verification")
-        member = SimpleNamespace(roles=[], add_roles=AsyncMock())
+        member = SimpleNamespace(roles=[], add_roles=AsyncMock(), mention="<@555>")
 
         message = SimpleNamespace(remove_reaction=AsyncMock())
-        channel = SimpleNamespace(fetch_message=AsyncMock(return_value=message))
-        guild = SimpleNamespace(roles=[role], get_member=lambda _uid: member, fetch_member=AsyncMock())
+        reaction_channel = SimpleNamespace(fetch_message=AsyncMock(return_value=message))
+        verification_channel = SimpleNamespace(send=AsyncMock())
+        guild = SimpleNamespace(
+            roles=[role],
+            get_member=lambda _uid: member,
+            fetch_member=AsyncMock(),
+            get_channel=lambda channel_id: verification_channel if channel_id == AWAITING_VERIFICATION_CHANNEL_ID else None,
+        )
 
         bot.user = SimpleNamespace(id=999)
         bot.get_guild = lambda _gid: guild
-        bot.get_channel = lambda _cid: channel
+        bot.get_channel = lambda _cid: reaction_channel
 
-        return cog, member, channel, message
+        return cog, member, reaction_channel, message, verification_channel
 
     async def test_reaction_add_assigns_awaiting_verification_role_and_removes_user_reaction(self) -> None:
         # Build a lightweight cog test double without running full bot startup logic.
-        cog, member, _channel, message = self._build_reaction_test_context()
+        cog, member, _channel, message, verification_channel = self._build_reaction_test_context()
 
         payload = SimpleNamespace(
             guild_id=123,
@@ -92,10 +162,19 @@ class HabboVerificationCogReactionRoleTests(unittest.IsolatedAsyncioTestCase):
         member.add_roles.assert_awaited_once()
         # User reaction should be removed so only bot-owned reaction persists.
         message.remove_reaction.assert_awaited_once_with("✅", member)
+        verification_channel.send.assert_awaited_once_with(
+            content=member.mention,
+            embed=unittest.mock.ANY,
+        )
+        sent_embed = verification_channel.send.await_args.kwargs["embed"]
+        self.assertEqual(sent_embed.title, "Awaiting Verification")
+        self.assertEqual(sent_embed.fields[2].name, "Step 3")
+        self.assertIn("/verify", sent_embed.fields[2].value)
+        self.assertIn("your Habbo username", sent_embed.fields[2].value)
 
     async def test_reaction_add_skips_role_when_message_id_does_not_match(self) -> None:
         # Ensure role assignment and reaction cleanup are gated to the configured verification message ID.
-        cog, member, channel, message = self._build_reaction_test_context()
+        cog, member, channel, message, verification_channel = self._build_reaction_test_context()
 
         payload = SimpleNamespace(
             guild_id=123,
@@ -110,10 +189,11 @@ class HabboVerificationCogReactionRoleTests(unittest.IsolatedAsyncioTestCase):
         member.add_roles.assert_not_awaited()
         channel.fetch_message.assert_not_awaited()
         message.remove_reaction.assert_not_awaited()
+        verification_channel.send.assert_not_awaited()
 
     async def test_reaction_add_removes_non_green_check_without_assigning_role(self) -> None:
         # Any non-green-check reaction on the configured message should be removed but not grant roles.
-        cog, member, _channel, message = self._build_reaction_test_context()
+        cog, member, _channel, message, verification_channel = self._build_reaction_test_context()
 
         payload = SimpleNamespace(
             guild_id=123,
@@ -127,52 +207,7 @@ class HabboVerificationCogReactionRoleTests(unittest.IsolatedAsyncioTestCase):
 
         member.add_roles.assert_not_awaited()
         message.remove_reaction.assert_awaited_once_with("❌", member)
-
-    async def test_ensure_verification_message_reaction_adds_green_check_to_configured_message(self) -> None:
-        # Confirm startup behavior: the bot should place ✅ on the configured verification message.
-        bot = SimpleNamespace(guilds=[])
-        cog = HabboVerificationCog.__new__(HabboVerificationCog)
-        cog.bot = bot
-        cog.server_config_store = SimpleNamespace(get_verification_reaction_message_id=lambda: 1481010999157981256)
-
-        message = SimpleNamespace(add_reaction=AsyncMock(), reactions=[])
-        matching_channel = SimpleNamespace(fetch_message=AsyncMock(return_value=message))
-        missing_channel = SimpleNamespace(fetch_message=AsyncMock(side_effect=discord.NotFound(MagicMock(), "missing")))
-        bot.guilds = [SimpleNamespace(text_channels=[missing_channel, matching_channel])]
-
-        await cog._ensure_verification_message_reaction()
-
-        message.add_reaction.assert_awaited_once_with(WHITE_CHECK_MARK_EMOJI)
-
-
-    async def test_ensure_verification_message_reaction_skips_duplicate_bot_white_check_mark(self) -> None:
-        # If the bot already owns the white check mark reaction, startup should not add a duplicate request.
-        reaction = SimpleNamespace(emoji=WHITE_CHECK_MARK_EMOJI, me=True)
-        message = SimpleNamespace(add_reaction=AsyncMock(), reactions=[reaction])
-
-        bot = SimpleNamespace(user=SimpleNamespace(id=999), guilds=[])
-        cog = HabboVerificationCog.__new__(HabboVerificationCog)
-        cog.bot = bot
-        cog.server_config_store = SimpleNamespace(get_verification_reaction_message_id=lambda: 1481010999157981256)
-
-        matching_channel = SimpleNamespace(fetch_message=AsyncMock(return_value=message))
-        bot.guilds = [SimpleNamespace(text_channels=[matching_channel])]
-
-        await cog._ensure_verification_message_reaction()
-
-        message.add_reaction.assert_not_awaited()
-
-    async def test_ensure_verification_message_reaction_noops_without_configured_message_id(self) -> None:
-        # Guardrail: without a configured target message ID, startup should not issue fetch requests.
-        fetch_message = AsyncMock()
-        bot = SimpleNamespace(guilds=[SimpleNamespace(text_channels=[SimpleNamespace(fetch_message=fetch_message)])])
-        cog = HabboVerificationCog.__new__(HabboVerificationCog)
-        cog.bot = bot
-        cog.server_config_store = SimpleNamespace(get_verification_reaction_message_id=lambda: None)
-
-        await cog._ensure_verification_message_reaction()
-
-        fetch_message.assert_not_awaited()
+        verification_channel.send.assert_not_awaited()
 
 
 if __name__ == "__main__":

@@ -4,6 +4,11 @@ import asyncio
 import discord
 from discord.ext import commands
 
+from habbo_verification_core import ServerConfigStore, VerifiedUserStore
+
+WHITE_CHECK_MARK_EMOJI = "✅"
+AWAITING_VERIFICATION_CHANNEL_ID = 1479391662076723224
+
 
 class RulesRegulationsCog(commands.Cog):
     """Community cog exposing a text `rules` command with section-by-section embeds."""
@@ -11,6 +16,12 @@ class RulesRegulationsCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         # Keep a bot reference so this cog matches the structure used in other project cogs.
         self.bot = bot
+        # Reuse the shared JSON-backed config store so the rules acknowledgement message ID
+        # survives bot restarts without introducing a one-off file format.
+        self.server_config_store = ServerConfigStore()
+        # Reuse the existing verified-user persistence so the rules acknowledgement listener can
+        # avoid re-queueing members who have already completed the verification flow.
+        self.verified_store = VerifiedUserStore()
 
     def _build_rule_embeds(
         self,
@@ -104,6 +115,196 @@ class RulesRegulationsCog(commands.Cog):
 
         return embeds
 
+    @commands.Cog.listener()
+    async def on_ready(self) -> None:
+        """Re-apply the white check mark to the configured rules acknowledgement message on startup."""
+
+        await self._ensure_rules_message_reaction()
+
+    async def _ensure_rules_message_reaction(self) -> None:
+        """Ensure the saved rules acknowledgement message still has the canonical white check mark."""
+
+        configured_message_id = self.server_config_store.get_rules_acknowledgement_message_id()
+        if configured_message_id is None:
+            return
+
+        # Search accessible guild text channels so the config only needs the message ID.
+        for guild in self.bot.guilds:
+            for channel in guild.text_channels:
+                try:
+                    message = await channel.fetch_message(configured_message_id)
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    continue
+
+                if self._message_has_bot_reaction(message, WHITE_CHECK_MARK_EMOJI):
+                    return
+
+                try:
+                    await message.add_reaction(WHITE_CHECK_MARK_EMOJI)
+                except (discord.Forbidden, discord.HTTPException):
+                    return
+                return
+
+    def _message_has_bot_reaction(self, message: discord.Message | object, emoji: str) -> bool:
+        """Return True when the bot already owns the requested reaction on the message."""
+
+        for reaction in getattr(message, "reactions", []):
+            if str(getattr(reaction, "emoji", "")) != emoji:
+                continue
+            if getattr(reaction, "me", False):
+                return True
+        return False
+
+    async def _send_awaiting_verification_embed(
+        self,
+        *,
+        guild: discord.Guild,
+        member: discord.Member,
+    ) -> None:
+        """Post a per-member onboarding embed in the verification channel after staging."""
+
+        # Staff requested that every Awaiting Verification onboarding notice land in the fixed
+        # verification queue channel so the embed + ping always appears in one predictable place.
+        channel = guild.get_channel(AWAITING_VERIFICATION_CHANNEL_ID)
+        if channel is None:
+            try:
+                channel = await guild.fetch_channel(channel_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException, AttributeError):
+                return
+
+        embed = discord.Embed(
+            title="Awaiting Verification",
+            description=(
+                f"{member.mention}, you're now queued for verification. Follow the steps below to verify your account."
+            ),
+            color=discord.Color.gold(),
+        )
+        embed.add_field(
+            name="Step 1",
+            value="Open Habbo and copy the verification code provided by the bot.",
+            inline=False,
+        )
+        embed.add_field(
+            name="Step 2",
+            value="Paste that code into your Habbo motto and save the change.",
+            inline=False,
+        )
+        embed.add_field(
+            name="Step 3",
+            value="Come back here and run `/verify` with your Habbo username so the bot can confirm your motto.",
+            inline=False,
+        )
+        embed.add_field(
+            name="Need Help?",
+            value="If the code does not work, double-check the spelling in your motto and ask staff for help in this channel.",
+            inline=False,
+        )
+
+        try:
+            # Mention the member in the message body as well so Discord reliably notifies them.
+            await channel.send(content=member.mention, embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            return
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
+        """Handle only the saved rules message and route ✅ acknowledgements into verification staging."""
+
+        if payload.guild_id is None:
+            return
+
+        if self.bot.user is not None and payload.user_id == self.bot.user.id:
+            return
+
+        configured_message_id = self.server_config_store.get_rules_acknowledgement_message_id()
+        if configured_message_id is None or payload.message_id != configured_message_id:
+            return
+
+        guild = self.bot.get_guild(payload.guild_id)
+        if guild is None:
+            return
+
+        member = guild.get_member(payload.user_id)
+        if member is None:
+            try:
+                member = await guild.fetch_member(payload.user_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                return
+
+        # Always clean up the user's acknowledgement reaction so the rules message keeps a single
+        # canonical bot-owned check mark instead of growing a long per-user reaction roster.
+        await self._remove_member_reaction_from_message(payload, member)
+
+        # Ignore all non-checkmark reactions after cleanup so only ✅ can trigger staging logic.
+        if str(payload.emoji) != WHITE_CHECK_MARK_EMOJI:
+            return
+
+        # Members already stored in VerifiedUsers.json have already completed verification, so
+        # the rules acknowledgement should not reassign their staging role.
+        if self.verified_store.is_verified(str(payload.user_id)):
+            return
+
+        role = self._get_awaiting_verification_role(guild)
+        if role is None or role in member.roles:
+            return
+
+        try:
+            # Grant the staging role only after rules acknowledgement for users who still need verification.
+            await member.add_roles(role, reason="Reacted with white check mark on rules acknowledgement message")
+        except (discord.Forbidden, discord.HTTPException):
+            return
+
+        # The actual onboarding embed is dispatched from on_member_update so the same behavior also
+        # runs for manual role grants and other automation flows.
+
+    def _get_awaiting_verification_role(self, guild: discord.Guild) -> discord.Role | None:
+        """Resolve the Awaiting Verification role from config first, then fall back to the legacy role name."""
+
+        configured_role_id = self.server_config_store.get_awaiting_verification_role_id()
+        if configured_role_id is not None:
+            configured_role = guild.get_role(configured_role_id)
+            if configured_role is not None:
+                return configured_role
+
+        # Preserve compatibility with existing deployments that have not stored the role ID yet.
+        return discord.utils.get(guild.roles, name="Awaiting Verification")
+
+    @commands.Cog.listener()
+    async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
+        """Send onboarding instructions whenever the Awaiting Verification role is newly added."""
+
+        awaiting_role = self._get_awaiting_verification_role(after.guild)
+        if awaiting_role is None:
+            return
+
+        before_role_ids = {role.id for role in before.roles}
+        if awaiting_role.id in before_role_ids:
+            return
+
+        after_role_ids = {role.id for role in after.roles}
+        if awaiting_role.id not in after_role_ids:
+            return
+
+        # This hook covers role grants from any source, including manual staff actions or other cogs.
+        await self._send_awaiting_verification_embed(guild=after.guild, member=after)
+
+    async def _remove_member_reaction_from_message(
+        self,
+        payload: discord.RawReactionActionEvent,
+        member: discord.Member,
+    ) -> None:
+        """Remove the reacting member's reaction so the saved rules message stays bot-owned."""
+
+        channel = self.bot.get_channel(payload.channel_id)
+        if channel is None:
+            return
+
+        try:
+            message = await channel.fetch_message(payload.message_id)
+            await message.remove_reaction(payload.emoji, member)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return
+
     @commands.command(name="rules", help="Display the RPA rules and regulations in separate embeds.")
     async def rules(self, ctx: commands.Context) -> None:
         """Send the full ruleset in ordered embeds, one embed per section."""
@@ -122,10 +323,25 @@ class RulesRegulationsCog(commands.Cog):
 
         embeds = self._build_rule_embeds(thumbnail_url=thumbnail_url, footer_text=footer_text)
 
-        # Send one embed per message so each rule section stays visually separated in chat.
-        for embed in embeds:
+        closing_message: discord.Message | None = None
+        for index, embed in enumerate(embeds):
             await asyncio.sleep(1)
-            await ctx.send(embed=embed)
+            sent_message = await ctx.send(embed=embed)
+
+            # Persist only the final agreement embed message ID because that is the one users
+            # should react to later and the only one the listener should watch.
+            if index == len(embeds) - 1:
+                closing_message = sent_message
+
+        if closing_message is None:
+            return
+
+        try:
+            await closing_message.add_reaction(WHITE_CHECK_MARK_EMOJI)
+        except (discord.Forbidden, discord.HTTPException):
+            return
+
+        self.server_config_store.set_rules_acknowledgement_message_id(closing_message.id)
 
 
 async def setup(bot: commands.Bot) -> None:

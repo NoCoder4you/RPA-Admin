@@ -86,3 +86,16 @@ class MentionForwardCogTests(unittest.IsolatedAsyncioTestCase):
         await self.cog.on_message(message)
 
         self.owner_user.send.assert_not_awaited()
+
+    async def test_does_not_forward_when_owner_mentions_bot(self) -> None:
+        message = SimpleNamespace(
+            author=SimpleNamespace(id=BOT_OWNER_ID, bot=False, roles=[SimpleNamespace(id=TARGET_ROLE_ID)]),
+            mentions=[self.bot_user],
+            content="<@999> owner ping should be ignored",
+            channel=SimpleNamespace(mention="#owner"),
+            guild=SimpleNamespace(name="RPA"),
+        )
+
+        await self.cog.on_message(message)
+
+        self.owner_user.send.assert_not_awaited()

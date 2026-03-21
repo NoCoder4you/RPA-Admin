@@ -15,6 +15,7 @@ from habbo_verification_core import (
     ServerConfigStore,
     VerificationManager,
     VerifiedUserStore,
+    VerifyRestrictionStore,
     fetch_habbo_group_ids,
     fetch_habbo_profile,
     motto_contains_code,
@@ -22,6 +23,8 @@ from habbo_verification_core import (
 
 
 WHITE_CHECK_MARK_EMOJI = "✅"
+AWAITING_VERIFICATION_CHANNEL_ID = 1479391662076723224
+VERIFICATION_LOG_CHANNEL_ID = 1481456997726425168
 
 
 class HabboVerificationCog(commands.Cog):
@@ -37,64 +40,56 @@ class HabboVerificationCog(commands.Cog):
         self.badge_role_mapper = BadgeRoleMapper()
         # Resolve audit-log destination from serverconfig.json.
         self.server_config_store = ServerConfigStore()
+        # Read JSON-backed DNH/BoS verification restrictions managed by staff slash commands.
+        self.verify_restriction_store = VerifyRestrictionStore()
 
-    @commands.Cog.listener()
-    async def on_ready(self) -> None:
-        """Ensure the configured verification message always has the bot-owned white check mark reaction."""
+    async def _send_awaiting_verification_embed(
+        self,
+        *,
+        guild: discord.Guild,
+        member: discord.Member,
+    ) -> None:
+        """Post a standardized onboarding embed in the fixed Awaiting Verification channel."""
 
-        # Keep the startup hook tiny and delegate to a dedicated helper for easier testing.
-        await self._ensure_verification_message_reaction()
-
-    async def _ensure_verification_message_reaction(self) -> None:
-        """Apply the white check mark emoji to the configured verification message after startup."""
-
-        configured_message_id = self.server_config_store.get_verification_reaction_message_id()
-        if configured_message_id is None:
+        # Keep all staging notifications in the exact moderation channel requested by staff so
+        # every newly queued member gets the same visible ping and instructions.
+        channel = guild.get_channel(AWAITING_VERIFICATION_CHANNEL_ID)
+        if channel is None:
             return
 
-        # Scan connected guilds and accessible text channels to locate the configured message.
-        # This avoids requiring a separate channel ID in config while still targeting one exact message.
-        for guild in self.bot.guilds:
-            for channel in guild.text_channels:
-                try:
-                    message = await channel.fetch_message(configured_message_id)
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    continue
+        embed = discord.Embed(
+            title="Awaiting Verification",
+            description=(
+                f"{member.mention}, you're now queued for verification. Follow the steps below to verify your account."
+            ),
+            color=discord.Color.gold(),
+        )
+        embed.add_field(
+            name="Step 1",
+            value="Open Habbo and copy the verification code provided by the bot.",
+            inline=False,
+        )
+        embed.add_field(
+            name="Step 2",
+            value="Paste that code into your Habbo motto and save the change.",
+            inline=False,
+        )
+        embed.add_field(
+            name="Step 3",
+            value="Come back here and run `/verify` with your Habbo username so the bot can confirm your motto.",
+            inline=False,
+        )
+        embed.add_field(
+            name="Need Help?",
+            value="If the code does not work, double-check the spelling in your motto and ask staff for help in this channel.",
+            inline=False,
+        )
 
-                try:
-                    # Keep a single canonical white check mark trigger visible on the target verification post.
-                    if not self._message_has_bot_reaction(message, WHITE_CHECK_MARK_EMOJI):
-                        await message.add_reaction(WHITE_CHECK_MARK_EMOJI)
-                except (discord.Forbidden, discord.HTTPException):
-                    return
-
-                # Stop once the configured message has been found and updated.
-                return
-
-
-    def _message_has_bot_reaction(self, message: discord.Message | object, emoji: str) -> bool:
-        """Return True when the bot already owns the requested reaction on the message."""
-
-        bot_user = getattr(self.bot, "user", None)
-        if bot_user is None:
-            return False
-
-        for reaction in getattr(message, "reactions", []):
-            if str(getattr(reaction, "emoji", "")) != emoji:
-                continue
-
-            if getattr(reaction, "me", False):
-                return True
-
-            users = getattr(reaction, "users", None)
-            if users is None:
-                continue
-
-            # Fall back to iterating the reaction users when the lightweight reaction object does not expose `.me`.
-            if hasattr(users, "__aiter__"):
-                return False
-
-        return False
+        try:
+            # Mention the member in the message body too so Discord triggers the expected notification.
+            await channel.send(content=member.mention, embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            return
 
     @app_commands.command(
         name="verify",
@@ -148,6 +143,7 @@ class HabboVerificationCog(commands.Cog):
                     "role_sync_status": role_status,
                     "roles_added": ", ".join(added_role_names) if added_role_names else "none",
                     "roles_removed": ", ".join(removed_role_names) if removed_role_names else "none",
+                    "figure_string": str(stored_profile.get("figureString", "")),
                 },
             )
             await interaction.followup.send(
@@ -198,6 +194,10 @@ class HabboVerificationCog(commands.Cog):
             )
 
             role_status, added_role_names, removed_role_names = await self._assign_roles_from_habbo_groups(interaction, profile)
+            restriction_status = await self._enforce_restrictions_after_verification(
+                interaction=interaction,
+                habbo_username=verified_habbo_name,
+            )
             await self._send_audit_log(
                 interaction=interaction,
                 action="habbo_verification_success",
@@ -207,8 +207,10 @@ class HabboVerificationCog(commands.Cog):
                     "habbo_username": verified_habbo_name,
                     "saved_mapping": "yes",
                     "role_sync_status": role_status,
+                    "restriction_status": restriction_status,
                     "roles_added": ", ".join(added_role_names) if added_role_names else "none",
                     "roles_removed": ", ".join(removed_role_names) if removed_role_names else "none",
+                    "figure_string": str(profile.get("figureString", "")),
                 },
             )
 
@@ -223,7 +225,7 @@ class HabboVerificationCog(commands.Cog):
                     challenge_code=challenge.code,
                     expires_at=challenge.expires_at,
                     color=discord.Color.green(),
-                    extra_field=("Role Sync", role_status),
+                    extra_field=("Restriction Check", restriction_status),
                     thumbnail_url=self._build_avatar_thumbnail_url(profile),
                 ),
                 ephemeral=True,
@@ -245,6 +247,92 @@ class HabboVerificationCog(commands.Cog):
             ),
             ephemeral=True,
         )
+
+    async def _enforce_restrictions_after_verification(
+        self,
+        *,
+        interaction: discord.Interaction,
+        habbo_username: str,
+    ) -> str:
+        """Apply DNH or BoS policy immediately after a successful verification."""
+
+        restriction_group = self.verify_restriction_store.get_group_for_username(habbo_username)
+        if restriction_group is None:
+            return "No restriction matched."
+
+        if restriction_group == VerifyRestrictionStore.GROUP_DNH:
+            removal_status, removed_role_names = await self._remove_employee_roles_for_restricted_member(interaction)
+            if removed_role_names:
+                return f"DNH matched; removed employee roles: {', '.join(removed_role_names)}."
+            return f"DNH matched; {removal_status}"
+
+        if restriction_group == VerifyRestrictionStore.GROUP_BOS:
+            dm_status = await self._notify_bos_member(interaction)
+            ban_status = await self._ban_bos_member(interaction)
+            return f"BoS matched; DM: {dm_status}; Ban: {ban_status}"
+
+        return f"Restriction group {restriction_group} is not implemented."
+
+    async def _remove_employee_roles_for_restricted_member(
+        self,
+        interaction: discord.Interaction,
+    ) -> tuple[str, list[str]]:
+        """Strip all mapped employee roles so DNH users cannot retain staff access after verify."""
+
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            return "restriction check ran outside a guild, so no roles were changed.", []
+
+        managed_role_ids = self.badge_role_mapper.get_all_mapped_role_ids()
+        roles_to_remove = [role for role in interaction.user.roles if role.id in managed_role_ids]
+        if not roles_to_remove:
+            return "no employee-mapped roles were present to remove.", []
+
+        try:
+            await interaction.user.remove_roles(
+                *roles_to_remove,
+                reason="Verification restriction policy: DNH user cannot retain employee roles",
+                atomic=False,
+            )
+        except discord.Forbidden:
+            return "failed to remove employee roles because the bot lacks permissions.", []
+        except discord.HTTPException:
+            return "failed to remove employee roles because Discord rejected the request.", []
+
+        return "employee roles removed.", [role.name for role in roles_to_remove]
+
+    async def _notify_bos_member(self, interaction: discord.Interaction) -> str:
+        """Inform BoS users that they must contact Foundation before joining."""
+
+        guild_name = interaction.guild.name if interaction.guild is not None else "this server"
+        try:
+            await interaction.user.send(
+                "You may not join **"
+                f"{guild_name}"
+                "** until you speak to a member of Foundation."
+            )
+        except (discord.Forbidden, discord.HTTPException, AttributeError):
+            return "failed to send direct message."
+
+        return "direct message sent."
+
+    async def _ban_bos_member(self, interaction: discord.Interaction) -> str:
+        """Ban BoS users immediately after verification so the restriction is enforced."""
+
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            return "ban skipped outside a guild."
+
+        try:
+            await interaction.guild.ban(
+                interaction.user,
+                reason="Verification restriction policy: BoS user must contact Foundation before joining",
+            )
+        except discord.Forbidden:
+            return "ban failed because the bot lacks permissions."
+        except discord.HTTPException:
+            return "ban failed because Discord rejected the request."
+
+        return "member banned from the server."
+
 
     async def _sync_member_nickname(self, interaction: discord.Interaction, habbo_username: str) -> str:
         """Rename the member in Discord so their nickname matches the verified Habbo username."""
@@ -392,16 +480,15 @@ class HabboVerificationCog(commands.Cog):
             return
 
     async def _send_audit_log(self, interaction: discord.Interaction, action: str, details: dict[str, str]) -> None:
-        """Send an audit-style embed using the interaction's guild context."""
+        """Send a streamlined verification audit embed to the fixed staff verification-log channel."""
 
         if not interaction.guild:
             return
 
-        channel_id = self.server_config_store.get_audit_channel_id()
-        if channel_id is None:
-            return
-
-        channel = interaction.guild.get_channel(channel_id)
+        # Verification audit entries must always land in the dedicated staff review channel.
+        channel = interaction.guild.get_channel(VERIFICATION_LOG_CHANNEL_ID)
+        if channel is None:
+            channel = self.bot.get_channel(VERIFICATION_LOG_CHANNEL_ID)
         if channel is None:
             return
 
@@ -410,9 +497,26 @@ class HabboVerificationCog(commands.Cog):
             color=discord.Color.blurple(),
             timestamp=datetime.now(timezone.utc),
         )
-        embed.add_field(name="Action", value=action, inline=False)
+        # Mention the user inside the embed itself so moderators can identify the verified account at a glance.
+        embed.add_field(name="User", value=interaction.user.mention, inline=False)
+
+        # Keep the audit embed focused on identity details staff still need after verification.
+        hidden_keys = {"role_sync_status", "roles_added", "roles_removed", "figure_string"}
         for key, value in details.items():
+            if key in hidden_keys:
+                continue
             embed.add_field(name=key.replace("_", " ").title(), value=value, inline=False)
+
+        thumbnail_url = self._build_avatar_thumbnail_url({"figureString": details.get("figure_string", "")})
+        if not thumbnail_url:
+            try:
+                profile = fetch_habbo_profile(details.get("habbo_username", ""))
+            except HabboApiError:
+                profile = None
+            thumbnail_url = self._build_avatar_thumbnail_url(profile or {})
+
+        if thumbnail_url:
+            embed.set_thumbnail(url=thumbnail_url)
 
         try:
             await channel.send(embed=embed)
@@ -469,6 +573,10 @@ class HabboVerificationCog(commands.Cog):
             await member.add_roles(role, reason="Reacted with green check on verification message")
         except (discord.Forbidden, discord.HTTPException):
             return
+
+        # Mirror the rules-flow onboarding notice so any path that grants the staging role also posts
+        # the required embed and ping in the dedicated verification queue channel.
+        await self._send_awaiting_verification_embed(guild=guild, member=member)
 
     async def _remove_member_reaction_from_message(
         self,

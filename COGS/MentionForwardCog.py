@@ -33,7 +33,6 @@ class MentionForwardCog(commands.Cog):
 
         A message is forwarded only when:
         * it is not authored by a bot,
-        * it was not authored by the configured bot owner,
         * the bot itself was directly mentioned in the message, and
         * the author matches the configured user ID or holds the configured role.
         """

@@ -8,7 +8,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 try:
     import discord
-    from COGS.ServerVerifyRPA import HabboVerificationCog, WHITE_CHECK_MARK_EMOJI
+    from COGS.ServerVerifyRPA import (
+        HabboVerificationCog,
+        VERIFICATION_LOG_CHANNEL_ID,
+        WHITE_CHECK_MARK_EMOJI,
+    )
 except ModuleNotFoundError as exc:  # pragma: no cover - environment-dependent test skip
     raise unittest.SkipTest(f"discord.py is not installed in this environment: {exc}")
 
@@ -50,6 +54,63 @@ class HabboVerificationCogNicknameTests(unittest.IsolatedAsyncioTestCase):
         status = await cog._sync_member_nickname(interaction, "Siren")
 
         self.assertEqual(status, "Failed (bot lacks permission to manage this nickname).")
+
+
+class HabboVerificationCogAuditLogTests(unittest.IsolatedAsyncioTestCase):
+    """Validate the staff-facing verification audit embed output."""
+
+    async def test_send_audit_log_posts_to_fixed_verification_channel(self) -> None:
+        cog = HabboVerificationCog.__new__(HabboVerificationCog)
+        verification_channel = SimpleNamespace(send=AsyncMock())
+        cog.bot = SimpleNamespace(get_channel=lambda channel_id: verification_channel if channel_id == VERIFICATION_LOG_CHANNEL_ID else None)
+        cog.server_config_store = MagicMock()
+
+        guild = SimpleNamespace(get_channel=lambda _channel_id: None)
+        interaction = SimpleNamespace(guild=guild, user=SimpleNamespace(mention="<@123>"))
+
+        await cog._send_audit_log(
+            interaction,
+            action="habbo_verification_success",
+            details={
+                "discord_user_id": "123",
+                "discord_user": "Tester",
+                "habbo_username": "Siren",
+                "role_sync_status": "Added: VIP",
+                "roles_added": "VIP",
+                "roles_removed": "none",
+                "figure_string": "hr-100-42",
+            },
+        )
+
+        verification_channel.send.assert_awaited_once()
+        embed = verification_channel.send.await_args.kwargs["embed"]
+        fields = {field.name: field.value for field in embed.fields}
+
+        self.assertEqual(embed.title, "Habbo Verification Audit")
+        self.assertEqual(fields["User"], "<@123>")
+        self.assertEqual(fields["Discord User Id"], "123")
+        self.assertEqual(fields["Discord User"], "Tester")
+        self.assertEqual(fields["Habbo Username"], "Siren")
+        self.assertNotIn("Action", fields)
+        self.assertNotIn("Role Sync Status", fields)
+        self.assertNotIn("Roles Added", fields)
+        self.assertNotIn("Roles Removed", fields)
+        self.assertEqual(embed.thumbnail.url.split("?", 1)[0], "https://www.habbo.com/habbo-imaging/avatarimage")
+
+    async def test_send_audit_log_skips_when_fixed_channel_is_unavailable(self) -> None:
+        cog = HabboVerificationCog.__new__(HabboVerificationCog)
+        cog.bot = SimpleNamespace(get_channel=lambda _channel_id: None)
+        cog.server_config_store = MagicMock()
+        guild = SimpleNamespace(get_channel=lambda _channel_id: None)
+        interaction = SimpleNamespace(guild=guild, user=SimpleNamespace(mention="<@123>"))
+
+        await cog._send_audit_log(
+            interaction,
+            action="habbo_verification_success",
+            details={"discord_user_id": "123", "habbo_username": "Siren", "figure_string": ""},
+        )
+
+        self.assertTrue(True)
 
 
 @unittest.skipIf(HabboVerificationCog is None, "discord.py is not installed in the test environment")

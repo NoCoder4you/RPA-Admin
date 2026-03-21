@@ -24,6 +24,7 @@ from habbo_verification_core import (
 
 WHITE_CHECK_MARK_EMOJI = "✅"
 AWAITING_VERIFICATION_CHANNEL_ID = 1479391662076723224
+VERIFICATION_LOG_CHANNEL_ID = 1481456997726425168
 
 
 class HabboVerificationCog(commands.Cog):
@@ -142,6 +143,7 @@ class HabboVerificationCog(commands.Cog):
                     "role_sync_status": role_status,
                     "roles_added": ", ".join(added_role_names) if added_role_names else "none",
                     "roles_removed": ", ".join(removed_role_names) if removed_role_names else "none",
+                    "figure_string": str(stored_profile.get("figureString", "")),
                 },
             )
             await interaction.followup.send(
@@ -208,6 +210,7 @@ class HabboVerificationCog(commands.Cog):
                     "restriction_status": restriction_status,
                     "roles_added": ", ".join(added_role_names) if added_role_names else "none",
                     "roles_removed": ", ".join(removed_role_names) if removed_role_names else "none",
+                    "figure_string": str(profile.get("figureString", "")),
                 },
             )
 
@@ -477,16 +480,15 @@ class HabboVerificationCog(commands.Cog):
             return
 
     async def _send_audit_log(self, interaction: discord.Interaction, action: str, details: dict[str, str]) -> None:
-        """Send an audit-style embed using the interaction's guild context."""
+        """Send a streamlined verification audit embed to the fixed staff verification-log channel."""
 
         if not interaction.guild:
             return
 
-        channel_id = self.server_config_store.get_audit_channel_id()
-        if channel_id is None:
-            return
-
-        channel = interaction.guild.get_channel(channel_id)
+        # Verification audit entries must always land in the dedicated staff review channel.
+        channel = interaction.guild.get_channel(VERIFICATION_LOG_CHANNEL_ID)
+        if channel is None:
+            channel = self.bot.get_channel(VERIFICATION_LOG_CHANNEL_ID)
         if channel is None:
             return
 
@@ -495,9 +497,26 @@ class HabboVerificationCog(commands.Cog):
             color=discord.Color.blurple(),
             timestamp=datetime.now(timezone.utc),
         )
-        embed.add_field(name="Action", value=action, inline=False)
+        # Mention the user inside the embed itself so moderators can identify the verified account at a glance.
+        embed.add_field(name="User", value=interaction.user.mention, inline=False)
+
+        # Keep the audit embed focused on identity details staff still need after verification.
+        hidden_keys = {"role_sync_status", "roles_added", "roles_removed", "figure_string"}
         for key, value in details.items():
+            if key in hidden_keys:
+                continue
             embed.add_field(name=key.replace("_", " ").title(), value=value, inline=False)
+
+        thumbnail_url = self._build_avatar_thumbnail_url({"figureString": details.get("figure_string", "")})
+        if not thumbnail_url:
+            try:
+                profile = fetch_habbo_profile(details.get("habbo_username", ""))
+            except HabboApiError:
+                profile = None
+            thumbnail_url = self._build_avatar_thumbnail_url(profile or {})
+
+        if thumbnail_url:
+            embed.set_thumbnail(url=thumbnail_url)
 
         try:
             await channel.send(embed=embed)

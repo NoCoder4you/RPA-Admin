@@ -11,61 +11,74 @@ from common_paths import json_file
 
 
 class AutoInviteConfigStore:
-    """Load and expose role-to-server invite rules stored in serverconfig.json."""
+    """Load and expose role-to-server invite rules stored in InterlinkedRoles.json."""
 
     def __init__(self, *, config_path: str | Path | None = None) -> None:
-        # Keep auto-invite settings in the shared server configuration file so all
-        # server-specific settings remain in one predictable location.
-        self.config_path = Path(config_path) if config_path else json_file("serverconfig.json")
+        # Reuse the interlinked-role mapping file so one source of truth decides which
+        # main-server role should unlock access to which linked server.
+        self.config_path = Path(config_path) if config_path else json_file("InterlinkedRoles.json")
 
-    def _load_raw(self) -> dict[str, Any]:
-        """Return raw JSON config data, or an empty mapping on any read/parse failure."""
+    def _load_raw(self) -> list[dict[str, Any]]:
+        """Return raw JSON config rows, or an empty list on any read/parse failure."""
 
         if not self.config_path.exists():
-            return {}
+            return []
 
         try:
             with self.config_path.open("r", encoding="utf-8") as handle:
                 payload = json.load(handle)
+            if isinstance(payload, list):
+                return [entry for entry in payload if isinstance(entry, dict)]
             if isinstance(payload, dict):
-                return payload
+                # Accept a single-object payload as a convenience for hand-edited files.
+                # The normal repository format is still a list of link definitions.
+                return [payload]
         except (json.JSONDecodeError, OSError):
-            return {}
+            return []
 
-        return {}
+        return []
 
-    def get_main_server_id(self) -> int | None:
-        """Return the configured source server ID where role changes should be watched."""
+    def get_role_mappings(self, *, main_server_id: int, role_id: int) -> list[dict[str, Any]]:
+        """Return invite mappings for a role inside a specific main server.
 
-        config = self._load_raw()
-        auto_invite = config.get("auto_invite")
-        if not isinstance(auto_invite, dict):
-            return None
-        return self._safe_int(auto_invite.get("main_server_id"))
-
-    def get_role_mappings(self, role_id: int) -> list[dict[str, Any]]:
-        """Return all invite mappings for the provided role ID.
-
-        The config supports multiple destination servers per role, which allows a
-        single role grant to DM one or more unique invites.
+        InterlinkedRoles.json already stores the relationship between the main server
+        role and the destination linked server, so we transform those rows into the
+        smaller mapping shape that the invite sender expects.
         """
 
-        config = self._load_raw()
-        auto_invite = config.get("auto_invite")
-        if not isinstance(auto_invite, dict):
-            return []
-
-        role_invites = auto_invite.get("role_invites", [])
-        if not isinstance(role_invites, list):
-            return []
-
         matches: list[dict[str, Any]] = []
-        for mapping in role_invites:
-            if not isinstance(mapping, dict):
+        for entry in self._load_raw():
+            if self._safe_int(entry.get("main_server_id")) != main_server_id:
                 continue
-            if self._safe_int(mapping.get("role_id")) == role_id:
-                matches.append(mapping)
+            if self._safe_int(entry.get("main_server_role_id")) != role_id:
+                continue
+
+            target_server_id = self._safe_int(entry.get("special_unit_server_id"))
+            if target_server_id is None:
+                continue
+
+            matches.append(
+                {
+                    "role_id": role_id,
+                    "target_server_id": target_server_id,
+                    "target_channel_id": entry.get("target_channel_id"),
+                }
+            )
         return matches
+
+    def get_main_server_id(self) -> int | None:
+        """Return the first configured main server ID, if any.
+
+        The runtime listener now filters per-entry via ``get_role_mappings``; this
+        helper remains available for compatibility with tests and any future callers
+        that want a quick answer for the primary configured main server.
+        """
+
+        for entry in self._load_raw():
+            main_server_id = self._safe_int(entry.get("main_server_id"))
+            if main_server_id is not None:
+                return main_server_id
+        return None
 
     @staticmethod
     def _safe_int(value: Any) -> int | None:
@@ -89,17 +102,12 @@ class AutoInviteCog(commands.Cog):
     async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
         """Detect newly added roles and DM one-time invites for any mapped role."""
 
-        # Restrict checks to the configured main server if an ID is provided.
-        configured_main_server_id = self.config_store.get_main_server_id()
-        if configured_main_server_id is not None and after.guild.id != configured_main_server_id:
-            return
-
         old_role_ids = {role.id for role in before.roles}
         added_roles = [role for role in after.roles if role.id not in old_role_ids]
 
         # Process each newly granted role and send invites for all matching server mappings.
         for role in added_roles:
-            for mapping in self.config_store.get_role_mappings(role.id):
+            for mapping in self.config_store.get_role_mappings(main_server_id=after.guild.id, role_id=role.id):
                 await self._send_single_use_invite(member=after, mapping=mapping, triggering_role=role)
 
     async def _send_single_use_invite(

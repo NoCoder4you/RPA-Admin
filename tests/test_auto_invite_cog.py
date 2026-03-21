@@ -24,8 +24,9 @@ class AutoInviteCogTests(unittest.IsolatedAsyncioTestCase):
         bot = MagicMock()
         cog = AutoInviteCog(bot)
         cog.config_store = SimpleNamespace(
-            get_main_server_id=lambda: 100,
-            get_role_mappings=lambda role_id: ([{"target_server_id": 200}, {"target_server_id": 201}] if role_id == 55 else []),
+            get_role_mappings=lambda *, main_server_id, role_id: (
+                [{"target_server_id": 200}, {"target_server_id": 201}] if (main_server_id, role_id) == (100, 55) else []
+            ),
         )
         cog._send_single_use_invite = AsyncMock()
 
@@ -46,8 +47,7 @@ class AutoInviteCogTests(unittest.IsolatedAsyncioTestCase):
         bot = MagicMock()
         cog = AutoInviteCog(bot)
         cog.config_store = SimpleNamespace(
-            get_main_server_id=lambda: 100,
-            get_role_mappings=lambda role_id: [{"target_server_id": 200}],
+            get_role_mappings=lambda *, main_server_id, role_id: [],
         )
         cog._send_single_use_invite = AsyncMock()
 
@@ -91,23 +91,36 @@ class AutoInviteCogTests(unittest.IsolatedAsyncioTestCase):
 
 @unittest.skipIf(AutoInviteConfigStore is None, "discord.py is not installed in the test environment")
 class AutoInviteConfigStoreTests(unittest.TestCase):
-    """Validate serverconfig-backed auto-invite configuration loading."""
+    """Validate InterlinkedRoles-backed auto-invite configuration loading."""
 
-    def test_reads_main_server_and_multiple_role_mappings_from_serverconfig(self) -> None:
+    def test_reads_main_server_and_multiple_role_mappings_from_interlinkedroles(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            file_path = Path(temp_dir) / "serverconfig.json"
+            file_path = Path(temp_dir) / "InterlinkedRoles.json"
             file_path.write_text(
                 json.dumps(
-                    {
-                        "auto_invite": {
+                    [
+                        {
                             "main_server_id": "100",
-                            "role_invites": [
-                                {"role_id": "55", "target_server_id": "200", "target_channel_id": "300"},
-                                {"role_id": 55, "target_server_id": 201, "target_server_name": "Backup Server"},
-                                {"role_id": 77, "target_server_id": 202},
-                            ],
-                        }
-                    }
+                            "main_server_role_id": "55",
+                            "special_unit_server_id": "200",
+                            "target_channel_id": "300",
+                        },
+                        {
+                            "main_server_id": 100,
+                            "main_server_role_id": 55,
+                            "special_unit_server_id": 201,
+                        },
+                        {
+                            "main_server_id": 101,
+                            "main_server_role_id": 55,
+                            "special_unit_server_id": 999,
+                        },
+                        {
+                            "main_server_id": 100,
+                            "main_server_role_id": 77,
+                            "special_unit_server_id": 202,
+                        },
+                    ]
                 ),
                 encoding="utf-8",
             )
@@ -115,10 +128,10 @@ class AutoInviteConfigStoreTests(unittest.TestCase):
             store = AutoInviteConfigStore(config_path=file_path)
 
             self.assertEqual(store.get_main_server_id(), 100)
-            self.assertEqual(len(store.get_role_mappings(55)), 2)
-            self.assertEqual(store.get_role_mappings(55)[0]["target_channel_id"], "300")
-            self.assertEqual(store.get_role_mappings(77)[0]["target_server_id"], 202)
-            self.assertEqual(store.get_role_mappings(999), [])
+            self.assertEqual(len(store.get_role_mappings(main_server_id=100, role_id=55)), 2)
+            self.assertEqual(store.get_role_mappings(main_server_id=100, role_id=55)[0]["target_channel_id"], "300")
+            self.assertEqual(store.get_role_mappings(main_server_id=100, role_id=77)[0]["target_server_id"], 202)
+            self.assertEqual(store.get_role_mappings(main_server_id=999, role_id=55), [])
 
 
 if __name__ == "__main__":

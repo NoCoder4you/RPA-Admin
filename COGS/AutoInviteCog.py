@@ -95,15 +95,20 @@ class AutoInviteCog(commands.Cog):
             return
 
         old_role_ids = {role.id for role in before.roles}
-        new_role_ids = {role.id for role in after.roles}
-        added_role_ids = new_role_ids - old_role_ids
+        added_roles = [role for role in after.roles if role.id not in old_role_ids]
 
         # Process each newly granted role and send invites for all matching server mappings.
-        for role_id in added_role_ids:
-            for mapping in self.config_store.get_role_mappings(role_id):
-                await self._send_single_use_invite(member=after, mapping=mapping)
+        for role in added_roles:
+            for mapping in self.config_store.get_role_mappings(role.id):
+                await self._send_single_use_invite(member=after, mapping=mapping, triggering_role=role)
 
-    async def _send_single_use_invite(self, *, member: discord.Member, mapping: dict[str, Any]) -> None:
+    async def _send_single_use_invite(
+        self,
+        *,
+        member: discord.Member,
+        mapping: dict[str, Any],
+        triggering_role: discord.abc.Snowflake | None = None,
+    ) -> None:
         """Create a one-use invite for the target server and DM it to the member."""
 
         target_server_id = AutoInviteConfigStore._safe_int(mapping.get("target_server_id"))
@@ -126,10 +131,18 @@ class AutoInviteCog(commands.Cog):
         try:
             invite = await invite_channel.create_invite(
                 max_uses=1,
+                # Keep the invite valid until the member actually uses it. The link is
+                # still effectively temporary because Discord invalidates it after the
+                # first successful join thanks to ``max_uses=1``.
+                max_age=0,
                 unique=True,
                 reason=f"Auto invite for role assignment in {member.guild.name}",
             )
-            embed = self._build_invite_embed(invite_url=invite.url, target_server_name=target_server_name)
+            embed = self._build_invite_embed(
+                invite_url=invite.url,
+                target_server_name=target_server_name,
+                triggering_role_name=getattr(triggering_role, "name", None),
+            )
             await member.send(embed=embed)
         except (discord.Forbidden, discord.HTTPException):
             # Fail silently so role updates still work even when invite/DM permissions fail.
@@ -155,14 +168,25 @@ class AutoInviteCog(commands.Cog):
 
         return None
 
-    def _build_invite_embed(self, *, invite_url: str, target_server_name: str) -> discord.Embed:
+    def _build_invite_embed(
+        self,
+        *,
+        invite_url: str,
+        target_server_name: str,
+        triggering_role_name: str | None,
+    ) -> discord.Embed:
         """Build the DM embed containing a clear destination name and invite link."""
+
+        role_context = ""
+        if triggering_role_name:
+            role_context = f" from your **{triggering_role_name}** role"
 
         return discord.Embed(
             title="Your server invite is ready",
             description=(
-                f"You received a qualifying role, so here is your unique invite for **{target_server_name}**.\n"
-                f"{invite_url}"
+                f"You received a qualifying role{role_context}, so here is your unique invite for **{target_server_name}**.\n"
+                f"{invite_url}\n\n"
+                "This invite is single-use and stays valid until you redeem it."
             ),
             color=discord.Color.green(),
         )

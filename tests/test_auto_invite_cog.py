@@ -29,13 +29,17 @@ class AutoInviteCogTests(unittest.IsolatedAsyncioTestCase):
         )
         cog._send_single_use_invite = AsyncMock()
 
-        before = SimpleNamespace(guild=SimpleNamespace(id=100), roles=[SimpleNamespace(id=1)])
-        after = SimpleNamespace(guild=SimpleNamespace(id=100), roles=[SimpleNamespace(id=1), SimpleNamespace(id=55)])
+        before = SimpleNamespace(guild=SimpleNamespace(id=100), roles=[SimpleNamespace(id=1, name="Member")])
+        after = SimpleNamespace(
+            guild=SimpleNamespace(id=100),
+            roles=[SimpleNamespace(id=1, name="Member"), SimpleNamespace(id=55, name="Operators")],
+        )
 
         await cog.on_member_update(before, after)
 
         self.assertEqual(cog._send_single_use_invite.await_count, 2)
         self.assertEqual(cog._send_single_use_invite.await_args_list[0].kwargs["member"], after)
+        self.assertEqual(cog._send_single_use_invite.await_args_list[0].kwargs["triggering_role"].name, "Operators")
         self.assertEqual(cog._send_single_use_invite.await_args_list[1].kwargs["mapping"]["target_server_id"], 201)
 
     async def test_member_update_ignores_changes_outside_main_server(self) -> None:
@@ -67,13 +71,22 @@ class AutoInviteCogTests(unittest.IsolatedAsyncioTestCase):
         await cog._send_single_use_invite(
             member=member,
             mapping={"target_server_id": 200, "target_server_name": "Operations Hub"},
+            triggering_role=SimpleNamespace(name="Operations"),
         )
 
-        invite_channel.create_invite.assert_awaited_once()
+        invite_channel.create_invite.assert_awaited_once_with(
+            max_uses=1,
+            max_age=0,
+            unique=True,
+            reason="Auto invite for role assignment in Main",
+        )
         sent_embed = member.send.await_args.kwargs["embed"]
         self.assertEqual(sent_embed.title, "Your server invite is ready")
         self.assertIn("https://discord.gg/abc", sent_embed.description)
         self.assertIn("Operations Hub", sent_embed.description)
+        self.assertIn("Operations", sent_embed.description)
+        self.assertIn("single-use", sent_embed.description)
+        self.assertIn("stays valid until you redeem it", sent_embed.description)
 
 
 @unittest.skipIf(AutoInviteConfigStore is None, "discord.py is not installed in the test environment")

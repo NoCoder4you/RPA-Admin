@@ -139,19 +139,9 @@ class HabboVerificationCog(commands.Cog):
                 # staff can immediately see whether core verification access was restored.
                 role_status = f"{role_status} | Verified Role: {verified_role_status}"
                 added_role_names = [*added_role_names, *verified_role_names]
-            await self._send_audit_log(
-                interaction=interaction,
-                action="habbo_verification_already_verified",
-                details={
-                    "discord_user_id": discord_id,
-                    "discord_user": str(interaction.user),
-                    "habbo_username": stored_habbo_name,
-                    "role_sync_status": role_status,
-                    "roles_added": ", ".join(added_role_names) if added_role_names else "none",
-                    "roles_removed": ", ".join(removed_role_names) if removed_role_names else "none",
-                    "figure_string": str(stored_profile.get("figureString", "")),
-                },
-            )
+            # Do not post a fresh verification audit every time an already-verified member reruns
+            # /verify just to resync roles. Staff only want the audit entry on the initial successful
+            # verification, while dedicated username-change logging still covers approved renames.
             await interaction.followup.send(
                 embed=self._build_embed(
                     title="Already Verified",

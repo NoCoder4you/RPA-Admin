@@ -56,6 +56,34 @@ class HabboVerificationCogNicknameTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, "Failed (bot lacks permission to manage this nickname).")
 
 
+class HabboVerificationCogVerifiedRoleTests(unittest.IsolatedAsyncioTestCase):
+    """Validate baseline Discord Verified role assignment used by the /verify flow."""
+
+    async def test_ensure_verified_role_adds_verified_role_when_missing(self) -> None:
+        cog = HabboVerificationCog(bot=MagicMock())
+        verified_role = SimpleNamespace(name="Verified")
+        member = SimpleNamespace(roles=[], add_roles=AsyncMock())
+        interaction = SimpleNamespace(guild=SimpleNamespace(roles=[verified_role]), user=member)
+
+        status, added_roles = await cog._ensure_verified_role(interaction)
+
+        self.assertEqual(status, "Verified role added.")
+        self.assertEqual(added_roles, ["Verified"])
+        member.add_roles.assert_awaited_once_with(
+            verified_role,
+            reason="Habbo verification verified-role sync",
+        )
+
+    async def test_ensure_verified_role_skips_outside_guild_context(self) -> None:
+        cog = HabboVerificationCog(bot=MagicMock())
+        interaction = SimpleNamespace(guild=None, user=SimpleNamespace())
+
+        status, added_roles = await cog._ensure_verified_role(interaction)
+
+        self.assertEqual(status, "Skipped (Verified role can only be assigned inside a server).")
+        self.assertEqual(added_roles, [])
+
+
 class HabboVerificationCogAuditLogTests(unittest.IsolatedAsyncioTestCase):
     """Validate the staff-facing verification audit embed output."""
 

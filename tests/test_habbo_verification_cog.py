@@ -84,6 +84,42 @@ class HabboVerificationCogVerifiedRoleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(added_roles, [])
 
 
+class HabboVerificationCommandTests(unittest.IsolatedAsyncioTestCase):
+    """Validate /verify command behavior that differs between initial and repeat runs."""
+
+    async def test_verify_skips_verification_audit_when_user_is_already_verified(self) -> None:
+        """Already-verified members should only get a role sync response, not a new audit post."""
+
+        cog = HabboVerificationCog(bot=MagicMock())
+        cog.verified_store = SimpleNamespace(get_habbo_username=lambda discord_id: "Siren" if discord_id == "123" else None)
+        cog._assign_roles_from_habbo_groups = AsyncMock(return_value=("No role changes were required.", [], []))
+        cog._ensure_verified_role = AsyncMock(return_value=("No Verified role change was required.", []))
+        cog._send_audit_log = AsyncMock()
+
+        interaction = SimpleNamespace(
+            user=SimpleNamespace(id=123, mention="<@123>"),
+            response=SimpleNamespace(defer=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+
+        from COGS import ServerVerifyRPA as verify_module
+        original_fetch = verify_module.fetch_habbo_profile
+        verify_module.fetch_habbo_profile = lambda _username: {"name": "Siren", "figureString": "hr-1-1"}
+        try:
+            await cog.verify.callback(cog, interaction, "IgnoredInput")
+        finally:
+            verify_module.fetch_habbo_profile = original_fetch
+
+        interaction.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
+        cog._assign_roles_from_habbo_groups.assert_awaited_once()
+        cog._ensure_verified_role.assert_awaited_once_with(interaction)
+        cog._send_audit_log.assert_not_awaited()
+        interaction.followup.send.assert_awaited_once()
+        sent_embed = interaction.followup.send.await_args.kwargs["embed"]
+        self.assertEqual(sent_embed.title, "Already Verified")
+
+
+
 class HabboVerificationCogAuditLogTests(unittest.IsolatedAsyncioTestCase):
     """Validate the staff-facing verification audit embed output."""
 

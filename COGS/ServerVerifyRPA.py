@@ -133,6 +133,12 @@ class HabboVerificationCog(commands.Cog):
                 return
 
             role_status, added_role_names, removed_role_names = await self._assign_roles_from_habbo_groups(interaction, stored_profile)
+            verified_role_status, verified_role_names = await self._ensure_verified_role(interaction)
+            if verified_role_status != "No Verified role change was required.":
+                # Surface the baseline Verified-role sync result alongside mapped Habbo roles so
+                # staff can immediately see whether core verification access was restored.
+                role_status = f"{role_status} | Verified Role: {verified_role_status}"
+                added_role_names = [*added_role_names, *verified_role_names]
             await self._send_audit_log(
                 interaction=interaction,
                 action="habbo_verification_already_verified",
@@ -194,6 +200,12 @@ class HabboVerificationCog(commands.Cog):
             )
 
             role_status, added_role_names, removed_role_names = await self._assign_roles_from_habbo_groups(interaction, profile)
+            verified_role_status, verified_role_names = await self._ensure_verified_role(interaction)
+            if verified_role_status != "No Verified role change was required.":
+                # Always grant the stable Verified role after a successful motto check, even when
+                # the member has no mapped Habbo-group roles to add during the same verification run.
+                role_status = f"{role_status} | Verified Role: {verified_role_status}"
+                added_role_names = [*added_role_names, *verified_role_names]
             restriction_status = await self._enforce_restrictions_after_verification(
                 interaction=interaction,
                 habbo_username=verified_habbo_name,
@@ -355,6 +367,30 @@ class HabboVerificationCog(commands.Cog):
             return "Failed (Discord rejected the nickname update request)."
 
         return "Nickname updated to verified Habbo username."
+
+    async def _ensure_verified_role(self, interaction: discord.Interaction) -> tuple[str, list[str]]:
+        """Ensure successful verification also grants the baseline Discord Verified role."""
+
+        if not interaction.guild or not isinstance(interaction.user, discord.Member):
+            return "Skipped (Verified role can only be assigned inside a server).", []
+
+        verified_role = discord.utils.get(interaction.guild.roles, name="Verified")
+        if verified_role is None:
+            return "Skipped (Verified role does not exist in this server).", []
+
+        if verified_role in interaction.user.roles:
+            return "No Verified role change was required.", []
+
+        try:
+            # Keep the baseline access grant separate from Habbo-group role sync so verification
+            # still succeeds even when the server only relies on the standalone Verified role.
+            await interaction.user.add_roles(verified_role, reason="Habbo verification verified-role sync")
+        except discord.Forbidden:
+            return "Failed (bot lacks permission to manage the Verified role).", []
+        except discord.HTTPException:
+            return "Failed (Discord rejected the Verified role update request).", []
+
+        return "Verified role added.", [verified_role.name]
 
     async def _assign_roles_from_habbo_groups(
         self,

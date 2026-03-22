@@ -66,17 +66,17 @@ class HabboVerificationCog(commands.Cog):
         )
         embed.add_field(
             name="Step 1",
-            value="Open Habbo and copy the verification code provided by the bot.",
+            value="Run `/verify` with your Habbo username to get your verification code from the bot.",
             inline=False,
         )
         embed.add_field(
             name="Step 2",
-            value="Paste that code into your Habbo motto and save the change.",
+            value="Copy that code into your Habbo motto and save the change in Habbo.",
             inline=False,
         )
         embed.add_field(
             name="Step 3",
-            value="Come back here and run `/verify` with your Habbo username so the bot can confirm your motto.",
+            value="Come back here and run `/verify` again so the bot can confirm the code in your motto.",
             inline=False,
         )
         embed.add_field(

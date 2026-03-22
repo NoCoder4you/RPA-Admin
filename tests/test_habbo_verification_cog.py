@@ -168,9 +168,13 @@ class HabboVerificationCogReactionRoleTests(unittest.IsolatedAsyncioTestCase):
         )
         sent_embed = verification_channel.send.await_args.kwargs["embed"]
         self.assertEqual(sent_embed.title, "Awaiting Verification")
+        self.assertEqual(sent_embed.fields[0].name, "Step 1")
+        self.assertIn("run `/verify`", sent_embed.fields[0].value.lower())
+        self.assertEqual(sent_embed.fields[1].name, "Step 2")
+        self.assertIn("habbo motto", sent_embed.fields[1].value.lower())
         self.assertEqual(sent_embed.fields[2].name, "Step 3")
         self.assertIn("/verify", sent_embed.fields[2].value)
-        self.assertIn("your Habbo username", sent_embed.fields[2].value)
+        self.assertIn("again", sent_embed.fields[2].value.lower())
 
     async def test_reaction_add_skips_role_when_message_id_does_not_match(self) -> None:
         # Ensure role assignment and reaction cleanup are gated to the configured verification message ID.

@@ -141,6 +141,45 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("figure=hr-1-1", embed.thumbnail.url)
         self.assertFalse(response.send_message.await_args.kwargs["ephemeral"])
 
+    async def test_missing_permissions_do_not_mirror_to_raffle_channel(self) -> None:
+        member_permissions = SimpleNamespace(manage_guild=False, administrator=False)
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        interaction = SimpleNamespace(
+            guild=SimpleNamespace(id=999, name="Guild"),
+            channel=SimpleNamespace(id=111, mention="#general"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            response=response,
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        log_channel = SimpleNamespace(send=AsyncMock())
+        self.bot.get_channel.return_value = log_channel
+
+        await self.cog.raffle_list.callback(self.cog, interaction)
+
+        embed = response.send_message.await_args.kwargs["embed"]
+        self.assertEqual(embed.title, "Missing Permissions")
+        log_channel.send.assert_not_awaited()
+
+    async def test_raffle_not_found_does_not_mirror_to_raffle_channel(self) -> None:
+        member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        interaction = SimpleNamespace(
+            guild=SimpleNamespace(id=999, name="Guild"),
+            channel=SimpleNamespace(id=111, mention="#general"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            response=response,
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        member = SimpleNamespace(id=55, mention="<@55>", send=AsyncMock())
+        log_channel = SimpleNamespace(send=AsyncMock())
+        self.bot.get_channel.return_value = log_channel
+
+        await self.cog.raffle_add.callback(self.cog, interaction, "MISSING", member, 1)
+
+        embed = response.send_message.await_args.kwargs["embed"]
+        self.assertEqual(embed.title, "Raffle Not Found")
+        log_channel.send.assert_not_awaited()
+
     async def test_add_mirrors_embed_to_raffle_channel(self) -> None:
         self.cog._raffles = {
             "ABC12345": {
@@ -210,6 +249,86 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(response.send_message.await_args.kwargs["ephemeral"])
         log_channel.send.assert_not_awaited()
+
+    async def test_draw_auto_closes_raffle_and_dms_each_winner(self) -> None:
+        self.cog._raffles = {
+            "ABC12345": {
+                "raffle_id": "ABC12345",
+                "name": "Spring Event",
+                "description": None,
+                "guild_id": 999,
+                "channel_id": 111,
+                "created_by": 10,
+                "created_at": "2026-03-23T00:00:00+00:00",
+                "active": True,
+                "allow_multiple_entries": True,
+                "entrants": {
+                    "55": {"username": "PlayerOne#0001", "entries": 3},
+                    "77": {"username": "PlayerTwo#0001", "entries": 2},
+                },
+                "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
+            }
+        }
+        member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        winner_one = SimpleNamespace(id=55, mention="<@55>", send=AsyncMock())
+        winner_two = SimpleNamespace(id=77, mention="<@77>", send=AsyncMock())
+        guild = SimpleNamespace(
+            id=999,
+            name="Guild",
+            get_member=lambda member_id: {55: winner_one, 77: winner_two}.get(member_id),
+        )
+        interaction = SimpleNamespace(
+            guild=guild,
+            channel=SimpleNamespace(id=111, mention="#general"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            response=response,
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        log_channel = SimpleNamespace(send=AsyncMock())
+        self.bot.get_channel.return_value = log_channel
+        self.cog.verified_store = SimpleNamespace(get_habbo_username=lambda discord_id: {"55": "Siren", "77": "Nova"}.get(discord_id))
+
+        with patch("COGS.raffle.random.choice", side_effect=[55, 77]), patch(
+            "COGS.raffle.fetch_habbo_profile",
+            side_effect=[{"figureString": "hr-1-1"}, {"figureString": "hd-2-2"}],
+        ):
+            await self.cog.raffle_draw.callback(self.cog, interaction, "ABC12345", 2)
+
+        raffle = self.cog._raffles["ABC12345"]
+        self.assertFalse(raffle["active"])
+        self.assertEqual(raffle["winners"], [55, 77])
+        winner_one.send.assert_awaited_once()
+        winner_two.send.assert_awaited_once()
+        winner_one_embed = winner_one.send.await_args.kwargs["embed"]
+        winner_two_embed = winner_two.send.await_args.kwargs["embed"]
+        self.assertEqual(winner_one_embed.fields[1].value, "1 of 2")
+        self.assertEqual(winner_two_embed.fields[1].value, "2 of 2")
+        self.assertIn("figure=hr-1-1", winner_one_embed.thumbnail.url)
+        self.assertIn("figure=hd-2-2", winner_two_embed.thumbnail.url)
+        response_embed = response.send_message.await_args.kwargs["embed"]
+        response_fields = {field.name: field.value for field in response_embed.fields}
+        self.assertEqual(response_fields["Raffle Status"], "Closed automatically after draw")
+        self.assertEqual(response_fields["Winner DM Status"], "Sent 2/2 winner DM(s).")
+        log_channel.send.assert_awaited_once()
+
+    async def test_send_winner_dm_reports_failure_when_dms_are_closed(self) -> None:
+        member = SimpleNamespace(id=55, send=AsyncMock(side_effect=discord.Forbidden(MagicMock(), "closed")))
+        self.cog.verified_store = SimpleNamespace(get_habbo_username=lambda discord_id: "Siren" if discord_id == "55" else None)
+
+        with patch("COGS.raffle.fetch_habbo_profile", return_value={"figureString": "hr-1-1"}) as mock_fetch:
+            result = await self.cog._send_winner_dm(
+                member,
+                raffle={"name": "Spring Event", "raffle_id": "ABC12345", "entrants": {"55": {"username": "PlayerOne", "entries": 3}}},
+                guild_name="Guild",
+                placement=1,
+                total_winners=2,
+            )
+
+        self.assertFalse(result)
+        mock_fetch.assert_called_once_with("Siren")
 
     async def test_send_entry_dm_uses_subheadings_and_habbo_thumbnail(self) -> None:
         member = SimpleNamespace(id=55, send=AsyncMock())

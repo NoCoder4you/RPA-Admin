@@ -103,6 +103,41 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         embed = response.send_message.await_args.kwargs["embed"]
         self.assertIn("could not be delivered", embed.fields[2].value)
 
+    async def test_add_mirrors_embed_to_raffle_channel(self) -> None:
+        self.cog._raffles = {
+            "ABC12345": {
+                "raffle_id": "ABC12345",
+                "name": "Spring Event",
+                "description": None,
+                "guild_id": 999,
+                "channel_id": 111,
+                "created_by": 10,
+                "created_at": "2026-03-23T00:00:00+00:00",
+                "active": True,
+                "allow_multiple_entries": True,
+                "entrants": {},
+                "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": 9999,
+            }
+        }
+        member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        interaction = SimpleNamespace(
+            guild=SimpleNamespace(id=999, name="Guild"),
+            channel=SimpleNamespace(id=111, mention="#general"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            response=response,
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        member = SimpleNamespace(id=55, mention="<@55>", send=AsyncMock())
+        log_channel = SimpleNamespace(send=AsyncMock())
+        self.bot.get_channel.return_value = log_channel
+
+        await self.cog.raffle_add.callback(self.cog, interaction, "ABC12345", member, 2)
+
+        log_channel.send.assert_awaited_once()
+
     def test_pick_unique_weighted_winners_returns_unique_users(self) -> None:
         raffle = {
             "entrants": {

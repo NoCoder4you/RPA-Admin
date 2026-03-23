@@ -138,18 +138,18 @@ class RaffleCog(commands.Cog):
         normalized["winners"] = winners
         return normalized
 
-    async def _fetch_log_channel(self) -> discord.TextChannel | None:
+    async def _fetch_log_channel(self, channel_id: int = RAFFLE_LOG_CHANNEL_ID) -> discord.TextChannel | None:
         """Resolve the configured raffle log channel used for public raffle announcements."""
-        channel = self.bot.get_channel(RAFFLE_LOG_CHANNEL_ID)
+        channel = self.bot.get_channel(channel_id)
         if channel is None:
             try:
-                channel = await self.bot.fetch_channel(RAFFLE_LOG_CHANNEL_ID)
+                channel = await self.bot.fetch_channel(channel_id)
             except (discord.Forbidden, discord.HTTPException, discord.NotFound):
-                LOGGER.exception("Failed to fetch raffle log channel %s", RAFFLE_LOG_CHANNEL_ID)
+                LOGGER.exception("Failed to fetch raffle log channel %s", channel_id)
                 return None
         if isinstance(channel, discord.TextChannel):
             return channel
-        LOGGER.error("Configured raffle log channel %s is not a text channel", RAFFLE_LOG_CHANNEL_ID)
+        LOGGER.error("Configured raffle log channel %s is not a text channel", channel_id)
         return None
 
     def _build_creation_log_embed(
@@ -179,7 +179,7 @@ class RaffleCog(commands.Cog):
         source_channel_mention: str,
     ) -> int | None:
         """Mirror raffle creation details into the configured raffle log channel and return the message ID."""
-        log_channel = await self._fetch_log_channel()
+        log_channel = await self._fetch_log_channel(raffle.get("log_channel_id", RAFFLE_LOG_CHANNEL_ID))
         if log_channel is None:
             return None
 
@@ -195,6 +195,30 @@ class RaffleCog(commands.Cog):
             return None
         return message.id
 
+    async def _mirror_embed_to_log_channel(self, embed: discord.Embed, *, channel_id: int = RAFFLE_LOG_CHANNEL_ID) -> bool:
+        """Send a copy of a raffle embed to the configured raffle channel without interrupting the command flow."""
+        log_channel = await self._fetch_log_channel(channel_id)
+        if log_channel is None:
+            return False
+        try:
+            await log_channel.send(embed=embed)
+        except discord.HTTPException:
+            LOGGER.exception("Failed to mirror raffle embed to channel %s", channel_id)
+            return False
+        return True
+
+    async def _respond_and_log(
+        self,
+        interaction: discord.Interaction,
+        *,
+        embed: discord.Embed,
+        ephemeral: bool = True,
+        channel_id: int = RAFFLE_LOG_CHANNEL_ID,
+    ) -> None:
+        """Reply to staff and also mirror the same raffle embed into the raffle log channel."""
+        await self._respond(interaction, embed=embed, ephemeral=ephemeral)
+        await self._mirror_embed_to_log_channel(embed, channel_id=channel_id)
+
     def _has_manage_permissions(self, interaction: discord.Interaction) -> bool:
         perms = getattr(interaction.user, "guild_permissions", None)
         return bool(perms and (perms.manage_guild or perms.administrator))
@@ -208,7 +232,7 @@ class RaffleCog(commands.Cog):
             description="You need **Manage Server** or **Administrator** permissions to manage raffles.",
             color=discord.Color.red(),
         )
-        await self._respond(interaction, embed=embed, ephemeral=True)
+        await self._respond_and_log(interaction, embed=embed, ephemeral=True)
         return False
 
     async def _respond(self, interaction: discord.Interaction, *, embed: discord.Embed, ephemeral: bool = True) -> None:
@@ -355,7 +379,7 @@ class RaffleCog(commands.Cog):
             )
         else:
             embed.add_field(name="Log Channel", value=f"<#{raffle['log_channel_id']}>", inline=False)
-        await self._respond(interaction, embed=embed, ephemeral=True)
+        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"])
 
     @raffle.command(name="add", description="Manually add a member to a raffle.")
     @app_commands.describe(
@@ -374,10 +398,10 @@ class RaffleCog(commands.Cog):
             return
         raffle = self._get_guild_raffle(interaction, raffle_id)
         if raffle is None:
-            await self._respond(interaction, embed=self._build_embed("Raffle Not Found", "That raffle ID does not exist in this server.", color=discord.Color.red()), ephemeral=True)
+            await self._respond_and_log(interaction, embed=self._build_embed("Raffle Not Found", "That raffle ID does not exist in this server.", color=discord.Color.red()), ephemeral=True)
             return
         if not raffle["active"]:
-            await self._respond(interaction, embed=self._build_embed("Raffle Closed", "That raffle is no longer active.", color=discord.Color.red()), ephemeral=True)
+            await self._respond_and_log(interaction, embed=self._build_embed("Raffle Closed", "That raffle is no longer active.", color=discord.Color.red()), ephemeral=True, channel_id=raffle["log_channel_id"])
             return
 
         user_key = str(user.id)
@@ -388,10 +412,11 @@ class RaffleCog(commands.Cog):
             new_count = current_count + entries
         else:
             if current_count >= 1:
-                await self._respond(
+                await self._respond_and_log(
                     interaction,
                     embed=self._build_embed("Entry Exists", f"{user.mention} already has their single allowed entry in this raffle.", color=discord.Color.orange()),
                     ephemeral=True,
+                    channel_id=raffle["log_channel_id"],
                 )
                 return
             new_count = 1
@@ -417,7 +442,7 @@ class RaffleCog(commands.Cog):
         embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
         embed.add_field(name="User Total Entries", value=str(new_count), inline=True)
         embed.add_field(name="DM Status", value="Sent successfully" if dm_sent else "Entry added, but the DM could not be delivered.", inline=False)
-        await self._respond(interaction, embed=embed, ephemeral=True)
+        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"])
 
     @raffle.command(name="remove", description="Remove one or more entries from a raffle member.")
     @app_commands.describe(
@@ -436,13 +461,13 @@ class RaffleCog(commands.Cog):
             return
         raffle = self._get_guild_raffle(interaction, raffle_id)
         if raffle is None:
-            await self._respond(interaction, embed=self._build_embed("Raffle Not Found", "That raffle ID does not exist in this server.", color=discord.Color.red()), ephemeral=True)
+            await self._respond_and_log(interaction, embed=self._build_embed("Raffle Not Found", "That raffle ID does not exist in this server.", color=discord.Color.red()), ephemeral=True)
             return
 
         user_key = str(user.id)
         entrant = raffle["entrants"].get(user_key)
         if entrant is None:
-            await self._respond(interaction, embed=self._build_embed("User Not Entered", f"{user.mention} does not have any entries in this raffle.", color=discord.Color.orange()), ephemeral=True)
+            await self._respond_and_log(interaction, embed=self._build_embed("User Not Entered", f"{user.mention} does not have any entries in this raffle.", color=discord.Color.orange()), ephemeral=True, channel_id=raffle["log_channel_id"])
             return
 
         removed_entries = entrant["entries"] if not raffle["allow_multiple_entries"] else min(entries, entrant["entries"])
@@ -462,7 +487,7 @@ class RaffleCog(commands.Cog):
         )
         embed.add_field(name="Remaining Entries", value=str(remaining_entries), inline=True)
         embed.add_field(name="Total Raffle Entries", value=str(self._total_entries(raffle)), inline=True)
-        await self._respond(interaction, embed=embed, ephemeral=True)
+        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"])
 
     @raffle.command(name="entries", description="View entries for a raffle.")
     @app_commands.describe(raffle_id="The raffle ID to inspect.")
@@ -471,7 +496,7 @@ class RaffleCog(commands.Cog):
             return
         raffle = self._get_guild_raffle(interaction, raffle_id)
         if raffle is None:
-            await self._respond(interaction, embed=self._build_embed("Raffle Not Found", "That raffle ID does not exist in this server.", color=discord.Color.red()), ephemeral=True)
+            await self._respond_and_log(interaction, embed=self._build_embed("Raffle Not Found", "That raffle ID does not exist in this server.", color=discord.Color.red()), ephemeral=True)
             return
 
         embed = self._build_embed(
@@ -497,7 +522,7 @@ class RaffleCog(commands.Cog):
                 preview = "\n".join(entrant_lines[:MAX_ENTRIES_DISPLAY])
                 embed.add_field(name="Entrants", value=f"{preview}\n...and {len(entrant_lines) - MAX_ENTRIES_DISPLAY} more user(s).", inline=False)
 
-        await self._respond(interaction, embed=embed, ephemeral=True)
+        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"])
 
     @raffle.command(name="draw", description="Draw one or more unique winners from a raffle.")
     @app_commands.describe(
@@ -514,15 +539,15 @@ class RaffleCog(commands.Cog):
             return
         raffle = self._get_guild_raffle(interaction, raffle_id)
         if raffle is None:
-            await self._respond(interaction, embed=self._build_embed("Raffle Not Found", "That raffle ID does not exist in this server.", color=discord.Color.red()), ephemeral=True)
+            await self._respond_and_log(interaction, embed=self._build_embed("Raffle Not Found", "That raffle ID does not exist in this server.", color=discord.Color.red()), ephemeral=True)
             return
         if not raffle["entrants"]:
-            await self._respond(interaction, embed=self._build_embed("No Entrants", "This raffle has no entries to draw from.", color=discord.Color.red()), ephemeral=True)
+            await self._respond_and_log(interaction, embed=self._build_embed("No Entrants", "This raffle has no entries to draw from.", color=discord.Color.red()), ephemeral=True, channel_id=raffle["log_channel_id"])
             return
 
         unique_entrants = len(raffle["entrants"])
         if winners > unique_entrants:
-            await self._respond(
+            await self._respond_and_log(
                 interaction,
                 embed=self._build_embed(
                     "Too Many Winners",
@@ -530,6 +555,7 @@ class RaffleCog(commands.Cog):
                     color=discord.Color.red(),
                 ),
                 ephemeral=True,
+                channel_id=raffle["log_channel_id"],
             )
             return
 
@@ -546,7 +572,7 @@ class RaffleCog(commands.Cog):
         embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
         embed.add_field(name="Winner Count", value=str(len(winner_ids)), inline=True)
         embed.add_field(name="Weighted Pool Size", value=str(self._total_entries(raffle)), inline=True)
-        await self._respond(interaction, embed=embed, ephemeral=True)
+        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"])
 
     @raffle.command(name="end", description="Close a raffle so no more entries can be added.")
     @app_commands.describe(raffle_id="The raffle ID to close.")
@@ -555,10 +581,10 @@ class RaffleCog(commands.Cog):
             return
         raffle = self._get_guild_raffle(interaction, raffle_id)
         if raffle is None:
-            await self._respond(interaction, embed=self._build_embed("Raffle Not Found", "That raffle ID does not exist in this server.", color=discord.Color.red()), ephemeral=True)
+            await self._respond_and_log(interaction, embed=self._build_embed("Raffle Not Found", "That raffle ID does not exist in this server.", color=discord.Color.red()), ephemeral=True)
             return
         if not raffle["active"]:
-            await self._respond(interaction, embed=self._build_embed("Already Closed", "That raffle has already been closed.", color=discord.Color.orange()), ephemeral=True)
+            await self._respond_and_log(interaction, embed=self._build_embed("Already Closed", "That raffle has already been closed.", color=discord.Color.orange()), ephemeral=True, channel_id=raffle["log_channel_id"])
             return
 
         raffle["active"] = False
@@ -570,21 +596,21 @@ class RaffleCog(commands.Cog):
         )
         embed.add_field(name="Total Entries", value=str(self._total_entries(raffle)), inline=True)
         embed.add_field(name="Unique Users", value=str(len(raffle["entrants"])), inline=True)
-        await self._respond(interaction, embed=embed, ephemeral=True)
+        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"])
 
     @raffle.command(name="list", description="List active raffles in this server.")
     async def raffle_list(self, interaction: discord.Interaction) -> None:
         if not await self._check_permissions(interaction):
             return
         if interaction.guild is None:
-            await self._respond(interaction, embed=self._build_embed("Server Only", "Raffles can only be listed inside a server.", color=discord.Color.red()), ephemeral=True)
+            await self._respond_and_log(interaction, embed=self._build_embed("Server Only", "Raffles can only be listed inside a server.", color=discord.Color.red()), ephemeral=True)
             return
 
         active_raffles = [raffle for raffle in self._raffles.values() if raffle["guild_id"] == interaction.guild.id and raffle["active"]]
         embed = self._build_embed("Active Raffles", "Currently active raffles for this server.")
         if not active_raffles:
             embed.description = "There are no active raffles in this server right now."
-            await self._respond(interaction, embed=embed, ephemeral=True)
+            await self._respond_and_log(interaction, embed=embed, ephemeral=True)
             return
 
         for raffle in sorted(active_raffles, key=lambda item: item["created_at"]):
@@ -597,7 +623,7 @@ class RaffleCog(commands.Cog):
                 ),
                 inline=False,
             )
-        await self._respond(interaction, embed=embed, ephemeral=True)
+        await self._respond_and_log(interaction, embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:

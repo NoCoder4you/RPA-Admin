@@ -358,29 +358,67 @@ class HabboVerificationCog(commands.Cog):
 
         return "Nickname updated to verified Habbo username."
 
+    def _get_awaiting_verification_role(self, guild: discord.Guild) -> discord.Role | None:
+        """Resolve the Awaiting Verification role from config first, then fall back to the legacy role name."""
+
+        configured_role_id = self.server_config_store.get_awaiting_verification_role_id()
+        if configured_role_id is not None:
+            configured_role = guild.get_role(configured_role_id)
+            if configured_role is not None:
+                return configured_role
+
+        return discord.utils.get(guild.roles, name="Awaiting Verification")
+
     async def _ensure_verified_role(self, interaction: discord.Interaction) -> tuple[str, list[str]]:
         """Ensure successful verification also grants the baseline Discord Verified role."""
 
-        if not interaction.guild or not isinstance(interaction.user, discord.Member):
+        member = interaction.user
+        if (
+            not interaction.guild
+            or not hasattr(member, "roles")
+            or not hasattr(member, "add_roles")
+            or not hasattr(member, "remove_roles")
+        ):
             return "Skipped (Verified role can only be assigned inside a server).", []
 
         verified_role = discord.utils.get(interaction.guild.roles, name="Verified")
         if verified_role is None:
             return "Skipped (Verified role does not exist in this server).", []
 
-        if verified_role in interaction.user.roles:
+        roles_to_add: list[discord.Role] = []
+        roles_to_remove: list[discord.Role] = []
+        status_parts: list[str] = []
+        changed_role_names: list[str] = []
+
+        if verified_role not in member.roles:
+            roles_to_add.append(verified_role)
+            changed_role_names.append(verified_role.name)
+            status_parts.append("Verified role added.")
+
+        awaiting_role = self._get_awaiting_verification_role(interaction.guild)
+        if awaiting_role is not None and awaiting_role in member.roles:
+            # Remove the staging role as soon as verification succeeds so members do not keep
+            # showing up in the moderation queue after they have been confirmed.
+            roles_to_remove.append(awaiting_role)
+            changed_role_names.append(awaiting_role.name)
+            status_parts.append("Awaiting Verification role removed.")
+
+        if not roles_to_add and not roles_to_remove:
             return "No Verified role change was required.", []
 
         try:
-            # Keep the baseline access grant separate from Habbo-group role sync so verification
-            # still succeeds even when the server only relies on the standalone Verified role.
-            await interaction.user.add_roles(verified_role, reason="Habbo verification verified-role sync")
+            # Apply both baseline access changes together so the member is promoted out of the
+            # staging state in the same verification transaction.
+            if roles_to_add:
+                await member.add_roles(*roles_to_add, reason="Habbo verification verified-role sync")
+            if roles_to_remove:
+                await member.remove_roles(*roles_to_remove, reason="Habbo verification verified-role sync")
         except discord.Forbidden:
-            return "Failed (bot lacks permission to manage the Verified role).", []
+            return "Failed (bot lacks permission to manage the Verified or Awaiting Verification roles).", []
         except discord.HTTPException:
-            return "Failed (Discord rejected the Verified role update request).", []
+            return "Failed (Discord rejected the Verified/Awaiting Verification role update request).", []
 
-        return "Verified role added.", [verified_role.name]
+        return " | ".join(status_parts), changed_role_names
 
     async def _assign_roles_from_habbo_groups(
         self,

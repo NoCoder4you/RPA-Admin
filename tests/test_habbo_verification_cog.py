@@ -61,18 +61,23 @@ class HabboVerificationCogVerifiedRoleTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_ensure_verified_role_adds_verified_role_when_missing(self) -> None:
         cog = HabboVerificationCog(bot=MagicMock())
+        cog.server_config_store = SimpleNamespace(get_awaiting_verification_role_id=lambda: None)
         verified_role = SimpleNamespace(name="Verified")
-        member = SimpleNamespace(roles=[], add_roles=AsyncMock())
-        interaction = SimpleNamespace(guild=SimpleNamespace(roles=[verified_role]), user=member)
+        member = SimpleNamespace(roles=[], add_roles=AsyncMock(), remove_roles=AsyncMock())
+        interaction = SimpleNamespace(
+            guild=SimpleNamespace(roles=[verified_role], get_role=lambda _role_id: None),
+            user=member,
+        )
 
-        status, added_roles = await cog._ensure_verified_role(interaction)
+        status, changed_roles = await cog._ensure_verified_role(interaction)
 
         self.assertEqual(status, "Verified role added.")
-        self.assertEqual(added_roles, ["Verified"])
+        self.assertEqual(changed_roles, ["Verified"])
         member.add_roles.assert_awaited_once_with(
             verified_role,
             reason="Habbo verification verified-role sync",
         )
+        member.remove_roles.assert_not_awaited()
 
     async def test_ensure_verified_role_skips_outside_guild_context(self) -> None:
         cog = HabboVerificationCog(bot=MagicMock())
@@ -82,6 +87,34 @@ class HabboVerificationCogVerifiedRoleTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(status, "Skipped (Verified role can only be assigned inside a server).")
         self.assertEqual(added_roles, [])
+
+    async def test_ensure_verified_role_removes_awaiting_verification_role_after_success(self) -> None:
+        cog = HabboVerificationCog(bot=MagicMock())
+        awaiting_role = SimpleNamespace(id=42, name="Awaiting Verification")
+        verified_role = SimpleNamespace(name="Verified")
+        cog.server_config_store = SimpleNamespace(get_awaiting_verification_role_id=lambda: 42)
+        member = SimpleNamespace(
+            roles=[awaiting_role],
+            add_roles=AsyncMock(),
+            remove_roles=AsyncMock(),
+        )
+        interaction = SimpleNamespace(
+            guild=SimpleNamespace(roles=[verified_role, awaiting_role], get_role=lambda role_id: awaiting_role if role_id == 42 else None),
+            user=member,
+        )
+
+        status, changed_roles = await cog._ensure_verified_role(interaction)
+
+        self.assertEqual(status, "Verified role added. | Awaiting Verification role removed.")
+        self.assertEqual(changed_roles, ["Verified", "Awaiting Verification"])
+        member.add_roles.assert_awaited_once_with(
+            verified_role,
+            reason="Habbo verification verified-role sync",
+        )
+        member.remove_roles.assert_awaited_once_with(
+            awaiting_role,
+            reason="Habbo verification verified-role sync",
+        )
 
 
 class HabboVerificationCommandTests(unittest.IsolatedAsyncioTestCase):

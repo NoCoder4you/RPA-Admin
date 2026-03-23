@@ -163,11 +163,17 @@ class RulesRegulationsCog(commands.Cog):
     ) -> None:
         """Post a per-member onboarding embed in the verification channel after staging."""
 
-        # Staff requested that every Awaiting Verification onboarding notice land in the fixed
+        channel_id = self.server_config_store.get_awaiting_verification_channel_id()
+        if channel_id is None:
+            # Exit early until staff configures the onboarding destination in serverconfig.
+            return
+
+        # Staff requested that every Awaiting Verification onboarding notice land in the configured
         # verification queue channel so the embed + ping always appears in one predictable place.
-        channel = guild.get_channel(AWAITING_VERIFICATION_CHANNEL_ID)
+        channel = guild.get_channel(channel_id)
         if channel is None:
             try:
+                # Fetch the uncached channel directly so onboarding still works after cache evictions.
                 channel = await guild.fetch_channel(channel_id)
             except (discord.NotFound, discord.Forbidden, discord.HTTPException, AttributeError):
                 return

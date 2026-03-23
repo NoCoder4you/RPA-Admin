@@ -191,6 +191,7 @@ class HabboVerificationCog(commands.Cog):
 
             role_status, added_role_names, removed_role_names = await self._assign_roles_from_habbo_groups(interaction, profile)
             verified_role_status, verified_role_names = await self._ensure_verified_role(interaction)
+            nickname_status = await self._sync_member_nickname(interaction, verified_habbo_name)
             if verified_role_status != "No Verified role change was required.":
                 # Always grant the stable Verified role after a successful motto check, even when
                 # the member has no mapped Habbo-group roles to add during the same verification run.
@@ -210,6 +211,7 @@ class HabboVerificationCog(commands.Cog):
                     "saved_mapping": "yes",
                     "role_sync_status": role_status,
                     "restriction_status": restriction_status,
+                    "nickname_status": nickname_status,
                     "roles_added": ", ".join(added_role_names) if added_role_names else "none",
                     "roles_removed": ", ".join(removed_role_names) if removed_role_names else "none",
                     "figure_string": str(profile.get("figureString", "")),
@@ -227,7 +229,10 @@ class HabboVerificationCog(commands.Cog):
                     challenge_code=challenge.code,
                     expires_at=challenge.expires_at,
                     color=discord.Color.green(),
-                    extra_field=("Restriction Check", restriction_status),
+                    extra_field=(
+                        "Verification Updates",
+                        f"Role Sync: {role_status}\nNickname: {nickname_status}\nRestriction Check: {restriction_status}",
+                    ),
                     thumbnail_url=self._build_avatar_thumbnail_url(profile),
                 ),
                 ephemeral=True,

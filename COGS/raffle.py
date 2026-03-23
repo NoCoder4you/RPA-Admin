@@ -306,6 +306,22 @@ class RaffleCog(commands.Cog):
     def _total_entries(self, raffle: dict[str, Any]) -> int:
         return sum(entrant["entries"] for entrant in raffle["entrants"].values())
 
+    def _build_raffle_list_value(self, raffle: dict[str, Any]) -> str:
+        """Format a raffle summary so the ID and raffle name each appear in their own subheading-style block."""
+        # Discord embeds do not support true heading levels inside field values, so
+        # we use explicit labeled sections to create the visual hierarchy staff asked
+        # for while keeping the remaining raffle stats easy to scan underneath.
+        return (
+            "**ID**\n"
+            f"`{raffle['raffle_id']}`\n"
+            "**Raffle Name**\n"
+            f"{raffle['name']}\n"
+            "**Details**\n"
+            f"Entries: **{self._total_entries(raffle)}**\n"
+            f"Unique Users: **{len(raffle['entrants'])}**\n"
+            f"Multiple Entries: **{'Enabled' if raffle['allow_multiple_entries'] else 'Disabled'}**"
+        )
+
     def _build_weighted_pool(self, raffle: dict[str, Any]) -> list[int]:
         weighted_entries: list[int] = []
         for user_id, entrant in raffle["entrants"].items():
@@ -763,12 +779,8 @@ class RaffleCog(commands.Cog):
 
         for raffle in sorted(active_raffles, key=lambda item: item["created_at"]):
             embed.add_field(
-                name=f"{raffle['name']} ({raffle['raffle_id']})",
-                value=(
-                    f"Entries: **{self._total_entries(raffle)}**\n"
-                    f"Unique Users: **{len(raffle['entrants'])}**\n"
-                    f"Multiple Entries: **{'Enabled' if raffle['allow_multiple_entries'] else 'Disabled'}**"
-                ),
+                name="Raffle",
+                value=self._build_raffle_list_value(raffle),
                 inline=False,
             )
         await self._respond_and_log(interaction, embed=embed, ephemeral=True, public_response=True, mirror_to_log=True)

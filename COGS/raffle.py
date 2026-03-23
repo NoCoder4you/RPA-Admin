@@ -216,9 +216,16 @@ class RaffleCog(commands.Cog):
         embed: discord.Embed,
         ephemeral: bool = True,
         channel_id: int = RAFFLE_LOG_CHANNEL_ID,
+        public_response: bool = False,
     ) -> None:
-        """Reply to staff and also mirror the same raffle embed into the raffle log channel."""
-        await self._respond(interaction, embed=embed, ephemeral=ephemeral)
+        """Reply to staff and optionally mirror the same raffle embed into the raffle log channel."""
+        # Staff asked for raffle activity updates to appear as a normal public message
+        # instead of an ephemeral response. When the current channel is already the
+        # configured raffle log channel, skip the mirror entirely so the same embed
+        # is not posted twice in the same place.
+        await self._respond(interaction, embed=embed, ephemeral=False if public_response else ephemeral)
+        if public_response and getattr(getattr(interaction, "channel", None), "id", None) == channel_id:
+            return
         await self._mirror_embed_to_log_channel(embed, channel_id=channel_id)
 
     def _has_manage_permissions(self, interaction: discord.Interaction) -> bool:
@@ -411,7 +418,7 @@ class RaffleCog(commands.Cog):
             )
         else:
             embed.add_field(name="Log Channel", value=f"<#{raffle['log_channel_id']}>", inline=False)
-        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"])
+        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True)
 
     @raffle.command(name="add", description="Manually add a member to a raffle.")
     @app_commands.describe(
@@ -471,10 +478,15 @@ class RaffleCog(commands.Cog):
             f"Added {entries if raffle['allow_multiple_entries'] else 1} entrie(s) for {user.mention} in **{raffle['name']}**.",
             color=discord.Color.green(),
         )
+        # Reuse the verified Habbo avatar on the staff-facing confirmation embed so
+        # moderators can immediately identify which player the entry update belongs to.
+        thumbnail_url = self._get_habbo_thumbnail_url(user.id)
+        if thumbnail_url:
+            embed.set_thumbnail(url=thumbnail_url)
         embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
         embed.add_field(name="User Total Entries", value=str(new_count), inline=True)
         embed.add_field(name="DM Status", value="Sent successfully" if dm_sent else "Entry added, but the DM could not be delivered.", inline=False)
-        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"])
+        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True)
 
     @raffle.command(name="remove", description="Remove one or more entries from a raffle member.")
     @app_commands.describe(
@@ -519,7 +531,7 @@ class RaffleCog(commands.Cog):
         )
         embed.add_field(name="Remaining Entries", value=str(remaining_entries), inline=True)
         embed.add_field(name="Total Raffle Entries", value=str(self._total_entries(raffle)), inline=True)
-        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"])
+        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True)
 
     @raffle.command(name="entries", description="View entries for a raffle.")
     @app_commands.describe(raffle_id="The raffle ID to inspect.")
@@ -554,7 +566,7 @@ class RaffleCog(commands.Cog):
                 preview = "\n".join(entrant_lines[:MAX_ENTRIES_DISPLAY])
                 embed.add_field(name="Entrants", value=f"{preview}\n...and {len(entrant_lines) - MAX_ENTRIES_DISPLAY} more user(s).", inline=False)
 
-        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"])
+        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True)
 
     @raffle.command(name="draw", description="Draw one or more unique winners from a raffle.")
     @app_commands.describe(
@@ -604,7 +616,7 @@ class RaffleCog(commands.Cog):
         embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
         embed.add_field(name="Winner Count", value=str(len(winner_ids)), inline=True)
         embed.add_field(name="Weighted Pool Size", value=str(self._total_entries(raffle)), inline=True)
-        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"])
+        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True)
 
     @raffle.command(name="end", description="Close a raffle so no more entries can be added.")
     @app_commands.describe(raffle_id="The raffle ID to close.")
@@ -628,7 +640,7 @@ class RaffleCog(commands.Cog):
         )
         embed.add_field(name="Total Entries", value=str(self._total_entries(raffle)), inline=True)
         embed.add_field(name="Unique Users", value=str(len(raffle["entrants"])), inline=True)
-        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"])
+        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True)
 
     @raffle.command(name="list", description="List active raffles in this server.")
     async def raffle_list(self, interaction: discord.Interaction) -> None:
@@ -642,7 +654,7 @@ class RaffleCog(commands.Cog):
         embed = self._build_embed("Active Raffles", "Currently active raffles for this server.")
         if not active_raffles:
             embed.description = "There are no active raffles in this server right now."
-            await self._respond_and_log(interaction, embed=embed, ephemeral=True)
+            await self._respond_and_log(interaction, embed=embed, ephemeral=True, public_response=True)
             return
 
         for raffle in sorted(active_raffles, key=lambda item: item["created_at"]):
@@ -655,7 +667,7 @@ class RaffleCog(commands.Cog):
                 ),
                 inline=False,
             )
-        await self._respond_and_log(interaction, embed=embed, ephemeral=True)
+        await self._respond_and_log(interaction, embed=embed, ephemeral=True, public_response=True)
 
 
 async def setup(bot: commands.Bot) -> None:

@@ -315,7 +315,11 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         response_fields = {field.name: field.value for field in response_embed.fields}
         self.assertEqual(response_fields["Raffle Status"], "Closed automatically after draw")
         self.assertEqual(response_fields["Winner DM Status"], "Sent 2/2 winner DM(s).")
-        log_channel.send.assert_awaited_once()
+        self.assertEqual(log_channel.send.await_count, 3)
+        mirrored_embeds = [call.kwargs["embed"] for call in log_channel.send.await_args_list]
+        self.assertEqual([embed.title for embed in mirrored_embeds], ["Raffle Winner", "Raffle Winner", "Winner Drawn"])
+        self.assertEqual(mirrored_embeds[0].fields[1].value, "1 of 2")
+        self.assertEqual(mirrored_embeds[1].fields[1].value, "2 of 2")
 
     async def test_send_winner_dm_reports_failure_when_dms_are_closed(self) -> None:
         member = SimpleNamespace(id=55, send=AsyncMock(side_effect=discord.Forbidden(MagicMock(), "closed")))

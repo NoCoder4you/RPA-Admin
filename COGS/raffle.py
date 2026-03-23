@@ -717,7 +717,7 @@ class RaffleCog(commands.Cog):
         )
         embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
         embed.add_field(name="Winner Count", value=str(len(winner_ids)), inline=True)
-        embed.add_field(name="Weighted Pool Size", value=str(total_entries), inline=True)
+        embed.add_field(name="Pool Size", value=str(total_entries), inline=True)
         embed.add_field(name="Raffle Status", value="Closed automatically after draw", inline=False)
         embed.add_field(name="Winner DM Status", value=f"Sent {dm_successes}/{len(winner_ids)} winner DM(s).", inline=False)
         await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True, mirror_to_log=True)

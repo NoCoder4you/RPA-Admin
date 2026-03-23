@@ -1,0 +1,533 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import random
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+import discord
+from discord import app_commands
+from discord.ext import commands
+
+LOGGER = logging.getLogger(__name__)
+DEFAULT_STORAGE_PATH = Path(__file__).resolve().parent.parent / "JSON" / "raffles.json"
+MAX_ENTRIES_DISPLAY = 20
+
+
+class RaffleCog(commands.Cog):
+    """Slash-command-only raffle management with persistent JSON storage."""
+
+    raffle = app_commands.Group(name="raffle", description="Manage server raffles.")
+
+    def __init__(self, bot: commands.Bot, *, storage_path: Path | None = None) -> None:
+        self.bot = bot
+        self.storage_path = storage_path or DEFAULT_STORAGE_PATH
+        self._storage_lock = asyncio.Lock()
+        self._raffles: dict[str, dict[str, Any]] = {}
+
+    async def cog_load(self) -> None:
+        """Load persisted raffle data when the cog is added to the bot."""
+        await self._load_raffles()
+
+    def _utcnow(self) -> datetime:
+        return datetime.now(timezone.utc)
+
+    def _generate_raffle_id(self) -> str:
+        """Generate a compact raffle identifier suitable for staff slash commands."""
+        while True:
+            raffle_id = uuid4().hex[:8].upper()
+            if raffle_id not in self._raffles:
+                return raffle_id
+
+    def _default_payload(self) -> dict[str, Any]:
+        return {"raffles": {}}
+
+    def _ensure_storage_file(self) -> None:
+        """Create the JSON storage path automatically when it does not exist."""
+        self.storage_path.parent.mkdir(parents=True, exist_ok=True)
+        if not self.storage_path.exists():
+            self.storage_path.write_text(json.dumps(self._default_payload(), indent=2), encoding="utf-8")
+
+    async def _load_raffles(self) -> None:
+        """Safely load raffle data from disk, falling back to an empty structure if invalid."""
+        async with self._storage_lock:
+            self._ensure_storage_file()
+            try:
+                payload = json.loads(self.storage_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                LOGGER.exception("Raffle storage JSON is invalid: %s", self.storage_path)
+                backup_path = self.storage_path.with_suffix(".corrupted.json")
+                try:
+                    self.storage_path.replace(backup_path)
+                except OSError:
+                    LOGGER.exception("Failed to back up corrupted raffle storage")
+                self._ensure_storage_file()
+                self._raffles = {}
+                return
+            except OSError:
+                LOGGER.exception("Failed to read raffle storage file: %s", self.storage_path)
+                self._raffles = {}
+                return
+
+        if not isinstance(payload, dict) or not isinstance(payload.get("raffles", {}), dict):
+            LOGGER.error("Raffle storage format is invalid; resetting to an empty structure")
+            self._raffles = {}
+            await self._save_raffles()
+            return
+
+        cleaned: dict[str, dict[str, Any]] = {}
+        for raffle_id, raffle_data in payload.get("raffles", {}).items():
+            if not isinstance(raffle_id, str) or not isinstance(raffle_data, dict):
+                continue
+            normalized = self._normalize_raffle_payload(raffle_id, raffle_data)
+            if normalized is not None:
+                cleaned[raffle_id] = normalized
+        self._raffles = cleaned
+        await self._save_raffles()
+
+    async def _save_raffles(self) -> None:
+        """Persist raffle data to disk using atomic replacement to prevent corruption."""
+        async with self._storage_lock:
+            self._ensure_storage_file()
+            payload = {"raffles": self._raffles}
+            temp_path = self.storage_path.with_suffix(".tmp")
+            temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+            temp_path.replace(self.storage_path)
+
+    def _normalize_raffle_payload(self, raffle_id: str, raffle_data: dict[str, Any]) -> dict[str, Any] | None:
+        """Validate persisted raffle data before it is exposed to commands."""
+        required_keys = {
+            "raffle_id": str,
+            "name": str,
+            "description": (str, type(None)),
+            "guild_id": int,
+            "channel_id": int,
+            "created_by": int,
+            "created_at": str,
+            "active": bool,
+            "allow_multiple_entries": bool,
+            "entrants": dict,
+            "winners": list,
+        }
+        for key, expected_type in required_keys.items():
+            value = raffle_data.get(key)
+            if not isinstance(value, expected_type):
+                return None
+
+        entrants: dict[str, dict[str, Any]] = {}
+        for user_id, entrant_data in raffle_data["entrants"].items():
+            if not isinstance(user_id, str) or not isinstance(entrant_data, dict):
+                continue
+            username = entrant_data.get("username")
+            entry_count = entrant_data.get("entries")
+            if not isinstance(username, str) or not isinstance(entry_count, int) or entry_count < 1:
+                continue
+            entrants[user_id] = {"username": username, "entries": entry_count}
+
+        winners = [winner for winner in raffle_data["winners"] if isinstance(winner, int)]
+        normalized = dict(raffle_data)
+        normalized["raffle_id"] = raffle_id
+        normalized["entrants"] = entrants
+        normalized["winners"] = winners
+        return normalized
+
+    def _has_manage_permissions(self, interaction: discord.Interaction) -> bool:
+        perms = getattr(interaction.user, "guild_permissions", None)
+        return bool(perms and (perms.manage_guild or perms.administrator))
+
+    async def _check_permissions(self, interaction: discord.Interaction) -> bool:
+        if self._has_manage_permissions(interaction):
+            return True
+
+        embed = self._build_embed(
+            title="Missing Permissions",
+            description="You need **Manage Server** or **Administrator** permissions to manage raffles.",
+            color=discord.Color.red(),
+        )
+        await self._respond(interaction, embed=embed, ephemeral=True)
+        return False
+
+    async def _respond(self, interaction: discord.Interaction, *, embed: discord.Embed, ephemeral: bool = True) -> None:
+        """Send a response whether the interaction has already been acknowledged or not."""
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=embed, ephemeral=ephemeral)
+        else:
+            await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
+
+    def _build_embed(self, title: str, description: str, *, color: discord.Color | None = None) -> discord.Embed:
+        return discord.Embed(title=title, description=description, color=color or discord.Color.blurple(), timestamp=self._utcnow())
+
+    def _get_guild_raffle(self, interaction: discord.Interaction, raffle_id: str) -> dict[str, Any] | None:
+        raffle = self._raffles.get(raffle_id.upper())
+        if raffle is None or interaction.guild is None:
+            return None
+        if raffle["guild_id"] != interaction.guild.id:
+            return None
+        return raffle
+
+    def _total_entries(self, raffle: dict[str, Any]) -> int:
+        return sum(entrant["entries"] for entrant in raffle["entrants"].values())
+
+    def _build_weighted_pool(self, raffle: dict[str, Any]) -> list[int]:
+        weighted_entries: list[int] = []
+        for user_id, entrant in raffle["entrants"].items():
+            weighted_entries.extend([int(user_id)] * entrant["entries"])
+        return weighted_entries
+
+    def _pick_unique_weighted_winners(self, raffle: dict[str, Any], winner_count: int) -> list[int]:
+        """Draw unique winners while preserving weighted odds from entry counts."""
+        remaining_entries = {
+            int(user_id): entrant["entries"] for user_id, entrant in raffle["entrants"].items() if entrant["entries"] > 0
+        }
+        winners: list[int] = []
+
+        for _ in range(winner_count):
+            pool: list[int] = []
+            for user_id, entries in remaining_entries.items():
+                pool.extend([user_id] * entries)
+            if not pool:
+                break
+            winner = random.choice(pool)
+            winners.append(winner)
+            remaining_entries.pop(winner, None)
+        return winners
+
+    async def _send_entry_dm(
+        self,
+        member: discord.Member,
+        *,
+        raffle_name: str,
+        guild_name: str,
+        added_by: discord.abc.User,
+        entry_count: int,
+    ) -> bool:
+        """Notify a player that staff entered them into a raffle, even if DMs are disabled."""
+        embed = discord.Embed(
+            title="Raffle Entry Confirmed",
+            description=(
+                f"You have been entered into the raffle **{raffle_name}** in **{guild_name}**.\n"
+                f"Added by: {added_by.mention}\n"
+                f"You now have **{entry_count}** entrie(s)."
+            ),
+            color=discord.Color.green(),
+            timestamp=self._utcnow(),
+        )
+        try:
+            await member.send(embed=embed)
+            return True
+        except discord.Forbidden:
+            return False
+        except discord.HTTPException:
+            LOGGER.exception("Failed to DM raffle entry confirmation to %s", member.id)
+            return False
+
+    @raffle.command(name="create", description="Create a new raffle in this server.")
+    @app_commands.describe(
+        name="Name of the raffle.",
+        description="Optional description for the raffle.",
+        allow_multiple_entries="Whether the raffle allows more than one entry per user.",
+    )
+    async def raffle_create(
+        self,
+        interaction: discord.Interaction,
+        name: str,
+        allow_multiple_entries: bool,
+        description: str | None = None,
+    ) -> None:
+        if not await self._check_permissions(interaction):
+            return
+        if interaction.guild is None or interaction.channel is None:
+            await self._respond(
+                interaction,
+                embed=self._build_embed("Server Only", "Raffles can only be created inside a server.", color=discord.Color.red()),
+                ephemeral=True,
+            )
+            return
+
+        clean_name = name.strip()
+        clean_description = description.strip() if description else None
+        if not clean_name:
+            await self._respond(
+                interaction,
+                embed=self._build_embed("Invalid Name", "Raffle name cannot be empty.", color=discord.Color.red()),
+                ephemeral=True,
+            )
+            return
+
+        raffle_id = self._generate_raffle_id()
+        raffle = {
+            "raffle_id": raffle_id,
+            "name": clean_name,
+            "description": clean_description,
+            "guild_id": interaction.guild.id,
+            "channel_id": interaction.channel.id,
+            "created_by": interaction.user.id,
+            "created_at": self._utcnow().isoformat(),
+            "active": True,
+            "allow_multiple_entries": allow_multiple_entries,
+            "entrants": {},
+            "winners": [],
+        }
+        self._raffles[raffle_id] = raffle
+        await self._save_raffles()
+
+        embed = self._build_embed(
+            "Raffle Created",
+            f"Created raffle **{clean_name}** with ID `{raffle_id}`.",
+            color=discord.Color.green(),
+        )
+        embed.add_field(name="Description", value=clean_description or "No description provided.", inline=False)
+        embed.add_field(name="Multiple Entries", value="Enabled" if allow_multiple_entries else "Disabled", inline=True)
+        embed.add_field(name="Created In", value=interaction.channel.mention, inline=True)
+        await self._respond(interaction, embed=embed, ephemeral=True)
+
+    @raffle.command(name="add", description="Manually add a member to a raffle.")
+    @app_commands.describe(
+        raffle_id="The raffle ID returned when the raffle was created.",
+        user="Member to enter into the raffle.",
+        entries="How many entries to add for this member.",
+    )
+    async def raffle_add(
+        self,
+        interaction: discord.Interaction,
+        raffle_id: str,
+        user: discord.Member,
+        entries: app_commands.Range[int, 1] = 1,
+    ) -> None:
+        if not await self._check_permissions(interaction):
+            return
+        raffle = self._get_guild_raffle(interaction, raffle_id)
+        if raffle is None:
+            await self._respond(interaction, embed=self._build_embed("Raffle Not Found", "That raffle ID does not exist in this server.", color=discord.Color.red()), ephemeral=True)
+            return
+        if not raffle["active"]:
+            await self._respond(interaction, embed=self._build_embed("Raffle Closed", "That raffle is no longer active.", color=discord.Color.red()), ephemeral=True)
+            return
+
+        user_key = str(user.id)
+        existing_entry = raffle["entrants"].get(user_key)
+        current_count = existing_entry["entries"] if existing_entry else 0
+
+        if raffle["allow_multiple_entries"]:
+            new_count = current_count + entries
+        else:
+            if current_count >= 1:
+                await self._respond(
+                    interaction,
+                    embed=self._build_embed("Entry Exists", f"{user.mention} already has their single allowed entry in this raffle.", color=discord.Color.orange()),
+                    ephemeral=True,
+                )
+                return
+            new_count = 1
+
+        raffle["entrants"][user_key] = {
+            "username": str(user),
+            "entries": new_count,
+        }
+        await self._save_raffles()
+        dm_sent = await self._send_entry_dm(
+            user,
+            raffle_name=raffle["name"],
+            guild_name=interaction.guild.name if interaction.guild else "Unknown Server",
+            added_by=interaction.user,
+            entry_count=new_count,
+        )
+
+        embed = self._build_embed(
+            "Entry Added",
+            f"Added {entries if raffle['allow_multiple_entries'] else 1} entrie(s) for {user.mention} in **{raffle['name']}**.",
+            color=discord.Color.green(),
+        )
+        embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
+        embed.add_field(name="User Total Entries", value=str(new_count), inline=True)
+        embed.add_field(name="DM Status", value="Sent successfully" if dm_sent else "Entry added, but the DM could not be delivered.", inline=False)
+        await self._respond(interaction, embed=embed, ephemeral=True)
+
+    @raffle.command(name="remove", description="Remove one or more entries from a raffle member.")
+    @app_commands.describe(
+        raffle_id="The raffle ID to edit.",
+        user="Member whose entries should be removed.",
+        entries="How many entries to remove when multiple entries are allowed.",
+    )
+    async def raffle_remove(
+        self,
+        interaction: discord.Interaction,
+        raffle_id: str,
+        user: discord.Member,
+        entries: app_commands.Range[int, 1] = 1,
+    ) -> None:
+        if not await self._check_permissions(interaction):
+            return
+        raffle = self._get_guild_raffle(interaction, raffle_id)
+        if raffle is None:
+            await self._respond(interaction, embed=self._build_embed("Raffle Not Found", "That raffle ID does not exist in this server.", color=discord.Color.red()), ephemeral=True)
+            return
+
+        user_key = str(user.id)
+        entrant = raffle["entrants"].get(user_key)
+        if entrant is None:
+            await self._respond(interaction, embed=self._build_embed("User Not Entered", f"{user.mention} does not have any entries in this raffle.", color=discord.Color.orange()), ephemeral=True)
+            return
+
+        removed_entries = entrant["entries"] if not raffle["allow_multiple_entries"] else min(entries, entrant["entries"])
+        remaining_entries = entrant["entries"] - removed_entries
+        if remaining_entries <= 0 or not raffle["allow_multiple_entries"]:
+            raffle["entrants"].pop(user_key, None)
+            remaining_entries = 0
+        else:
+            entrant["entries"] = remaining_entries
+            entrant["username"] = str(user)
+
+        await self._save_raffles()
+        embed = self._build_embed(
+            "Entries Removed",
+            f"Removed {removed_entries} entrie(s) from {user.mention} in **{raffle['name']}**.",
+            color=discord.Color.green(),
+        )
+        embed.add_field(name="Remaining Entries", value=str(remaining_entries), inline=True)
+        embed.add_field(name="Total Raffle Entries", value=str(self._total_entries(raffle)), inline=True)
+        await self._respond(interaction, embed=embed, ephemeral=True)
+
+    @raffle.command(name="entries", description="View entries for a raffle.")
+    @app_commands.describe(raffle_id="The raffle ID to inspect.")
+    async def raffle_entries(self, interaction: discord.Interaction, raffle_id: str) -> None:
+        if not await self._check_permissions(interaction):
+            return
+        raffle = self._get_guild_raffle(interaction, raffle_id)
+        if raffle is None:
+            await self._respond(interaction, embed=self._build_embed("Raffle Not Found", "That raffle ID does not exist in this server.", color=discord.Color.red()), ephemeral=True)
+            return
+
+        embed = self._build_embed(
+            f"Entries for {raffle['name']}",
+            raffle.get("description") or "No description provided.",
+        )
+        embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
+        embed.add_field(name="Status", value="Active" if raffle["active"] else "Inactive", inline=True)
+        embed.add_field(name="Unique Users", value=str(len(raffle["entrants"])), inline=True)
+        embed.add_field(name="Total Entries", value=str(self._total_entries(raffle)), inline=True)
+        embed.add_field(name="Multiple Entries", value="Enabled" if raffle["allow_multiple_entries"] else "Disabled", inline=True)
+
+        if not raffle["entrants"]:
+            embed.add_field(name="Entrants", value="No entries have been added yet.", inline=False)
+        else:
+            entrant_lines = [
+                f"<@{user_id}> — **{entrant['entries']}** entrie(s)"
+                for user_id, entrant in sorted(raffle["entrants"].items(), key=lambda item: (-item[1]["entries"], item[1]["username"].lower()))
+            ]
+            if len(entrant_lines) <= MAX_ENTRIES_DISPLAY:
+                embed.add_field(name="Entrants", value="\n".join(entrant_lines), inline=False)
+            else:
+                preview = "\n".join(entrant_lines[:MAX_ENTRIES_DISPLAY])
+                embed.add_field(name="Entrants", value=f"{preview}\n...and {len(entrant_lines) - MAX_ENTRIES_DISPLAY} more user(s).", inline=False)
+
+        await self._respond(interaction, embed=embed, ephemeral=True)
+
+    @raffle.command(name="draw", description="Draw one or more unique winners from a raffle.")
+    @app_commands.describe(
+        raffle_id="The raffle ID to draw from.",
+        winners="How many winners to draw.",
+    )
+    async def raffle_draw(
+        self,
+        interaction: discord.Interaction,
+        raffle_id: str,
+        winners: app_commands.Range[int, 1] = 1,
+    ) -> None:
+        if not await self._check_permissions(interaction):
+            return
+        raffle = self._get_guild_raffle(interaction, raffle_id)
+        if raffle is None:
+            await self._respond(interaction, embed=self._build_embed("Raffle Not Found", "That raffle ID does not exist in this server.", color=discord.Color.red()), ephemeral=True)
+            return
+        if not raffle["entrants"]:
+            await self._respond(interaction, embed=self._build_embed("No Entrants", "This raffle has no entries to draw from.", color=discord.Color.red()), ephemeral=True)
+            return
+
+        unique_entrants = len(raffle["entrants"])
+        if winners > unique_entrants:
+            await self._respond(
+                interaction,
+                embed=self._build_embed(
+                    "Too Many Winners",
+                    f"You requested {winners} winner(s), but only {unique_entrants} unique entrant(s) are available.",
+                    color=discord.Color.red(),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        winner_ids = self._pick_unique_weighted_winners(raffle, winners)
+        raffle["winners"] = winner_ids
+        await self._save_raffles()
+
+        mentions = ", ".join(f"<@{winner_id}>" for winner_id in winner_ids)
+        embed = self._build_embed(
+            "Winner Drawn",
+            f"Winner(s) for **{raffle['name']}**: {mentions}",
+            color=discord.Color.gold(),
+        )
+        embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
+        embed.add_field(name="Winner Count", value=str(len(winner_ids)), inline=True)
+        embed.add_field(name="Weighted Pool Size", value=str(self._total_entries(raffle)), inline=True)
+        await self._respond(interaction, embed=embed, ephemeral=True)
+
+    @raffle.command(name="end", description="Close a raffle so no more entries can be added.")
+    @app_commands.describe(raffle_id="The raffle ID to close.")
+    async def raffle_end(self, interaction: discord.Interaction, raffle_id: str) -> None:
+        if not await self._check_permissions(interaction):
+            return
+        raffle = self._get_guild_raffle(interaction, raffle_id)
+        if raffle is None:
+            await self._respond(interaction, embed=self._build_embed("Raffle Not Found", "That raffle ID does not exist in this server.", color=discord.Color.red()), ephemeral=True)
+            return
+        if not raffle["active"]:
+            await self._respond(interaction, embed=self._build_embed("Already Closed", "That raffle has already been closed.", color=discord.Color.orange()), ephemeral=True)
+            return
+
+        raffle["active"] = False
+        await self._save_raffles()
+        embed = self._build_embed(
+            "Raffle Closed",
+            f"Raffle **{raffle['name']}** (`{raffle['raffle_id']}`) is now inactive.",
+            color=discord.Color.green(),
+        )
+        embed.add_field(name="Total Entries", value=str(self._total_entries(raffle)), inline=True)
+        embed.add_field(name="Unique Users", value=str(len(raffle["entrants"])), inline=True)
+        await self._respond(interaction, embed=embed, ephemeral=True)
+
+    @raffle.command(name="list", description="List active raffles in this server.")
+    async def raffle_list(self, interaction: discord.Interaction) -> None:
+        if not await self._check_permissions(interaction):
+            return
+        if interaction.guild is None:
+            await self._respond(interaction, embed=self._build_embed("Server Only", "Raffles can only be listed inside a server.", color=discord.Color.red()), ephemeral=True)
+            return
+
+        active_raffles = [raffle for raffle in self._raffles.values() if raffle["guild_id"] == interaction.guild.id and raffle["active"]]
+        embed = self._build_embed("Active Raffles", "Currently active raffles for this server.")
+        if not active_raffles:
+            embed.description = "There are no active raffles in this server right now."
+            await self._respond(interaction, embed=embed, ephemeral=True)
+            return
+
+        for raffle in sorted(active_raffles, key=lambda item: item["created_at"]):
+            embed.add_field(
+                name=f"{raffle['name']} ({raffle['raffle_id']})",
+                value=(
+                    f"Entries: **{self._total_entries(raffle)}**\n"
+                    f"Unique Users: **{len(raffle['entrants'])}**\n"
+                    f"Multiple Entries: **{'Enabled' if raffle['allow_multiple_entries'] else 'Disabled'}**"
+                ),
+                inline=False,
+            )
+        await self._respond(interaction, embed=embed, ephemeral=True)
+
+
+async def setup(bot: commands.Bot) -> None:
+    """Standard discord.py extension entry point."""
+    await bot.add_cog(RaffleCog(bot))

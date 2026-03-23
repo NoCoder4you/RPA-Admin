@@ -197,6 +197,11 @@ class RaffleCog(commands.Cog):
             return None
         return message.id
 
+    @staticmethod
+    def _is_same_channel_as_log(interaction: discord.Interaction, channel_id: int) -> bool:
+        """Return True when the interaction is already happening inside the raffle log channel."""
+        return getattr(getattr(interaction, "channel", None), "id", None) == channel_id
+
     async def _mirror_embed_to_log_channel(self, embed: discord.Embed, *, channel_id: int = RAFFLE_LOG_CHANNEL_ID) -> bool:
         """Send a copy of a raffle embed to the configured raffle channel without interrupting the command flow."""
         log_channel = await self._fetch_log_channel(channel_id)
@@ -398,11 +403,17 @@ class RaffleCog(commands.Cog):
             "log_message_id": None,
         }
         self._raffles[raffle_id] = raffle
-        raffle["log_message_id"] = await self._send_creation_log_embed(
-            raffle,
-            created_by=interaction.user,
-            source_channel_mention=interaction.channel.mention,
-        )
+        # When staff create the raffle directly inside the configured raffle log
+        # channel, the public interaction reply already serves as the visible log
+        # message. Skip the pre-send log copy so the channel only receives one embed.
+        if self._is_same_channel_as_log(interaction, raffle["log_channel_id"]):
+            raffle["log_message_id"] = None
+        else:
+            raffle["log_message_id"] = await self._send_creation_log_embed(
+                raffle,
+                created_by=interaction.user,
+                source_channel_mention=interaction.channel.mention,
+            )
         await self._save_raffles()
 
         embed = self._build_creation_log_embed(

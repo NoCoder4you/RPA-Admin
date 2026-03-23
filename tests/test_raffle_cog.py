@@ -303,6 +303,27 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(embed.title, "Raffle Created")
         self.assertEqual(embed.fields[-1].name, "Log Channel")
 
+    async def test_create_skips_prelog_send_when_already_in_log_channel(self) -> None:
+        member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        interaction = SimpleNamespace(
+            guild=SimpleNamespace(id=999, name="Guild"),
+            channel=SimpleNamespace(id=RAFFLE_LOG_CHANNEL_ID, mention="#raffle"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            response=response,
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        log_channel = SimpleNamespace(send=AsyncMock())
+        self.bot.get_channel.return_value = log_channel
+
+        await self.cog.raffle_create.callback(self.cog, interaction, "test123", True, "idek")
+
+        created_raffle = next(iter(self.cog._raffles.values()))
+        self.assertEqual(created_raffle["log_channel_id"], RAFFLE_LOG_CHANNEL_ID)
+        self.assertIsNone(created_raffle["log_message_id"])
+        self.assertFalse(response.send_message.await_args.kwargs["ephemeral"])
+        log_channel.send.assert_not_awaited()
+
 
 if __name__ == "__main__":
     unittest.main()

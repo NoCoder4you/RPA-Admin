@@ -16,6 +16,7 @@ from discord.ext import commands
 LOGGER = logging.getLogger(__name__)
 DEFAULT_STORAGE_PATH = Path(__file__).resolve().parent.parent / "JSON" / "raffles.json"
 MAX_ENTRIES_DISPLAY = 20
+RAFFLE_LOG_CHANNEL_ID = 1485484040055427132
 
 
 class RaffleCog(commands.Cog):
@@ -112,6 +113,8 @@ class RaffleCog(commands.Cog):
             "allow_multiple_entries": bool,
             "entrants": dict,
             "winners": list,
+            "log_channel_id": int,
+            "log_message_id": (int, type(None)),
         }
         for key, expected_type in required_keys.items():
             value = raffle_data.get(key)
@@ -134,6 +137,63 @@ class RaffleCog(commands.Cog):
         normalized["entrants"] = entrants
         normalized["winners"] = winners
         return normalized
+
+    async def _fetch_log_channel(self) -> discord.TextChannel | None:
+        """Resolve the configured raffle log channel used for public raffle announcements."""
+        channel = self.bot.get_channel(RAFFLE_LOG_CHANNEL_ID)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(RAFFLE_LOG_CHANNEL_ID)
+            except (discord.Forbidden, discord.HTTPException, discord.NotFound):
+                LOGGER.exception("Failed to fetch raffle log channel %s", RAFFLE_LOG_CHANNEL_ID)
+                return None
+        if isinstance(channel, discord.TextChannel):
+            return channel
+        LOGGER.error("Configured raffle log channel %s is not a text channel", RAFFLE_LOG_CHANNEL_ID)
+        return None
+
+    def _build_creation_log_embed(
+        self,
+        raffle: dict[str, Any],
+        *,
+        created_by: discord.abc.User,
+        source_channel_mention: str,
+    ) -> discord.Embed:
+        """Build the public embed mirrored into the configured raffle log channel."""
+        embed = self._build_embed(
+            "Raffle Created",
+            f"Created raffle **{raffle['name']}** with ID `{raffle['raffle_id']}`.",
+            color=discord.Color.green(),
+        )
+        embed.add_field(name="Description", value=raffle["description"] or "No description provided.", inline=False)
+        embed.add_field(name="Multiple Entries", value="Enabled" if raffle["allow_multiple_entries"] else "Disabled", inline=True)
+        embed.add_field(name="Created In", value=source_channel_mention, inline=True)
+        embed.add_field(name="Created By", value=created_by.mention, inline=True)
+        return embed
+
+    async def _send_creation_log_embed(
+        self,
+        raffle: dict[str, Any],
+        *,
+        created_by: discord.abc.User,
+        source_channel_mention: str,
+    ) -> int | None:
+        """Mirror raffle creation details into the configured raffle log channel and return the message ID."""
+        log_channel = await self._fetch_log_channel()
+        if log_channel is None:
+            return None
+
+        embed = self._build_creation_log_embed(
+            raffle,
+            created_by=created_by,
+            source_channel_mention=source_channel_mention,
+        )
+        try:
+            message = await log_channel.send(embed=embed)
+        except discord.HTTPException:
+            LOGGER.exception("Failed to send raffle creation embed for raffle %s", raffle["raffle_id"])
+            return None
+        return message.id
 
     def _has_manage_permissions(self, interaction: discord.Interaction) -> bool:
         perms = getattr(interaction.user, "guild_permissions", None)
@@ -271,18 +331,30 @@ class RaffleCog(commands.Cog):
             "allow_multiple_entries": allow_multiple_entries,
             "entrants": {},
             "winners": [],
+            "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+            "log_message_id": None,
         }
         self._raffles[raffle_id] = raffle
+        raffle["log_message_id"] = await self._send_creation_log_embed(
+            raffle,
+            created_by=interaction.user,
+            source_channel_mention=interaction.channel.mention,
+        )
         await self._save_raffles()
 
-        embed = self._build_embed(
-            "Raffle Created",
-            f"Created raffle **{clean_name}** with ID `{raffle_id}`.",
-            color=discord.Color.green(),
+        embed = self._build_creation_log_embed(
+            raffle,
+            created_by=interaction.user,
+            source_channel_mention=interaction.channel.mention,
         )
-        embed.add_field(name="Description", value=clean_description or "No description provided.", inline=False)
-        embed.add_field(name="Multiple Entries", value="Enabled" if allow_multiple_entries else "Disabled", inline=True)
-        embed.add_field(name="Created In", value=interaction.channel.mention, inline=True)
+        if raffle["log_message_id"] is None:
+            embed.add_field(
+                name="Log Channel Status",
+                value="The raffle was created, but the public log embed could not be delivered to the configured raffle log channel.",
+                inline=False,
+            )
+        else:
+            embed.add_field(name="Log Channel", value=f"<#{raffle['log_channel_id']}>", inline=False)
         await self._respond(interaction, embed=embed, ephemeral=True)
 
     @raffle.command(name="add", description="Manually add a member to a raffle.")

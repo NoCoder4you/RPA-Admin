@@ -10,9 +10,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 try:
     import discord
-    from COGS.raffle import RaffleCog
+    from COGS.raffle import RAFFLE_LOG_CHANNEL_ID, RaffleCog
 except Exception:
     discord = None
+    RAFFLE_LOG_CHANNEL_ID = 1485484040055427132
     RaffleCog = None
 
 
@@ -47,6 +48,8 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
                 "allow_multiple_entries": False,
                 "entrants": {"55": {"username": "Player#0001", "entries": 1}},
                 "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
             }
         }
         member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
@@ -79,6 +82,8 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
                 "allow_multiple_entries": True,
                 "entrants": {"55": {"username": "Player#0001", "entries": 1}},
                 "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
             }
         }
         member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
@@ -128,6 +133,8 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
                 "allow_multiple_entries": True,
                 "entrants": entrants,
                 "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
             }
         }
         member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
@@ -144,6 +151,30 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
 
         embed = response.send_message.await_args.kwargs["embed"]
         self.assertIn("and 5 more user(s)", embed.fields[-1].value)
+
+    async def test_create_sends_log_embed_and_stores_message_id(self) -> None:
+        member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        interaction = SimpleNamespace(
+            guild=SimpleNamespace(id=999, name="Guild"),
+            channel=SimpleNamespace(id=111, mention="#audit-log"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            response=response,
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        logged_message = SimpleNamespace(id=5555)
+        log_channel = SimpleNamespace(send=AsyncMock(return_value=logged_message))
+        self.bot.get_channel.return_value = log_channel
+
+        await self.cog.raffle_create.callback(self.cog, interaction, "test123", True, "idek")
+
+        created_raffle = next(iter(self.cog._raffles.values()))
+        self.assertEqual(created_raffle["log_channel_id"], RAFFLE_LOG_CHANNEL_ID)
+        self.assertEqual(created_raffle["log_message_id"], 5555)
+        log_channel.send.assert_awaited_once()
+        embed = response.send_message.await_args.kwargs["embed"]
+        self.assertEqual(embed.title, "Raffle Created")
+        self.assertEqual(embed.fields[-1].name, "Log Channel")
 
 
 if __name__ == "__main__":

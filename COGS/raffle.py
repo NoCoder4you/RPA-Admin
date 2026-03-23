@@ -222,13 +222,19 @@ class RaffleCog(commands.Cog):
         ephemeral: bool = True,
         channel_id: int = RAFFLE_LOG_CHANNEL_ID,
         public_response: bool = False,
+        mirror_to_log: bool = False,
     ) -> None:
-        """Reply to staff and optionally mirror the same raffle embed into the raffle log channel."""
+        """Reply to staff and optionally mirror raffle-specific embeds into the raffle log channel."""
+        # Keep staff-only validation or permission errors out of the dedicated raffle
+        # announcement channel. Only explicit raffle updates should be mirrored there.
+        await self._respond(interaction, embed=embed, ephemeral=False if public_response else ephemeral)
+        if not mirror_to_log:
+            return
+
         # Staff asked for raffle activity updates to appear as a normal public message
         # instead of an ephemeral response. When the current channel is already the
         # configured raffle log channel, skip the mirror entirely so the same embed
         # is not posted twice in the same place.
-        await self._respond(interaction, embed=embed, ephemeral=False if public_response else ephemeral)
         if public_response and getattr(getattr(interaction, "channel", None), "id", None) == channel_id:
             return
         await self._mirror_embed_to_log_channel(embed, channel_id=channel_id)
@@ -353,6 +359,37 @@ class RaffleCog(commands.Cog):
             LOGGER.exception("Failed to DM raffle entry confirmation to %s", member.id)
             return False
 
+    async def _send_winner_dm(
+        self,
+        member: discord.abc.User,
+        *,
+        raffle: dict[str, Any],
+        guild_name: str,
+        placement: int,
+        total_winners: int,
+    ) -> bool:
+        """DM each winner their own result embed so multiple winners are clearly separated."""
+        embed = discord.Embed(
+            title="Raffle Winner",
+            description=f"You won **{raffle['name']}** in **{guild_name}**.",
+            color=discord.Color.gold(),
+            timestamp=self._utcnow(),
+        )
+        embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
+        embed.add_field(name="Placement", value=f"{placement} of {total_winners}", inline=True)
+        embed.add_field(name="Total Entries", value=str(self._total_entries(raffle)), inline=True)
+        thumbnail_url = self._get_habbo_thumbnail_url(member.id)
+        if thumbnail_url:
+            embed.set_thumbnail(url=thumbnail_url)
+        try:
+            await member.send(embed=embed)
+            return True
+        except discord.Forbidden:
+            return False
+        except discord.HTTPException:
+            LOGGER.exception("Failed to DM raffle winner confirmation to %s", member.id)
+            return False
+
     @raffle.command(name="create", description="Create a new raffle in this server.")
     @app_commands.describe(
         name="Name of the raffle.",
@@ -429,7 +466,7 @@ class RaffleCog(commands.Cog):
             )
         else:
             embed.add_field(name="Log Channel", value=f"<#{raffle['log_channel_id']}>", inline=False)
-        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True)
+        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True, mirror_to_log=True)
 
     @raffle.command(name="add", description="Manually add a member to a raffle.")
     @app_commands.describe(
@@ -497,7 +534,7 @@ class RaffleCog(commands.Cog):
         embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
         embed.add_field(name="User Total Entries", value=str(new_count), inline=True)
         embed.add_field(name="DM Status", value="Sent successfully" if dm_sent else "Entry added, but the DM could not be delivered.", inline=False)
-        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True)
+        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True, mirror_to_log=True)
 
     @raffle.command(name="remove", description="Remove one or more entries from a raffle member.")
     @app_commands.describe(
@@ -542,7 +579,7 @@ class RaffleCog(commands.Cog):
         )
         embed.add_field(name="Remaining Entries", value=str(remaining_entries), inline=True)
         embed.add_field(name="Total Raffle Entries", value=str(self._total_entries(raffle)), inline=True)
-        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True)
+        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True, mirror_to_log=True)
 
     @raffle.command(name="entries", description="View entries for a raffle.")
     @app_commands.describe(raffle_id="The raffle ID to inspect.")
@@ -577,7 +614,7 @@ class RaffleCog(commands.Cog):
                 preview = "\n".join(entrant_lines[:MAX_ENTRIES_DISPLAY])
                 embed.add_field(name="Entrants", value=f"{preview}\n...and {len(entrant_lines) - MAX_ENTRIES_DISPLAY} more user(s).", inline=False)
 
-        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True)
+        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True, mirror_to_log=True)
 
     @raffle.command(name="draw", description="Draw one or more unique winners from a raffle.")
     @app_commands.describe(
@@ -616,9 +653,32 @@ class RaffleCog(commands.Cog):
 
         winner_ids = self._pick_unique_weighted_winners(raffle, winners)
         raffle["winners"] = winner_ids
+        # A completed draw should immediately lock the raffle so staff do not keep
+        # adding entries after winners were already announced.
+        raffle["active"] = False
         await self._save_raffles()
 
-        mentions = ", ".join(f"<@{winner_id}>" for winner_id in winner_ids)
+        winner_mentions = []
+        dm_successes = 0
+        total_entries = self._total_entries(raffle)
+        for placement, winner_id in enumerate(winner_ids, start=1):
+            winner_member = interaction.guild.get_member(winner_id) if interaction.guild else None
+            winner_mentions.append(winner_member.mention if winner_member else f"<@{winner_id}>")
+            if winner_member is None:
+                continue
+
+            # Send one DM embed per winner so each person receives a dedicated result
+            # card with their own Habbo thumbnail, even when multiple winners are drawn.
+            if await self._send_winner_dm(
+                winner_member,
+                raffle=raffle,
+                guild_name=interaction.guild.name if interaction.guild else "Unknown Server",
+                placement=placement,
+                total_winners=len(winner_ids),
+            ):
+                dm_successes += 1
+
+        mentions = ", ".join(winner_mentions)
         embed = self._build_embed(
             "Winner Drawn",
             f"Winner(s) for **{raffle['name']}**: {mentions}",
@@ -626,8 +686,10 @@ class RaffleCog(commands.Cog):
         )
         embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
         embed.add_field(name="Winner Count", value=str(len(winner_ids)), inline=True)
-        embed.add_field(name="Weighted Pool Size", value=str(self._total_entries(raffle)), inline=True)
-        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True)
+        embed.add_field(name="Weighted Pool Size", value=str(total_entries), inline=True)
+        embed.add_field(name="Raffle Status", value="Closed automatically after draw", inline=False)
+        embed.add_field(name="Winner DM Status", value=f"Sent {dm_successes}/{len(winner_ids)} winner DM(s).", inline=False)
+        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True, mirror_to_log=True)
 
     @raffle.command(name="end", description="Close a raffle so no more entries can be added.")
     @app_commands.describe(raffle_id="The raffle ID to close.")
@@ -651,7 +713,7 @@ class RaffleCog(commands.Cog):
         )
         embed.add_field(name="Total Entries", value=str(self._total_entries(raffle)), inline=True)
         embed.add_field(name="Unique Users", value=str(len(raffle["entrants"])), inline=True)
-        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True)
+        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True, mirror_to_log=True)
 
     @raffle.command(name="list", description="List active raffles in this server.")
     async def raffle_list(self, interaction: discord.Interaction) -> None:
@@ -665,7 +727,7 @@ class RaffleCog(commands.Cog):
         embed = self._build_embed("Active Raffles", "Currently active raffles for this server.")
         if not active_raffles:
             embed.description = "There are no active raffles in this server right now."
-            await self._respond_and_log(interaction, embed=embed, ephemeral=True, public_response=True)
+            await self._respond_and_log(interaction, embed=embed, ephemeral=True, public_response=True, mirror_to_log=True)
             return
 
         for raffle in sorted(active_raffles, key=lambda item: item["created_at"]):
@@ -678,7 +740,7 @@ class RaffleCog(commands.Cog):
                 ),
                 inline=False,
             )
-        await self._respond_and_log(interaction, embed=embed, ephemeral=True, public_response=True)
+        await self._respond_and_log(interaction, embed=embed, ephemeral=True, public_response=True, mirror_to_log=True)
 
 
 async def setup(bot: commands.Bot) -> None:

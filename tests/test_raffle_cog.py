@@ -138,6 +138,25 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
 
         log_channel.send.assert_awaited_once()
 
+    async def test_send_entry_dm_uses_subheadings_and_habbo_thumbnail(self) -> None:
+        member = SimpleNamespace(id=55, send=AsyncMock())
+        self.cog.verified_store = SimpleNamespace(get_habbo_username=lambda discord_id: "Siren" if discord_id == "55" else None)
+
+        with patch("COGS.raffle.fetch_habbo_profile", return_value={"figureString": "hr-1-1"}) as mock_fetch:
+            result = await self.cog._send_entry_dm(
+                member,
+                raffle_name="Spring Event",
+                guild_name="Guild",
+                added_by=SimpleNamespace(mention="<@1>"),
+                entry_count=4,
+            )
+
+        self.assertTrue(result)
+        mock_fetch.assert_called_once_with("Siren")
+        embed = member.send.await_args.kwargs["embed"]
+        self.assertEqual([field.name for field in embed.fields], ["Raffle Name", "Total Entries", "Added By"])
+        self.assertIn("figure=hr-1-1", embed.thumbnail.url)
+
     def test_pick_unique_weighted_winners_returns_unique_users(self) -> None:
         raffle = {
             "entrants": {

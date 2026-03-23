@@ -12,6 +12,7 @@ from uuid import uuid4
 import discord
 from discord import app_commands
 from discord.ext import commands
+from habbo_verification_core import HabboApiError, VerifiedUserStore, fetch_habbo_profile
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_STORAGE_PATH = Path(__file__).resolve().parent.parent / "JSON" / "raffles.json"
@@ -29,6 +30,7 @@ class RaffleCog(commands.Cog):
         self.storage_path = storage_path or DEFAULT_STORAGE_PATH
         self._storage_lock = asyncio.Lock()
         self._raffles: dict[str, dict[str, Any]] = {}
+        self.verified_store = VerifiedUserStore()
 
     async def cog_load(self) -> None:
         """Load persisted raffle data when the cog is added to the bot."""
@@ -245,6 +247,34 @@ class RaffleCog(commands.Cog):
     def _build_embed(self, title: str, description: str, *, color: discord.Color | None = None) -> discord.Embed:
         return discord.Embed(title=title, description=description, color=color or discord.Color.blurple(), timestamp=self._utcnow())
 
+    @staticmethod
+    def _build_avatar_thumbnail_url(profile: dict[str, Any]) -> str | None:
+        """Build a Habbo avatar thumbnail URL when a figure string is available."""
+        figure_string = str(profile.get("figureString", "")).strip()
+        if not figure_string:
+            return None
+
+        from urllib.parse import quote
+
+        encoded_figure = quote(figure_string, safe="")
+        return (
+            "https://www.habbo.com/habbo-imaging/avatarimage"
+            f"?figure={encoded_figure}&size=l&direction=2&head_direction=3&gesture=sml"
+        )
+
+    def _get_habbo_thumbnail_url(self, discord_user_id: int) -> str | None:
+        """Resolve a verified member's Habbo avatar thumbnail for embed branding when possible."""
+        habbo_username = self.verified_store.get_habbo_username(str(discord_user_id))
+        if not habbo_username:
+            return None
+
+        try:
+            profile = fetch_habbo_profile(habbo_username)
+        except HabboApiError:
+            LOGGER.exception("Failed to fetch Habbo profile for raffle embed thumbnail: %s", habbo_username)
+            return None
+        return self._build_avatar_thumbnail_url(profile)
+
     def _get_guild_raffle(self, interaction: discord.Interaction, raffle_id: str) -> dict[str, Any] | None:
         raffle = self._raffles.get(raffle_id.upper())
         if raffle is None or interaction.guild is None:
@@ -292,14 +322,16 @@ class RaffleCog(commands.Cog):
         """Notify a player that staff entered them into a raffle, even if DMs are disabled."""
         embed = discord.Embed(
             title="Raffle Entry Confirmed",
-            description=(
-                f"You have been entered into the raffle **{raffle_name}** in **{guild_name}**.\n"
-                f"Added by: {added_by.mention}\n"
-                f"You now have **{entry_count}** entrie(s)."
-            ),
+            description=f"You have been entered into the raffle in **{guild_name}**.",
             color=discord.Color.green(),
             timestamp=self._utcnow(),
         )
+        embed.add_field(name="Raffle Name", value=raffle_name, inline=False)
+        embed.add_field(name="Total Entries", value=str(entry_count), inline=False)
+        embed.add_field(name="Added By", value=added_by.mention, inline=False)
+        thumbnail_url = self._get_habbo_thumbnail_url(member.id)
+        if thumbnail_url:
+            embed.set_thumbnail(url=thumbnail_url)
         try:
             await member.send(embed=embed)
             return True

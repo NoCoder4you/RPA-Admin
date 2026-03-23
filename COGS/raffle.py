@@ -458,13 +458,10 @@ class RaffleCog(commands.Cog):
             created_by=interaction.user,
             source_channel_mention=interaction.channel.mention,
         )
-        if raffle["log_message_id"] is None:
-            embed.add_field(
-                name="Log Channel Status",
-                value="The raffle was created, but the public log embed could not be delivered to the configured raffle log channel.",
-                inline=False,
-            )
-        else:
+        # Only show the configured log channel when the mirror embed was delivered.
+        # This keeps the confirmation embed focused on raffle details without exposing
+        # an extra status block when the log mirror is unavailable.
+        if raffle["log_message_id"] is not None:
             embed.add_field(name="Log Channel", value=f"<#{raffle['log_channel_id']}>", inline=False)
         await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True, mirror_to_log=True)
 

@@ -139,6 +139,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         mock_fetch.assert_called_once_with("Siren")
         embed = response.send_message.await_args.kwargs["embed"]
         self.assertIn("figure=hr-1-1", embed.thumbnail.url)
+        self.assertIn("action=std", embed.thumbnail.url)
         self.assertFalse(response.send_message.await_args.kwargs["ephemeral"])
 
     async def test_missing_permissions_do_not_mirror_to_raffle_channel(self) -> None:
@@ -307,7 +308,9 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(winner_one_embed.fields[1].value, "1 of 2")
         self.assertEqual(winner_two_embed.fields[1].value, "2 of 2")
         self.assertIn("figure=hr-1-1", winner_one_embed.thumbnail.url)
+        self.assertIn("action=std", winner_one_embed.thumbnail.url)
         self.assertIn("figure=hd-2-2", winner_two_embed.thumbnail.url)
+        self.assertIn("action=std", winner_two_embed.thumbnail.url)
         response_embed = response.send_message.await_args.kwargs["embed"]
         response_fields = {field.name: field.value for field in response_embed.fields}
         self.assertEqual(response_fields["Raffle Status"], "Closed automatically after draw")
@@ -348,6 +351,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         embed = member.send.await_args.kwargs["embed"]
         self.assertEqual([field.name for field in embed.fields], ["Raffle Name", "Total Entries", "Added By"])
         self.assertIn("figure=hr-1-1", embed.thumbnail.url)
+        self.assertIn("action=std", embed.thumbnail.url)
 
     def test_pick_unique_weighted_winners_returns_unique_users(self) -> None:
         raffle = {

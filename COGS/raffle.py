@@ -275,9 +275,11 @@ class RaffleCog(commands.Cog):
         from urllib.parse import quote
 
         encoded_figure = quote(figure_string, safe="")
+        # Request the standard full-body render so the raffle thumbnails show the
+        # member's Habbo character instead of falling back to a tighter head crop.
         return (
             "https://www.habbo.com/habbo-imaging/avatarimage"
-            f"?figure={encoded_figure}&size=l&direction=2&head_direction=3&gesture=sml"
+            f"?figure={encoded_figure}&size=l&direction=2&head_direction=3&gesture=sml&action=std"
         )
 
     def _get_habbo_thumbnail_url(self, discord_user_id: int) -> str | None:

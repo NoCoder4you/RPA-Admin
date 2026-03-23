@@ -359,7 +359,7 @@ class RaffleCog(commands.Cog):
             LOGGER.exception("Failed to DM raffle entry confirmation to %s", member.id)
             return False
 
-    async def _send_winner_dm(
+    def _build_winner_embed(
         self,
         member: discord.abc.User,
         *,
@@ -367,8 +367,8 @@ class RaffleCog(commands.Cog):
         guild_name: str,
         placement: int,
         total_winners: int,
-    ) -> bool:
-        """DM each winner their own result embed so multiple winners are clearly separated."""
+    ) -> discord.Embed:
+        """Build the winner announcement embed so the same card can be reused in DMs and the raffle channel."""
         embed = discord.Embed(
             title="Raffle Winner",
             description=f"You won **{raffle['name']}** in **{guild_name}**.",
@@ -381,6 +381,25 @@ class RaffleCog(commands.Cog):
         thumbnail_url = self._get_habbo_thumbnail_url(member.id)
         if thumbnail_url:
             embed.set_thumbnail(url=thumbnail_url)
+        return embed
+
+    async def _send_winner_dm(
+        self,
+        member: discord.abc.User,
+        *,
+        raffle: dict[str, Any],
+        guild_name: str,
+        placement: int,
+        total_winners: int,
+    ) -> bool:
+        """DM each winner their own result embed so multiple winners are clearly separated."""
+        embed = self._build_winner_embed(
+            member,
+            raffle=raffle,
+            guild_name=guild_name,
+            placement=placement,
+            total_winners=total_winners,
+        )
         try:
             await member.send(embed=embed)
             return True
@@ -664,16 +683,29 @@ class RaffleCog(commands.Cog):
             if winner_member is None:
                 continue
 
-            # Send one DM embed per winner so each person receives a dedicated result
-            # card with their own Habbo thumbnail, even when multiple winners are drawn.
-            if await self._send_winner_dm(
+            # Build the winner card once so the same embed can be reused for the
+            # direct message and the public raffle-channel announcement.
+            winner_embed = self._build_winner_embed(
                 winner_member,
                 raffle=raffle,
                 guild_name=interaction.guild.name if interaction.guild else "Unknown Server",
                 placement=placement,
                 total_winners=len(winner_ids),
-            ):
+            )
+
+            # Send one DM embed per winner so each person receives a dedicated result
+            # card with their own Habbo thumbnail, even when multiple winners are drawn.
+            try:
+                await winner_member.send(embed=winner_embed)
                 dm_successes += 1
+            except discord.Forbidden:
+                pass
+            except discord.HTTPException:
+                LOGGER.exception("Failed to DM raffle winner confirmation to %s", winner_member.id)
+
+            # Staff asked for the DM winner card to also appear in the raffle log
+            # channel so the public record matches what winners receive privately.
+            await self._mirror_embed_to_log_channel(winner_embed, channel_id=raffle["log_channel_id"])
 
         mentions = ", ".join(winner_mentions)
         embed = self._build_embed(

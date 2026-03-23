@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -150,6 +151,56 @@ class HabboVerificationCommandTests(unittest.IsolatedAsyncioTestCase):
         interaction.followup.send.assert_awaited_once()
         sent_embed = interaction.followup.send.await_args.kwargs["embed"]
         self.assertEqual(sent_embed.title, "Already Verified")
+
+    async def test_verify_success_syncs_nickname_and_removes_awaiting_role(self) -> None:
+        """First-time verification should sync the nickname and remove the staging role via verified-role sync."""
+
+        cog = HabboVerificationCog(bot=MagicMock())
+        cog.verified_store = SimpleNamespace(
+            get_habbo_username=lambda _discord_id: None,
+            save=MagicMock(),
+        )
+        cog._assign_roles_from_habbo_groups = AsyncMock(return_value=("No role changes were required.", [], []))
+        cog._ensure_verified_role = AsyncMock(return_value=("Verified role added. | Awaiting Verification role removed.", ["Verified", "Awaiting Verification"]))
+        cog._sync_member_nickname = AsyncMock(return_value="Nickname updated to verified Habbo username.")
+        cog._enforce_restrictions_after_verification = AsyncMock(return_value="No restriction matched.")
+        cog._send_audit_log = AsyncMock()
+        cog.manager = SimpleNamespace(
+            get_or_create=lambda _user_id, _username: SimpleNamespace(code="ABCD1234", expires_at=datetime.now(timezone.utc)),
+            clear=MagicMock(),
+        )
+
+        interaction = SimpleNamespace(
+            user=SimpleNamespace(id=123, mention="<@123>"),
+            response=SimpleNamespace(defer=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+
+        from COGS import ServerVerifyRPA as verify_module
+        original_fetch = verify_module.fetch_habbo_profile
+        original_motto_contains = verify_module.motto_contains_code
+        verify_module.fetch_habbo_profile = lambda _username: {"name": "Siren", "figureString": "hr-1-1", "motto": "ABCD1234"}
+        verify_module.motto_contains_code = lambda _profile, _code: True
+        try:
+            await cog.verify.callback(cog, interaction, "Siren")
+        finally:
+            verify_module.fetch_habbo_profile = original_fetch
+            verify_module.motto_contains_code = original_motto_contains
+
+        cog.verified_store.save.assert_called_once_with(discord_id="123", habbo_username="Siren")
+        cog._ensure_verified_role.assert_awaited_once_with(interaction)
+        cog._sync_member_nickname.assert_awaited_once_with(interaction, "Siren")
+        cog._enforce_restrictions_after_verification.assert_awaited_once_with(
+            interaction=interaction,
+            habbo_username="Siren",
+        )
+        cog._send_audit_log.assert_awaited_once()
+        sent_embed = interaction.followup.send.await_args.kwargs["embed"]
+        self.assertEqual(sent_embed.title, "Verification Successful")
+        fields = {field.name: field.value for field in sent_embed.fields}
+        self.assertIn("Verification Updates", fields)
+        self.assertIn("Awaiting Verification role removed.", fields["Verification Updates"])
+        self.assertIn("Nickname updated to verified Habbo username.", fields["Verification Updates"])
 
 
 

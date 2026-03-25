@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 try:
-    from COGS.SpecialUnitCog import SpecialUnitCog
+    from COGS.ServerSpecialUnit import SpecialUnitCog
 except ModuleNotFoundError:  # pragma: no cover - environment-dependent test skip
     SpecialUnitCog = None
 

@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 try:
     import discord
     from discord.ext import commands
-    from COGS.UsernameChangeCog import UsernameChangeCog, UsernameChangeRequestView
+    from COGS.UserNameChange import UsernameChangeCog, UsernameChangeRequestView
 except ModuleNotFoundError as exc:  # pragma: no cover - environment-dependent test skip
     raise unittest.SkipTest(f"discord.py is not installed in this environment: {exc}")
 
@@ -33,7 +33,7 @@ class UsernameChangeCogTests(unittest.IsolatedAsyncioTestCase):
 
         interaction = SimpleNamespace(user=SimpleNamespace(id=123, mention="<@123>"), guild=object())
 
-        from COGS import UsernameChangeCog as username_change_module
+        from COGS import UserNameChange as username_change_module
         original_fetch = username_change_module.fetch_habbo_profile
         username_change_module.fetch_habbo_profile = lambda _username: {"name": "NewHabbo"}
         try:
@@ -121,7 +121,7 @@ class UsernameChangeCogTests(unittest.IsolatedAsyncioTestCase):
         embed.add_field(name="Previous Username", value="OldHabbo", inline=True)
         embed.add_field(name="Requested Username", value="NewHabbo", inline=True)
 
-        from COGS import UsernameChangeCog as username_change_module
+        from COGS import UserNameChange as username_change_module
         original_fetch = username_change_module.fetch_habbo_profile
         username_change_module.fetch_habbo_profile = lambda _username: {"figureString": "hr-1-1"}
         try:

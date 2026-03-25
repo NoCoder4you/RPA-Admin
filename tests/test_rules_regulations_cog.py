@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 try:
-    from COGS.RulesRegulationsCog import RulesRegulationsCog, WHITE_CHECK_MARK_EMOJI
+    from COGS.ServerRules import RulesRegulationsCog, WHITE_CHECK_MARK_EMOJI
 except Exception:  # pragma: no cover - environment without discord.py
     RulesRegulationsCog = None
     WHITE_CHECK_MARK_EMOJI = "✅"

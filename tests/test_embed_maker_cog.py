@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 try:
-    from COGS.EmbedMakerCog import EmbedMakerCog, EmbedMakerModal
+    from COGS.ServerEmbedMaker import EmbedMakerCog, EmbedMakerModal
 except Exception:  # pragma: no cover - environment without discord.py
     EmbedMakerCog = None
     EmbedMakerModal = None

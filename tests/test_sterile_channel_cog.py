@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 try:
-    from COGS.SterileChannelCog import SterileChannelCog, SterileChannelStore
+    from COGS.ServerSterileChannel import SterileChannelCog, SterileChannelStore
 except ModuleNotFoundError:  # pragma: no cover - environment-dependent test skip
     SterileChannelCog = None
     SterileChannelStore = None

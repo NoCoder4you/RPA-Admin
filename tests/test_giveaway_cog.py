@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 try:
     import discord
-    from COGS.GiveawayCog import GIVEAWAY_CHANNEL_ID, GiveawayCog, GiveawayRecord
+    from COGS.MiscGiveaway import GIVEAWAY_CHANNEL_ID, GiveawayCog, GiveawayRecord
 except Exception:
     discord = None
     GIVEAWAY_CHANNEL_ID = 1479462940825489408

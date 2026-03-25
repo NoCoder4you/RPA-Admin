@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 try:
     import discord
-    from COGS.KickCog import KickCog
+    from COGS.MiscKick import KickCog
 except ModuleNotFoundError:
     discord = None
     KickCog = None

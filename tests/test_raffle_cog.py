@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 try:
     import discord
-    from COGS.raffle import RAFFLE_LOG_CHANNEL_ID, RaffleCog
+    from COGS.MiscRaffle import RAFFLE_LOG_CHANNEL_ID, RaffleCog
 except Exception:
     discord = None
     RAFFLE_LOG_CHANNEL_ID = 1485484040055427132

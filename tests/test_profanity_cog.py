@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 try:
-    from COGS.ProfanityCog import ProfanityCog
+    from COGS.MiscProfanity import ProfanityCog
 except ModuleNotFoundError:
     ProfanityCog = None
 

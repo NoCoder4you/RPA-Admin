@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 try:
-    from COGS.PurgeCog import PurgeCog
+    from COGS.MiscPurge import PurgeCog
 except ModuleNotFoundError:
     PurgeCog = None
 

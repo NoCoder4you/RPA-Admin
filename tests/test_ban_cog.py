@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 try:
     import discord
-    from COGS.BanCog import BanCog
+    from COGS.MiscBan import BanCog
 except ModuleNotFoundError:
     discord = None
     BanCog = None

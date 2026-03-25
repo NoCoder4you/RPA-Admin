@@ -13,7 +13,7 @@ from habbo_verification_core import VerifyRestrictionStore
 
 try:
     from COGS.ServerVerifyRPA import HabboVerificationCog
-    from COGS.VerifyRestrictionsCog import VerifyRestrictionsCog
+    from COGS.UserVerifyRestrict import VerifyRestrictionsCog
 except ModuleNotFoundError:
     HabboVerificationCog = None
     VerifyRestrictionsCog = None

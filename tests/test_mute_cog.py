@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 try:
-    from COGS.MuteCog import MuteCog
+    from COGS.MiscMute import MuteCog
 except ModuleNotFoundError:
     MuteCog = None
 

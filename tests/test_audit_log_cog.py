@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 try:
     import discord
-    from COGS.AuditLogCog import AuditLogCog
+    from COGS.ServerAuditLog import AuditLogCog
 except ModuleNotFoundError:
     discord = None
     AuditLogCog = None

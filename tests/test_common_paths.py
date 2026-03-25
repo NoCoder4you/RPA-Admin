@@ -20,4 +20,4 @@ def test_cogs_helpers_point_to_cogs_directory() -> None:
     """COGS helper utilities should consistently build paths inside COGS/."""
 
     assert cogs_dir() == PROJECT_ROOT / "COGS"
-    assert cogs_file("BanCog.py") == PROJECT_ROOT / "COGS" / "BanCog.py"
+    assert cogs_file("MiscBan.py") == PROJECT_ROOT / "COGS" / "MiscBan.py"

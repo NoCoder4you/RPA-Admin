@@ -84,7 +84,7 @@ class WebhookApplicationChannelCog(commands.Cog):
 
     UNIT_LABELS: Final[dict[str, str]] = {
         "IA": "Internal Affairs",
-        "FU": "Foundation Unit",
+        "FU": "Finance Unit",
         "MT": "Media Team",
         "ET": "Entertainment Team",
         "EA": "External Affairs",

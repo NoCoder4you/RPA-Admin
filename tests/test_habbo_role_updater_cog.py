@@ -508,7 +508,9 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
         ):
             summary = await cog._sync_all_verified_users(trigger="auto_loop")
 
-        self.assertEqual(summary, {"total_entries": 2, "updated": 0, "skipped": 2, "errors": 1})
+        # Only the unprocessed trailing entry should be marked skipped.
+        # The 429 entry itself is represented by the `errors` counter.
+        self.assertEqual(summary, {"total_entries": 2, "updated": 0, "skipped": 1, "errors": 1})
         cog._send_error_embed.assert_awaited_once()
         cog._assign_roles_to_member_from_profile.assert_not_awaited()
 

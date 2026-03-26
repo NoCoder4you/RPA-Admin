@@ -200,7 +200,9 @@ class HabboRoleUpdaterCog(commands.Cog):
                     # Enter cooldown and stop this cycle immediately so one rate-limit event
                     # does not generate dozens of identical errors for the remaining users.
                     cooldown_until = self._begin_habbo_rate_limit_cooldown()
-                    remaining_entries = len(entries) - index
+                    # Only count entries that were not processed yet.
+                    # The current entry is already accounted for in `errors`.
+                    remaining_entries = len(entries) - index - 1
                     summary["skipped"] += max(remaining_entries, 0)
                     await self._send_error_embed(
                         guild=guild,

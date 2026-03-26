@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +9,8 @@ import discord
 from discord.ext import commands
 
 from common_paths import json_file
+
+logger = logging.getLogger(__name__)
 
 
 class AutoInviteConfigStore:
@@ -22,6 +25,7 @@ class AutoInviteConfigStore:
         """Return raw JSON config rows, or an empty list on any read/parse failure."""
 
         if not self.config_path.exists():
+            logger.warning("AutoInvite config file is missing: %s", self.config_path)
             return []
 
         try:
@@ -34,8 +38,10 @@ class AutoInviteConfigStore:
                 # The normal repository format is still a list of link definitions.
                 return [payload]
         except (json.JSONDecodeError, OSError):
+            logger.exception("Failed to read AutoInvite config file: %s", self.config_path)
             return []
 
+        logger.warning("AutoInvite config has unsupported JSON root type in %s", self.config_path)
         return []
 
     def get_role_mappings(self, *, main_server_id: int, role_id: int) -> list[dict[str, Any]]:
@@ -64,6 +70,12 @@ class AutoInviteConfigStore:
                     "target_channel_id": entry.get("target_channel_id"),
                 }
             )
+        logger.info(
+            "AutoInvite mapping lookup for main_server_id=%s role_id=%s returned %s mapping(s)",
+            main_server_id,
+            role_id,
+            len(matches),
+        )
         return matches
 
     def get_main_server_id(self) -> int | None:
@@ -104,10 +116,22 @@ class AutoInviteCog(commands.Cog):
 
         old_role_ids = {role.id for role in before.roles}
         added_roles = [role for role in after.roles if role.id not in old_role_ids]
+        logger.info(
+            "AutoInvite member update guild_id=%s user_id=%s added_roles=%s",
+            after.guild.id,
+            after.id,
+            [role.id for role in added_roles],
+        )
 
         # Process each newly granted role and send invites for all matching server mappings.
         for role in added_roles:
             for mapping in self.config_store.get_role_mappings(main_server_id=after.guild.id, role_id=role.id):
+                logger.info(
+                    "AutoInvite processing role_id=%s for user_id=%s target_server_id=%s",
+                    role.id,
+                    after.id,
+                    mapping.get("target_server_id"),
+                )
                 await self._send_single_use_invite(member=after, mapping=mapping, triggering_role=role)
 
     async def _send_single_use_invite(
@@ -121,14 +145,17 @@ class AutoInviteCog(commands.Cog):
 
         target_server_id = AutoInviteConfigStore._safe_int(mapping.get("target_server_id"))
         if target_server_id is None:
+            logger.warning("AutoInvite skipped because mapping has invalid target_server_id: %s", mapping)
             return
 
         target_guild = self.bot.get_guild(target_server_id)
         if target_guild is None:
+            logger.warning("AutoInvite skipped because bot is not in target guild id=%s", target_server_id)
             return
 
         invite_channel = self._resolve_invite_channel(target_guild, mapping.get("target_channel_id"))
         if invite_channel is None:
+            logger.warning("AutoInvite skipped because no invite-capable channel was found in guild id=%s", target_server_id)
             return
 
         target_server_name = mapping.get("target_server_name")
@@ -152,8 +179,20 @@ class AutoInviteCog(commands.Cog):
                 triggering_role_name=getattr(triggering_role, "name", None),
             )
             await member.send(embed=embed)
+            logger.info(
+                "AutoInvite DM sent user_id=%s target_server_id=%s channel_id=%s invite_url=%s",
+                member.id,
+                target_server_id,
+                getattr(invite_channel, "id", None),
+                invite.url,
+            )
         except (discord.Forbidden, discord.HTTPException):
             # Fail silently so role updates still work even when invite/DM permissions fail.
+            logger.exception(
+                "AutoInvite failed while creating/sending invite user_id=%s target_server_id=%s",
+                member.id,
+                target_server_id,
+            )
             return
 
     def _resolve_invite_channel(
@@ -166,15 +205,52 @@ class AutoInviteCog(commands.Cog):
         preferred_channel_id_int = AutoInviteConfigStore._safe_int(preferred_channel_id)
         if preferred_channel_id_int is not None:
             preferred_channel = target_guild.get_channel(preferred_channel_id_int)
-            if isinstance(preferred_channel, discord.abc.GuildChannel) and hasattr(preferred_channel, "create_invite"):
+            if (
+                isinstance(preferred_channel, discord.abc.GuildChannel)
+                and hasattr(preferred_channel, "create_invite")
+                and self._can_create_invite_in_channel(target_guild, preferred_channel)
+            ):
+                logger.info(
+                    "AutoInvite using preferred channel_id=%s guild_id=%s",
+                    preferred_channel_id_int,
+                    target_guild.id,
+                )
                 return preferred_channel
 
-        # Fallback: first text channel where invite creation is possible.
+        # Fallback: first text channel where the bot can actually create invite links.
         for channel in getattr(target_guild, "text_channels", []):
-            if hasattr(channel, "create_invite"):
+            if hasattr(channel, "create_invite") and self._can_create_invite_in_channel(target_guild, channel):
+                logger.info(
+                    "AutoInvite using fallback channel_id=%s guild_id=%s",
+                    getattr(channel, "id", None),
+                    target_guild.id,
+                )
                 return channel
 
+        logger.warning("AutoInvite found no invite-capable channel guild_id=%s", target_guild.id)
         return None
+
+    @staticmethod
+    def _can_create_invite_in_channel(target_guild: discord.Guild, channel: discord.abc.GuildChannel) -> bool:
+        """Return True when bot permissions allow invite creation in the channel.
+
+        Some servers expose channels where invites are disabled for the bot. If we pick
+        one of those channels, invite creation raises ``discord.Forbidden`` and no DM
+        is sent. Proactively filtering channels here avoids that false-negative path.
+        """
+
+        bot_member = getattr(target_guild, "me", None)
+        if bot_member is None or not hasattr(channel, "permissions_for"):
+            return True
+
+        try:
+            permissions = channel.permissions_for(bot_member)
+        except Exception:
+            # If permission introspection fails unexpectedly, keep behavior permissive
+            # and let Discord enforce permissions at invite creation time.
+            return True
+
+        return bool(getattr(permissions, "create_instant_invite", False))
 
     def _build_invite_embed(
         self,

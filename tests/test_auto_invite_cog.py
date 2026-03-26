@@ -30,8 +30,9 @@ class AutoInviteCogTests(unittest.IsolatedAsyncioTestCase):
         )
         cog._send_single_use_invite = AsyncMock()
 
-        before = SimpleNamespace(guild=SimpleNamespace(id=100), roles=[SimpleNamespace(id=1, name="Member")])
+        before = SimpleNamespace(id=9999, guild=SimpleNamespace(id=100), roles=[SimpleNamespace(id=1, name="Member")])
         after = SimpleNamespace(
+            id=9999,
             guild=SimpleNamespace(id=100),
             roles=[SimpleNamespace(id=1, name="Member"), SimpleNamespace(id=55, name="Operators")],
         )
@@ -51,8 +52,8 @@ class AutoInviteCogTests(unittest.IsolatedAsyncioTestCase):
         )
         cog._send_single_use_invite = AsyncMock()
 
-        before = SimpleNamespace(guild=SimpleNamespace(id=999), roles=[])
-        after = SimpleNamespace(guild=SimpleNamespace(id=999), roles=[SimpleNamespace(id=55)])
+        before = SimpleNamespace(id=9999, guild=SimpleNamespace(id=999), roles=[])
+        after = SimpleNamespace(id=9999, guild=SimpleNamespace(id=999), roles=[SimpleNamespace(id=55)])
 
         await cog.on_member_update(before, after)
 
@@ -63,10 +64,10 @@ class AutoInviteCogTests(unittest.IsolatedAsyncioTestCase):
         cog = AutoInviteCog(bot)
 
         invite_channel = SimpleNamespace(create_invite=AsyncMock(return_value=SimpleNamespace(url="https://discord.gg/abc")))
-        target_guild = SimpleNamespace(name="Target", get_channel=lambda _: None, text_channels=[invite_channel])
+        target_guild = SimpleNamespace(id=200, name="Target", get_channel=lambda _: None, text_channels=[invite_channel])
         bot.get_guild.return_value = target_guild
 
-        member = SimpleNamespace(guild=SimpleNamespace(name="Main"), send=AsyncMock())
+        member = SimpleNamespace(id=9999, guild=SimpleNamespace(name="Main"), send=AsyncMock())
 
         await cog._send_single_use_invite(
             member=member,
@@ -87,6 +88,39 @@ class AutoInviteCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Operations", sent_embed.description)
         self.assertIn("single-use", sent_embed.description)
         self.assertIn("stays valid until you redeem it", sent_embed.description)
+
+    async def test_send_single_use_invite_skips_blocked_channel_and_uses_allowed_channel(self) -> None:
+        bot = MagicMock()
+        cog = AutoInviteCog(bot)
+
+        blocked_channel = MagicMock()
+        blocked_channel.create_invite = AsyncMock()
+        blocked_channel.permissions_for.return_value = SimpleNamespace(create_instant_invite=False)
+
+        allowed_channel = MagicMock()
+        allowed_channel.create_invite = AsyncMock(return_value=SimpleNamespace(url="https://discord.gg/allowed"))
+        allowed_channel.permissions_for.return_value = SimpleNamespace(create_instant_invite=True)
+
+        target_guild = SimpleNamespace(
+            id=200,
+            name="Target",
+            me=SimpleNamespace(id=123),
+            get_channel=lambda channel_id: blocked_channel if channel_id == 999 else None,
+            text_channels=[blocked_channel, allowed_channel],
+        )
+        bot.get_guild.return_value = target_guild
+
+        member = SimpleNamespace(id=9999, guild=SimpleNamespace(name="Main"), send=AsyncMock())
+
+        await cog._send_single_use_invite(
+            member=member,
+            mapping={"target_server_id": 200, "target_channel_id": 999},
+            triggering_role=SimpleNamespace(name="Operations"),
+        )
+
+        blocked_channel.create_invite.assert_not_awaited()
+        allowed_channel.create_invite.assert_awaited_once()
+        member.send.assert_awaited_once()
 
 
 @unittest.skipIf(AutoInviteConfigStore is None, "discord.py is not installed in the test environment")

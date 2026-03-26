@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import discord
@@ -23,6 +24,7 @@ class HabboRoleUpdaterCog(commands.Cog):
 
     VERIFICATION_LOG_CHANNEL_ID = 1481456997726425168
     ERROR_LOG_CHANNEL_ID = 1484064305732259940
+    MANUAL_SYNC_REQUEST_DELAY_SECONDS = 1.0
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -87,6 +89,7 @@ class HabboRoleUpdaterCog(commands.Cog):
             trigger="manual_command",
             triggered_by=str(interaction.user),
             guild_override=interaction.guild,
+            request_delay_seconds=self.MANUAL_SYNC_REQUEST_DELAY_SECONDS,
         )
 
         embed = discord.Embed(
@@ -159,6 +162,7 @@ class HabboRoleUpdaterCog(commands.Cog):
         trigger: str,
         triggered_by: str | None = None,
         guild_override: discord.Guild | None = None,
+        request_delay_seconds: float = 0.0,
     ) -> dict[str, int]:
         """Sync roles for every verified entry from JSON/VerifiedUsers.json."""
 
@@ -174,6 +178,8 @@ class HabboRoleUpdaterCog(commands.Cog):
             # Skip the whole cycle while the cooldown is active to prevent repeated 429s.
             summary["skipped"] = len(entries)
             return summary
+
+        fetch_attempt_count = 0
 
         for index, entry in enumerate(entries):
             discord_id = str(entry.get("discord_id", "")).strip()
@@ -193,9 +199,16 @@ class HabboRoleUpdaterCog(commands.Cog):
                 summary["skipped"] += 1
                 continue
 
+            # Space out Habbo API requests during manual `/uva` runs so large batches are
+            # less likely to trigger HTTP 429 responses.
+            if fetch_attempt_count > 0 and request_delay_seconds > 0:
+                await asyncio.sleep(request_delay_seconds)
+
             try:
                 profile = fetch_habbo_profile(habbo_username)
+                fetch_attempt_count += 1
             except HabboApiError as exc:
+                fetch_attempt_count += 1
                 if self._is_rate_limit_error(exc):
                     # Enter cooldown and stop this cycle immediately so one rate-limit event
                     # does not generate dozens of identical errors for the remaining users.

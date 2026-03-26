@@ -403,6 +403,7 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
         """Manual /uva runs should sync the server where the command was executed."""
 
         cog = HabboRoleUpdaterCog.__new__(HabboRoleUpdaterCog)
+        cog.MANUAL_SYNC_REQUEST_DELAY_SECONDS = 1.0
         cog._sync_all_verified_users = AsyncMock(
             return_value={"total_entries": 1, "updated": 0, "skipped": 1, "errors": 0}
         )
@@ -421,6 +422,7 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
             trigger="manual_command",
             triggered_by="Siren",
             guild_override=interaction_guild,
+            request_delay_seconds=1.0,
         )
         interaction.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
         interaction.followup.send.assert_awaited_once()
@@ -513,6 +515,46 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary, {"total_entries": 2, "updated": 0, "skipped": 1, "errors": 1})
         cog._send_error_embed.assert_awaited_once()
         cog._assign_roles_to_member_from_profile.assert_not_awaited()
+
+    async def test_sync_all_verified_users_applies_manual_delay_between_profile_fetches(self) -> None:
+        """Manual sync pacing should sleep between successive Habbo profile requests."""
+
+        cog = HabboRoleUpdaterCog.__new__(HabboRoleUpdaterCog)
+        member_one = SimpleNamespace(id=111, mention="<@111>")
+        member_two = SimpleNamespace(id=222, mention="<@222>")
+        guild = SimpleNamespace(
+            get_member=lambda member_id: member_one if member_id == 111 else member_two if member_id == 222 else None,
+            fetch_member=AsyncMock(),
+        )
+        cog.verified_store = SimpleNamespace(
+            get_all_entries=lambda: [
+                {"discord_id": "111", "habbo_username": "One"},
+                {"discord_id": "222", "habbo_username": "Two"},
+            ]
+        )
+        cog._get_primary_guild = lambda: guild
+        cog._is_habbo_rate_limited_now = lambda: False
+        cog._handle_hidden_profile_audit_state = AsyncMock()
+        cog._assign_roles_to_member_from_profile = AsyncMock(
+            return_value=("No role changes were required.", [], [])
+        )
+        cog._send_role_change_embed_for_guild = AsyncMock()
+        cog._send_error_embed = AsyncMock()
+
+        with (
+            unittest.mock.patch(
+                "COGS.ServerAutoRolesRPA.fetch_habbo_profile",
+                side_effect=[{"name": "One"}, {"name": "Two"}],
+            ),
+            unittest.mock.patch("COGS.ServerAutoRolesRPA.asyncio.sleep", new_callable=AsyncMock) as sleep_mock,
+        ):
+            summary = await cog._sync_all_verified_users(
+                trigger="manual_command",
+                request_delay_seconds=1.0,
+            )
+
+        self.assertEqual(summary, {"total_entries": 2, "updated": 0, "skipped": 2, "errors": 0})
+        sleep_mock.assert_awaited_once_with(1.0)
 
 
 if __name__ == "__main__":

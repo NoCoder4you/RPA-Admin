@@ -357,6 +357,46 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
             "That member does not have a saved verified Habbo username in `VerifiedUsers.json`.",
         )
 
+    async def test_sync_all_verified_users_fetches_member_when_not_cached(self) -> None:
+        """Background sync should fetch uncached verified members instead of silently skipping them."""
+
+        cog = HabboRoleUpdaterCog.__new__(HabboRoleUpdaterCog)
+        member = SimpleNamespace(id=456, mention="<@456>")
+        guild = SimpleNamespace(
+            get_member=lambda member_id: None,
+            fetch_member=AsyncMock(return_value=member),
+        )
+        cog.verified_store = SimpleNamespace(
+            get_all_entries=lambda: [{"discord_id": "456", "habbo_username": "Siren"}]
+        )
+        cog._get_primary_guild = lambda: guild
+        cog._handle_hidden_profile_audit_state = AsyncMock()
+        cog._assign_roles_to_member_from_profile = AsyncMock(
+            return_value=("Added: Role A | Removed: none", ["Role A"], [])
+        )
+        cog._send_role_change_embed_for_guild = AsyncMock()
+        cog._send_error_embed = AsyncMock()
+
+        with unittest.mock.patch("COGS.ServerAutoRolesRPA.fetch_habbo_profile", return_value={"name": "Siren"}):
+            summary = await cog._sync_all_verified_users(trigger="auto_loop")
+
+        guild.fetch_member.assert_awaited_once_with(456)
+        self.assertEqual(summary, {"total_entries": 1, "updated": 1, "skipped": 0, "errors": 0})
+        cog._handle_hidden_profile_audit_state.assert_awaited_once_with(
+            guild=guild,
+            member=member,
+            habbo_username="Siren",
+            profile={"name": "Siren"},
+        )
+        cog._assign_roles_to_member_from_profile.assert_awaited_once_with(guild, member, {"name": "Siren"})
+        cog._send_role_change_embed_for_guild.assert_awaited_once_with(
+            guild=guild,
+            member=member,
+            added_role_names=["Role A"],
+            removed_role_names=[],
+        )
+        cog._send_error_embed.assert_not_awaited()
+
 
 if __name__ == "__main__":
     unittest.main()

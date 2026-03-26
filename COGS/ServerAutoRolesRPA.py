@@ -146,11 +146,12 @@ class HabboRoleUpdaterCog(commands.Cog):
                 continue
 
             try:
-                member = guild.get_member(int(discord_id))
+                member_id = int(discord_id)
             except ValueError:
                 summary["skipped"] += 1
                 continue
 
+            member = await self._resolve_member(guild, member_id)
             if member is None:
                 summary["skipped"] += 1
                 continue
@@ -203,6 +204,18 @@ class HabboRoleUpdaterCog(commands.Cog):
             )
 
         return summary
+
+    async def _resolve_member(self, guild: discord.Guild, member_id: int) -> discord.Member | None:
+        """Resolve a guild member from cache first, then fall back to an API fetch."""
+
+        member = guild.get_member(member_id)
+        if member is not None:
+            return member
+
+        try:
+            return await guild.fetch_member(member_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException, AttributeError):
+            return None
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member) -> None:

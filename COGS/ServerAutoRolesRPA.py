@@ -43,14 +43,18 @@ class HabboRoleUpdaterCog(commands.Cog):
 
         self.automatic_role_updater.cancel()
 
-    @tasks.loop(minutes=10)
+    @tasks.loop(minutes=15)
     async def automatic_role_updater(self) -> None:
         """Periodically synchronize roles for all users in VerifiedUsers.json."""
         # Keep the scheduler alive even if one sync cycle fails unexpectedly.
-        # Without this guard, an uncaught exception permanently stops the 10-minute loop
+        # Without this guard, an uncaught exception permanently stops the 15-minute loop
         # until the cog/bot is restarted manually.
         try:
-            await self._sync_all_verified_users(trigger="auto_loop")
+            summary = await self._sync_all_verified_users(trigger="auto_loop")
+            await self._send_sync_summary_embed(
+                trigger="auto_loop",
+                summary=summary,
+            )
         except Exception as exc:  # noqa: BLE001 - keep long-running task resilient.
             guild = self._get_primary_guild()
             if guild is None:
@@ -693,6 +697,38 @@ class HabboRoleUpdaterCog(commands.Cog):
             embed.add_field(name="Added Roles", value="\n".join(added_role_names), inline=False)
         if removed_role_names:
             embed.add_field(name="Removed Roles", value="\n".join(removed_role_names), inline=False)
+
+        try:
+            await channel.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            return
+
+    async def _send_sync_summary_embed(self, *, trigger: str, summary: dict[str, int]) -> None:
+        """Post one concise audit-log summary after each full updater processing cycle."""
+
+        guild = self._get_primary_guild()
+        if guild is None:
+            return
+
+        channel_id = self.server_config_store.get_audit_channel_id()
+        if channel_id is None:
+            return
+
+        channel = guild.get_channel(channel_id)
+        if channel is None:
+            return
+
+        embed = discord.Embed(
+            title="Habbo Role Updater Cycle Complete",
+            description="Finished processing saved verified-user entries.",
+            color=discord.Color.blurple(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(name="Context", value=f"Trigger: {trigger}", inline=False)
+        embed.add_field(name="Total Entries", value=str(summary.get("total_entries", 0)), inline=True)
+        embed.add_field(name="Updated", value=str(summary.get("updated", 0)), inline=True)
+        embed.add_field(name="Skipped", value=str(summary.get("skipped", 0)), inline=True)
+        embed.add_field(name="Errors", value=str(summary.get("errors", 0)), inline=True)
 
         try:
             await channel.send(embed=embed)

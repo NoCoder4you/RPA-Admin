@@ -426,7 +426,7 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
         interaction.followup.send.assert_awaited_once()
 
     async def test_auto_loop_reports_exceptions_without_crashing_task(self) -> None:
-        """The 10-minute updater loop should log unexpected failures instead of dying silently."""
+        """The 15-minute updater loop should log unexpected failures instead of dying silently."""
 
         cog = HabboRoleUpdaterCog.__new__(HabboRoleUpdaterCog)
         guild = SimpleNamespace(id=123)
@@ -445,6 +445,25 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
             error_text="boom",
             context="Trigger: auto_loop",
         )
+
+    async def test_auto_loop_posts_audit_summary_after_processing(self) -> None:
+        """Successful background cycles should post one summary embed to the audit log."""
+
+        cog = HabboRoleUpdaterCog.__new__(HabboRoleUpdaterCog)
+        expected_summary = {"total_entries": 3, "updated": 1, "skipped": 2, "errors": 0}
+        cog._sync_all_verified_users = AsyncMock(return_value=expected_summary)
+        cog._send_sync_summary_embed = AsyncMock()
+        cog._get_primary_guild = lambda: SimpleNamespace(id=123)
+        cog._send_error_embed = AsyncMock()
+
+        await cog.automatic_role_updater.coro(cog)
+
+        cog._sync_all_verified_users.assert_awaited_once_with(trigger="auto_loop")
+        cog._send_sync_summary_embed.assert_awaited_once_with(
+            trigger="auto_loop",
+            summary=expected_summary,
+        )
+        cog._send_error_embed.assert_not_awaited()
 
     async def test_get_primary_guild_prefers_configured_main_server(self) -> None:
         """Automatic sync should target the configured main server when one is set."""

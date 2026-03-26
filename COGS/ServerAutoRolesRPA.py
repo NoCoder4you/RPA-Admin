@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import discord
 from discord import app_commands
@@ -31,6 +31,9 @@ class HabboRoleUpdaterCog(commands.Cog):
         self.badge_role_mapper = BadgeRoleMapper()
         self.server_config_store = ServerConfigStore()
         self.verify_restriction_store = VerifyRestrictionStore()
+        # Track temporary Habbo API backoff windows so we do not hammer the endpoint
+        # when it starts returning HTTP 429 (Too Many Requests).
+        self._habbo_rate_limited_until: datetime | None = None
 
         # Background updater is intentionally separate from /verify command flow.
         self.automatic_role_updater.start()
@@ -43,8 +46,23 @@ class HabboRoleUpdaterCog(commands.Cog):
     @tasks.loop(minutes=10)
     async def automatic_role_updater(self) -> None:
         """Periodically synchronize roles for all users in VerifiedUsers.json."""
-
-        await self._sync_all_verified_users(trigger="auto_loop")
+        # Keep the scheduler alive even if one sync cycle fails unexpectedly.
+        # Without this guard, an uncaught exception permanently stops the 10-minute loop
+        # until the cog/bot is restarted manually.
+        try:
+            await self._sync_all_verified_users(trigger="auto_loop")
+        except Exception as exc:  # noqa: BLE001 - keep long-running task resilient.
+            guild = self._get_primary_guild()
+            if guild is None:
+                return
+            await self._send_error_embed(
+                guild=guild,
+                member=None,
+                habbo_username="N/A",
+                title="Habbo Auto Loop Failed",
+                error_text=str(exc),
+                context="Trigger: auto_loop",
+            )
 
     @automatic_role_updater.before_loop
     async def before_automatic_role_updater(self) -> None:
@@ -148,7 +166,12 @@ class HabboRoleUpdaterCog(commands.Cog):
         entries = self.verified_store.get_all_entries()
         summary["total_entries"] = len(entries)
 
-        for entry in entries:
+        if self._is_habbo_rate_limited_now():
+            # Skip the whole cycle while the cooldown is active to prevent repeated 429s.
+            summary["skipped"] = len(entries)
+            return summary
+
+        for index, entry in enumerate(entries):
             discord_id = str(entry.get("discord_id", "")).strip()
             habbo_username = str(entry.get("habbo_username", "")).strip()
             if not discord_id or not habbo_username:
@@ -169,6 +192,25 @@ class HabboRoleUpdaterCog(commands.Cog):
             try:
                 profile = fetch_habbo_profile(habbo_username)
             except HabboApiError as exc:
+                if self._is_rate_limit_error(exc):
+                    # Enter cooldown and stop this cycle immediately so one rate-limit event
+                    # does not generate dozens of identical errors for the remaining users.
+                    cooldown_until = self._begin_habbo_rate_limit_cooldown()
+                    remaining_entries = len(entries) - index
+                    summary["skipped"] += max(remaining_entries, 0)
+                    await self._send_error_embed(
+                        guild=guild,
+                        member=member,
+                        habbo_username=habbo_username,
+                        title="Habbo API Rate Limited",
+                        error_text=(
+                            f"{exc}. Auto updater paused until "
+                            f"{cooldown_until.strftime('%Y-%m-%d %H:%M:%S UTC')}."
+                        ),
+                        context=f"Trigger: {trigger}",
+                    )
+                    summary["errors"] += 1
+                    break
                 await self._send_error_embed(
                     guild=guild,
                     member=member,
@@ -556,7 +598,7 @@ class HabboRoleUpdaterCog(commands.Cog):
         self,
         *,
         guild: discord.Guild,
-        member: discord.Member,
+        member: discord.Member | None,
         habbo_username: str,
         title: str,
         error_text: str,
@@ -575,7 +617,8 @@ class HabboRoleUpdaterCog(commands.Cog):
             color=discord.Color.red(),
             timestamp=datetime.now(timezone.utc),
         )
-        embed.add_field(name="User", value=member.mention, inline=False)
+        user_value = member.mention if member is not None else "System task"
+        embed.add_field(name="User", value=user_value, inline=False)
         embed.add_field(name="Habbo Username", value=habbo_username or "unknown", inline=False)
         embed.add_field(name="Context", value=context, inline=False)
         embed.add_field(name="Error", value=error_text, inline=False)
@@ -593,6 +636,25 @@ class HabboRoleUpdaterCog(commands.Cog):
         if isinstance(value, bool):
             return value
         return str(value).strip().lower() == "true"
+
+    @staticmethod
+    def _is_rate_limit_error(error: Exception) -> bool:
+        """Return True when an exception message indicates Habbo API rate limiting (HTTP 429)."""
+
+        return "429" in str(error)
+
+    def _is_habbo_rate_limited_now(self) -> bool:
+        """Return True while the temporary Habbo API cooldown window is still active."""
+
+        if self._habbo_rate_limited_until is None:
+            return False
+        return datetime.now(timezone.utc) < self._habbo_rate_limited_until
+
+    def _begin_habbo_rate_limit_cooldown(self, *, minutes: int = 15) -> datetime:
+        """Set and return the next time when automatic Habbo sync attempts may resume."""
+
+        self._habbo_rate_limited_until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+        return self._habbo_rate_limited_until
 
     async def _send_role_change_embed_for_guild(
         self,

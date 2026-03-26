@@ -432,10 +432,11 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
     async def test_voice_state_update_logs_server_mute_and_deafen_changes(self) -> None:
         cog = AuditLogCog(MagicMock())
         cog._send_audit_embed = AsyncMock()
+        cog._find_recent_audit_entry = AsyncMock(return_value=SimpleNamespace(user=SimpleNamespace(id=9, mention="<@9>")))
 
         member = SimpleNamespace(guild=SimpleNamespace(), mention="<@22>", id=22)
-        before = SimpleNamespace(mute=False, deaf=False)
-        after = SimpleNamespace(mute=True, deaf=True)
+        before = SimpleNamespace(mute=False, deaf=False, channel=None)
+        after = SimpleNamespace(mute=True, deaf=True, channel=None)
 
         await cog.on_voice_state_update(member, before, after)
 
@@ -446,9 +447,49 @@ class AuditLogCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(field[0] == "Server Deaf" for field in fields))
 
         cog._send_audit_embed.reset_mock()
-        unchanged = SimpleNamespace(mute=True, deaf=True)
+        unchanged = SimpleNamespace(mute=True, deaf=True, channel=None)
         await cog.on_voice_state_update(member, unchanged, unchanged)
         cog._send_audit_embed.assert_not_awaited()
+
+    async def test_voice_state_update_logs_voice_channel_connect_disconnect_and_move(self) -> None:
+        cog = AuditLogCog(MagicMock())
+        cog._send_audit_embed = AsyncMock()
+        cog._find_recent_audit_entry = AsyncMock(return_value=SimpleNamespace(user=SimpleNamespace(id=9, mention="<@9>")))
+
+        guild = SimpleNamespace()
+        member = SimpleNamespace(guild=guild, mention="<@22>", id=22)
+        alpha = SimpleNamespace(id=101, mention="<#101>", name="Alpha")
+        bravo = SimpleNamespace(id=102, mention="<#102>", name="Bravo")
+
+        await cog.on_voice_state_update(
+            member,
+            SimpleNamespace(mute=False, deaf=False, channel=None),
+            SimpleNamespace(mute=False, deaf=False, channel=alpha),
+        )
+        connect_fields = cog._send_audit_embed.await_args.kwargs["fields"]
+        self.assertIn(("Action", "Connected to voice channel", False), connect_fields)
+        self.assertIn(("Channel", "<#101> (`101`)", False), connect_fields)
+
+        cog._send_audit_embed.reset_mock()
+        await cog.on_voice_state_update(
+            member,
+            SimpleNamespace(mute=False, deaf=False, channel=alpha),
+            SimpleNamespace(mute=False, deaf=False, channel=None),
+        )
+        disconnect_fields = cog._send_audit_embed.await_args.kwargs["fields"]
+        self.assertIn(("Action", "Disconnected from voice channel", False), disconnect_fields)
+        self.assertIn(("Channel", "<#101> (`101`)", False), disconnect_fields)
+
+        cog._send_audit_embed.reset_mock()
+        await cog.on_voice_state_update(
+            member,
+            SimpleNamespace(mute=False, deaf=False, channel=alpha),
+            SimpleNamespace(mute=False, deaf=False, channel=bravo),
+        )
+        move_fields = cog._send_audit_embed.await_args.kwargs["fields"]
+        self.assertIn(("Action", "Moved voice channels", False), move_fields)
+        self.assertIn(("From", "<#101> (`101`)", False), move_fields)
+        self.assertIn(("To", "<#102> (`102`)", False), move_fields)
 
     async def test_member_update_logs_nickname_and_roles(self) -> None:
         cog = AuditLogCog(MagicMock())

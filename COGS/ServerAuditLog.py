@@ -408,6 +408,21 @@ class AuditLogCog(commands.Cog):
         author_id = getattr(author, "id", "unknown")
         return f"{mention} (`{author_id}`)"
 
+    @staticmethod
+    def _voice_channel_label(channel: object | None) -> str:
+        """Return a readable voice channel label for connect/disconnect audit events."""
+
+        if channel is None:
+            return "None"
+
+        channel_mention = getattr(channel, "mention", None)
+        channel_name = getattr(channel, "name", "unknown")
+        channel_id = getattr(channel, "id", None)
+        label = channel_mention or f"`#{channel_name}`"
+        if channel_id is None:
+            return str(label)
+        return f"{label} (`{channel_id}`)"
+
     async def _send_message_log_embed(
         self,
         guild: discord.Guild,
@@ -914,9 +929,24 @@ class AuditLogCog(commands.Cog):
         before: discord.VoiceState,
         after: discord.VoiceState,
     ) -> None:
-        """Log server mute/deafen state changes from voice-state updates."""
+        """Log voice moderation changes plus voice channel join/leave/move events."""
 
         changed_fields: list[tuple[str, str, bool]] = []
+
+        before_channel = getattr(before, "channel", None)
+        after_channel = getattr(after, "channel", None)
+
+        if before_channel != after_channel:
+            if before_channel is None and after_channel is not None:
+                changed_fields.append(("Action", "Connected to voice channel", False))
+                changed_fields.append(("Channel", self._voice_channel_label(after_channel), False))
+            elif before_channel is not None and after_channel is None:
+                changed_fields.append(("Action", "Disconnected from voice channel", False))
+                changed_fields.append(("Channel", self._voice_channel_label(before_channel), False))
+            else:
+                changed_fields.append(("Action", "Moved voice channels", False))
+                changed_fields.append(("From", self._voice_channel_label(before_channel), False))
+                changed_fields.append(("To", self._voice_channel_label(after_channel), False))
 
         if before.mute != after.mute:
             changed_fields.append(("Server Mute", f"{before.mute} ➜ {after.mute}", True))
@@ -937,8 +967,8 @@ class AuditLogCog(commands.Cog):
 
         await self._send_audit_embed(
             member.guild,
-            title="Voice Moderation State Updated",
-            description=f"Voice moderation state changed for {member.mention} (`{member.id}`).",
+            title="Voice State Updated",
+            description=f"Voice state changed for {member.mention} (`{member.id}`).",
             fields=changed_fields,
             color=discord.Color.gold(),
         )

@@ -166,15 +166,41 @@ class AutoInviteCog(commands.Cog):
         preferred_channel_id_int = AutoInviteConfigStore._safe_int(preferred_channel_id)
         if preferred_channel_id_int is not None:
             preferred_channel = target_guild.get_channel(preferred_channel_id_int)
-            if isinstance(preferred_channel, discord.abc.GuildChannel) and hasattr(preferred_channel, "create_invite"):
+            if (
+                isinstance(preferred_channel, discord.abc.GuildChannel)
+                and hasattr(preferred_channel, "create_invite")
+                and self._can_create_invite_in_channel(target_guild, preferred_channel)
+            ):
                 return preferred_channel
 
-        # Fallback: first text channel where invite creation is possible.
+        # Fallback: first text channel where the bot can actually create invite links.
         for channel in getattr(target_guild, "text_channels", []):
-            if hasattr(channel, "create_invite"):
+            if hasattr(channel, "create_invite") and self._can_create_invite_in_channel(target_guild, channel):
                 return channel
 
         return None
+
+    @staticmethod
+    def _can_create_invite_in_channel(target_guild: discord.Guild, channel: discord.abc.GuildChannel) -> bool:
+        """Return True when bot permissions allow invite creation in the channel.
+
+        Some servers expose channels where invites are disabled for the bot. If we pick
+        one of those channels, invite creation raises ``discord.Forbidden`` and no DM
+        is sent. Proactively filtering channels here avoids that false-negative path.
+        """
+
+        bot_member = getattr(target_guild, "me", None)
+        if bot_member is None or not hasattr(channel, "permissions_for"):
+            return True
+
+        try:
+            permissions = channel.permissions_for(bot_member)
+        except Exception:
+            # If permission introspection fails unexpectedly, keep behavior permissive
+            # and let Discord enforce permissions at invite creation time.
+            return True
+
+        return bool(getattr(permissions, "create_instant_invite", False))
 
     def _build_invite_embed(
         self,

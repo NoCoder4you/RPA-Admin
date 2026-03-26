@@ -30,8 +30,9 @@ class AutoInviteCogTests(unittest.IsolatedAsyncioTestCase):
         )
         cog._send_single_use_invite = AsyncMock()
 
-        before = SimpleNamespace(guild=SimpleNamespace(id=100), roles=[SimpleNamespace(id=1, name="Member")])
+        before = SimpleNamespace(id=9999, guild=SimpleNamespace(id=100), roles=[SimpleNamespace(id=1, name="Member")])
         after = SimpleNamespace(
+            id=9999,
             guild=SimpleNamespace(id=100),
             roles=[SimpleNamespace(id=1, name="Member"), SimpleNamespace(id=55, name="Operators")],
         )
@@ -51,8 +52,8 @@ class AutoInviteCogTests(unittest.IsolatedAsyncioTestCase):
         )
         cog._send_single_use_invite = AsyncMock()
 
-        before = SimpleNamespace(guild=SimpleNamespace(id=999), roles=[])
-        after = SimpleNamespace(guild=SimpleNamespace(id=999), roles=[SimpleNamespace(id=55)])
+        before = SimpleNamespace(id=9999, guild=SimpleNamespace(id=999), roles=[])
+        after = SimpleNamespace(id=9999, guild=SimpleNamespace(id=999), roles=[SimpleNamespace(id=55)])
 
         await cog.on_member_update(before, after)
 
@@ -63,10 +64,10 @@ class AutoInviteCogTests(unittest.IsolatedAsyncioTestCase):
         cog = AutoInviteCog(bot)
 
         invite_channel = SimpleNamespace(create_invite=AsyncMock(return_value=SimpleNamespace(url="https://discord.gg/abc")))
-        target_guild = SimpleNamespace(name="Target", get_channel=lambda _: None, text_channels=[invite_channel])
+        target_guild = SimpleNamespace(id=200, name="Target", get_channel=lambda _: None, text_channels=[invite_channel])
         bot.get_guild.return_value = target_guild
 
-        member = SimpleNamespace(guild=SimpleNamespace(name="Main"), send=AsyncMock())
+        member = SimpleNamespace(id=9999, guild=SimpleNamespace(name="Main"), send=AsyncMock())
 
         await cog._send_single_use_invite(
             member=member,
@@ -101,6 +102,7 @@ class AutoInviteCogTests(unittest.IsolatedAsyncioTestCase):
         allowed_channel.permissions_for.return_value = SimpleNamespace(create_instant_invite=True)
 
         target_guild = SimpleNamespace(
+            id=200,
             name="Target",
             me=SimpleNamespace(id=123),
             get_channel=lambda channel_id: blocked_channel if channel_id == 999 else None,
@@ -108,7 +110,7 @@ class AutoInviteCogTests(unittest.IsolatedAsyncioTestCase):
         )
         bot.get_guild.return_value = target_guild
 
-        member = SimpleNamespace(guild=SimpleNamespace(name="Main"), send=AsyncMock())
+        member = SimpleNamespace(id=9999, guild=SimpleNamespace(name="Main"), send=AsyncMock())
 
         await cog._send_single_use_invite(
             member=member,

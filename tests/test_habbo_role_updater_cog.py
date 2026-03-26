@@ -423,6 +423,27 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
         interaction.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
         interaction.followup.send.assert_awaited_once()
 
+    async def test_auto_loop_reports_exceptions_without_crashing_task(self) -> None:
+        """The 10-minute updater loop should log unexpected failures instead of dying silently."""
+
+        cog = HabboRoleUpdaterCog.__new__(HabboRoleUpdaterCog)
+        guild = SimpleNamespace(id=123)
+        cog._get_primary_guild = lambda: guild
+        cog._sync_all_verified_users = AsyncMock(side_effect=RuntimeError("boom"))
+        cog._send_error_embed = AsyncMock()
+
+        await cog.automatic_role_updater.coro(cog)
+
+        cog._sync_all_verified_users.assert_awaited_once_with(trigger="auto_loop")
+        cog._send_error_embed.assert_awaited_once_with(
+            guild=guild,
+            member=None,
+            habbo_username="N/A",
+            title="Habbo Auto Loop Failed",
+            error_text="boom",
+            context="Trigger: auto_loop",
+        )
+
     async def test_get_primary_guild_prefers_configured_main_server(self) -> None:
         """Automatic sync should target the configured main server when one is set."""
 

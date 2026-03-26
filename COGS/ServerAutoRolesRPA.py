@@ -43,8 +43,23 @@ class HabboRoleUpdaterCog(commands.Cog):
     @tasks.loop(minutes=10)
     async def automatic_role_updater(self) -> None:
         """Periodically synchronize roles for all users in VerifiedUsers.json."""
-
-        await self._sync_all_verified_users(trigger="auto_loop")
+        # Keep the scheduler alive even if one sync cycle fails unexpectedly.
+        # Without this guard, an uncaught exception permanently stops the 10-minute loop
+        # until the cog/bot is restarted manually.
+        try:
+            await self._sync_all_verified_users(trigger="auto_loop")
+        except Exception as exc:  # noqa: BLE001 - keep long-running task resilient.
+            guild = self._get_primary_guild()
+            if guild is None:
+                return
+            await self._send_error_embed(
+                guild=guild,
+                member=None,
+                habbo_username="N/A",
+                title="Habbo Auto Loop Failed",
+                error_text=str(exc),
+                context="Trigger: auto_loop",
+            )
 
     @automatic_role_updater.before_loop
     async def before_automatic_role_updater(self) -> None:
@@ -556,7 +571,7 @@ class HabboRoleUpdaterCog(commands.Cog):
         self,
         *,
         guild: discord.Guild,
-        member: discord.Member,
+        member: discord.Member | None,
         habbo_username: str,
         title: str,
         error_text: str,
@@ -575,7 +590,8 @@ class HabboRoleUpdaterCog(commands.Cog):
             color=discord.Color.red(),
             timestamp=datetime.now(timezone.utc),
         )
-        embed.add_field(name="User", value=member.mention, inline=False)
+        user_value = member.mention if member is not None else "System task"
+        embed.add_field(name="User", value=user_value, inline=False)
         embed.add_field(name="Habbo Username", value=habbo_username or "unknown", inline=False)
         embed.add_field(name="Context", value=context, inline=False)
         embed.add_field(name="Error", value=error_text, inline=False)

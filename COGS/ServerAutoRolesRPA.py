@@ -9,6 +9,7 @@ from discord.ext import commands, tasks
 from habbo_verification_core import (
     BadgeRoleMapper,
     HabboApiError,
+    HiddenProfileAlertStore,
     ServerConfigStore,
     VerifiedUserStore,
     VerifyRestrictionStore,
@@ -21,10 +22,12 @@ class HabboRoleUpdaterCog(commands.Cog):
     """Cog that periodically syncs roles for all previously verified users."""
 
     VERIFICATION_LOG_CHANNEL_ID = 1481456997726425168
+    ERROR_LOG_CHANNEL_ID = 1484064305732259940
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.verified_store = VerifiedUserStore()
+        self.hidden_profile_alert_store = HiddenProfileAlertStore()
         self.badge_role_mapper = BadgeRoleMapper()
         self.server_config_store = ServerConfigStore()
         self.verify_restriction_store = VerifyRestrictionStore()
@@ -115,10 +118,24 @@ class HabboRoleUpdaterCog(commands.Cog):
 
             try:
                 profile = fetch_habbo_profile(habbo_username)
-            except HabboApiError:
+            except HabboApiError as exc:
+                await self._send_error_embed(
+                    guild=guild,
+                    member=member,
+                    habbo_username=habbo_username,
+                    title="Habbo Profile Fetch Failed",
+                    error_text=str(exc),
+                    context=f"Trigger: {trigger}",
+                )
                 summary["errors"] += 1
                 continue
 
+            await self._handle_hidden_profile_audit_state(
+                guild=guild,
+                member=member,
+                habbo_username=habbo_username,
+                profile=profile,
+            )
             role_status, added_role_names, removed_role_names = await self._assign_roles_to_member_from_profile(
                 guild,
                 member,
@@ -127,6 +144,14 @@ class HabboRoleUpdaterCog(commands.Cog):
             if added_role_names or removed_role_names:
                 summary["updated"] += 1
             elif role_status.startswith("Failed"):
+                await self._send_error_embed(
+                    guild=guild,
+                    member=member,
+                    habbo_username=habbo_username,
+                    title="Habbo Role Sync Failed",
+                    error_text=role_status,
+                    context=f"Trigger: {trigger}",
+                )
                 summary["errors"] += 1
             else:
                 summary["skipped"] += 1
@@ -151,10 +176,24 @@ class HabboRoleUpdaterCog(commands.Cog):
 
         try:
             profile = fetch_habbo_profile(stored_habbo_username)
-        except HabboApiError:
+        except HabboApiError as exc:
+            await self._send_error_embed(
+                guild=member.guild,
+                member=member,
+                habbo_username=stored_habbo_username,
+                title="Habbo Rejoin Sync Fetch Failed",
+                error_text=str(exc),
+                context="Trigger: member_join",
+            )
             # Avoid raising from join events; the user can still be resynced later by the updater.
             return
 
+        await self._handle_hidden_profile_audit_state(
+            guild=member.guild,
+            member=member,
+            habbo_username=stored_habbo_username,
+            profile=profile,
+        )
         verified_habbo_username = str(profile.get("name", stored_habbo_username))
         restriction_group = self.verify_restriction_store.get_group_for_username(verified_habbo_username)
         if restriction_group is not None:
@@ -258,6 +297,9 @@ class HabboRoleUpdaterCog(commands.Cog):
     ) -> tuple[str, list[str], list[str]]:
         """Synchronize mapped roles to a specific member using a Habbo profile."""
 
+        if not self._is_profile_visible(profile):
+            return "Skipped (Habbo profile is hidden; public groups are unavailable until profileVisible is true).", [], []
+
         unique_id = str(profile.get("uniqueId", "")).strip()
         if not unique_id:
             return "Skipped (Habbo profile has no uniqueId for group lookup).", [], []
@@ -314,6 +356,117 @@ class HabboRoleUpdaterCog(commands.Cog):
             )
 
         return status, added_role_names, removed_role_names
+
+    async def _handle_hidden_profile_audit_state(
+        self,
+        *,
+        guild: discord.Guild,
+        member: discord.Member,
+        habbo_username: str,
+        profile: dict,
+    ) -> None:
+        """Alert once per hidden-profile period, then reset when the profile becomes visible again."""
+
+        discord_id = str(getattr(member, "id", "")).strip()
+        if not discord_id:
+            return
+
+        if self._is_profile_visible(profile):
+            self.hidden_profile_alert_store.clear_alerted(discord_id)
+            return
+
+        if self.hidden_profile_alert_store.has_alerted(discord_id):
+            return
+
+        await self._send_hidden_profile_embed(
+            guild=guild,
+            member=member,
+            habbo_username=habbo_username,
+        )
+        self.hidden_profile_alert_store.mark_alerted(discord_id)
+
+    async def _send_hidden_profile_embed(
+        self,
+        *,
+        guild: discord.Guild,
+        member: discord.Member,
+        habbo_username: str,
+    ) -> None:
+        """Post a one-time audit embed when Habbo profile visibility blocks role syncing."""
+
+        channel_id = self.server_config_store.get_audit_channel_id()
+        if channel_id is None:
+            return
+
+        channel = guild.get_channel(channel_id)
+        if channel is None:
+            return
+
+        embed = discord.Embed(
+            title="Habbo Role Sync Blocked",
+            description="This member could not be roled because their Habbo profile is hidden.",
+            color=discord.Color.orange(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(name="User", value=member.mention, inline=False)
+        embed.add_field(name="Habbo Username", value=habbo_username, inline=False)
+        embed.add_field(
+            name="Reason",
+            value="`profileVisible` is `false`, so Habbo does not expose the public group data needed for role sync.",
+            inline=False,
+        )
+        embed.add_field(
+            name="Alert Policy",
+            value="This notice is sent once while the profile is hidden. It will reset after the profile becomes visible again.",
+            inline=False,
+        )
+
+        try:
+            await channel.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            return
+
+    async def _send_error_embed(
+        self,
+        *,
+        guild: discord.Guild,
+        member: discord.Member,
+        habbo_username: str,
+        title: str,
+        error_text: str,
+        context: str,
+    ) -> None:
+        """Send role-sync errors to the fixed background log channel."""
+
+        channel = guild.get_channel(self.ERROR_LOG_CHANNEL_ID)
+        if channel is None:
+            channel = self.bot.get_channel(self.ERROR_LOG_CHANNEL_ID)
+        if channel is None:
+            return
+
+        embed = discord.Embed(
+            title=title,
+            color=discord.Color.red(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(name="User", value=member.mention, inline=False)
+        embed.add_field(name="Habbo Username", value=habbo_username or "unknown", inline=False)
+        embed.add_field(name="Context", value=context, inline=False)
+        embed.add_field(name="Error", value=error_text, inline=False)
+
+        try:
+            await channel.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            return
+
+    @staticmethod
+    def _is_profile_visible(profile: dict) -> bool:
+        """Normalize Habbo profile visibility values to a boolean."""
+
+        value = profile.get("profileVisible", True)
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() == "true"
 
     async def _send_role_change_embed_for_guild(
         self,

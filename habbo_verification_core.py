@@ -218,6 +218,82 @@ class VerifiedUserStore:
         return normalized
 
 
+class HiddenProfileAlertStore:
+    """Persist which verified users have already triggered a hidden-profile audit alert."""
+
+    def __init__(self, file_path: Path | None = None) -> None:
+        self.file_path = file_path or json_file("HiddenProfileAlerts.json")
+
+    def has_alerted(self, discord_id: str) -> bool:
+        """Return True when this Discord user already has an active hidden-profile alert."""
+
+        normalized_discord_id = str(discord_id).strip()
+        if not normalized_discord_id:
+            return False
+        return normalized_discord_id in self._read_ids()
+
+    def mark_alerted(self, discord_id: str) -> None:
+        """Record that this Discord user has been alerted for a hidden profile."""
+
+        normalized_discord_id = str(discord_id).strip()
+        if not normalized_discord_id:
+            return
+
+        ids = self._read_ids()
+        if normalized_discord_id in ids:
+            return
+
+        ids.append(normalized_discord_id)
+        ids.sort()
+        self._write_ids(ids)
+
+    def clear_alerted(self, discord_id: str) -> None:
+        """Remove the hidden-profile alert marker once the user's profile is visible again."""
+
+        normalized_discord_id = str(discord_id).strip()
+        if not normalized_discord_id:
+            return
+
+        ids = self._read_ids()
+        if normalized_discord_id not in ids:
+            return
+
+        ids.remove(normalized_discord_id)
+        self._write_ids(ids)
+
+    def _read_ids(self) -> list[str]:
+        """Load the alert marker list with safe fallback for missing/invalid files."""
+
+        if not self.file_path.exists():
+            return []
+
+        try:
+            data = json.loads(self.file_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return []
+
+        if not isinstance(data, list):
+            return []
+
+        normalized_ids: list[str] = []
+        seen: set[str] = set()
+        for entry in data:
+            normalized_discord_id = str(entry).strip()
+            if not normalized_discord_id or normalized_discord_id in seen:
+                continue
+            normalized_ids.append(normalized_discord_id)
+            seen.add(normalized_discord_id)
+
+        normalized_ids.sort()
+        return normalized_ids
+
+    def _write_ids(self, ids: list[str]) -> None:
+        """Persist alert markers to disk."""
+
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        self.file_path.write_text(json.dumps(ids, indent=2), encoding="utf-8")
+
+
 class ServerConfigStore:
     """Read/write single-server configuration from JSON/serverconfig.json.
 

@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 from habbo_verification_core import (
     BadgeRoleMapper,
     HabboApiError,
+    HiddenProfileAlertStore,
     VerificationManager,
     VerifiedUserStore,
     ServerConfigStore,
@@ -179,6 +180,36 @@ class VerifiedUserStoreTests(unittest.TestCase):
                     {"discord_id": "123", "habbo_username": "Siren"},
                     {"discord_id": "999", "habbo_username": "Other"},
                 ],
+            )
+
+
+class HiddenProfileAlertStoreTests(unittest.TestCase):
+    """Validate persistence for one-time hidden-profile alert markers."""
+
+    def test_mark_alerted_persists_and_deduplicates_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = HiddenProfileAlertStore(file_path=Path(temp_dir) / "JSON" / "HiddenProfileAlerts.json")
+
+            store.mark_alerted("456")
+            store.mark_alerted("456")
+
+            self.assertTrue(store.has_alerted("456"))
+            self.assertEqual(
+                json.loads(store.file_path.read_text(encoding="utf-8")),
+                ["456"],
+            )
+
+    def test_clear_alerted_removes_existing_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = HiddenProfileAlertStore(file_path=Path(temp_dir) / "JSON" / "HiddenProfileAlerts.json")
+
+            store.mark_alerted("456")
+            store.clear_alerted("456")
+
+            self.assertFalse(store.has_alerted("456"))
+            self.assertEqual(
+                json.loads(store.file_path.read_text(encoding="utf-8")),
+                [],
             )
 
 

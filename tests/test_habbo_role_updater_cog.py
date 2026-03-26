@@ -207,6 +207,99 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
 
         guild.get_channel.assert_called_once_with(cog.VERIFICATION_LOG_CHANNEL_ID)
 
+    async def test_hidden_profile_skips_role_sync_before_group_lookup(self) -> None:
+        """Hidden Habbo profiles should not attempt public group-based role sync."""
+
+        cog = HabboRoleUpdaterCog.__new__(HabboRoleUpdaterCog)
+        guild = SimpleNamespace()
+        member = SimpleNamespace()
+
+        status, added_roles, removed_roles = await cog._assign_roles_to_member_from_profile(
+            guild,
+            member,
+            {"profileVisible": False, "uniqueId": "hhus-123"},
+        )
+
+        self.assertEqual(
+            status,
+            "Skipped (Habbo profile is hidden; public groups are unavailable until profileVisible is true).",
+        )
+        self.assertEqual(added_roles, [])
+        self.assertEqual(removed_roles, [])
+
+    async def test_hidden_profile_alert_is_sent_only_once_until_profile_is_visible_again(self) -> None:
+        """Audit alert should post once for a hidden profile, reset on visibility restore, then post again if hidden later."""
+
+        cog = HabboRoleUpdaterCog.__new__(HabboRoleUpdaterCog)
+        cog.hidden_profile_alert_store = SimpleNamespace(
+            has_alerted=unittest.mock.MagicMock(side_effect=[False, True, False]),
+            mark_alerted=unittest.mock.MagicMock(),
+            clear_alerted=unittest.mock.MagicMock(),
+        )
+        cog._send_hidden_profile_embed = AsyncMock()
+
+        guild = SimpleNamespace()
+        member = SimpleNamespace(id=456, mention="<@456>")
+
+        await cog._handle_hidden_profile_audit_state(
+            guild=guild,
+            member=member,
+            habbo_username="Siren",
+            profile={"profileVisible": False},
+        )
+        await cog._handle_hidden_profile_audit_state(
+            guild=guild,
+            member=member,
+            habbo_username="Siren",
+            profile={"profileVisible": False},
+        )
+        await cog._handle_hidden_profile_audit_state(
+            guild=guild,
+            member=member,
+            habbo_username="Siren",
+            profile={"profileVisible": True},
+        )
+        await cog._handle_hidden_profile_audit_state(
+            guild=guild,
+            member=member,
+            habbo_username="Siren",
+            profile={"profileVisible": False},
+        )
+
+        self.assertEqual(cog._send_hidden_profile_embed.await_count, 2)
+        cog.hidden_profile_alert_store.mark_alerted.assert_called_with("456")
+        cog.hidden_profile_alert_store.clear_alerted.assert_called_once_with("456")
+
+    async def test_send_error_embed_posts_to_fixed_error_channel(self) -> None:
+        """Role sync errors should be mirrored to the configured background error channel."""
+
+        cog = HabboRoleUpdaterCog.__new__(HabboRoleUpdaterCog)
+        cog.bot = SimpleNamespace(get_channel=lambda _channel_id: None)
+        error_channel = SimpleNamespace(send=AsyncMock())
+        guild = SimpleNamespace(
+            get_channel=lambda channel_id: error_channel if channel_id == cog.ERROR_LOG_CHANNEL_ID else None
+        )
+        member = SimpleNamespace(mention="<@456>")
+
+        await cog._send_error_embed(
+            guild=guild,
+            member=member,
+            habbo_username="Siren",
+            title="Habbo Role Sync Failed",
+            error_text="Failed (bot lacks permission to manage one or more roles).",
+            context="Trigger: auto_loop",
+        )
+
+        error_channel.send.assert_awaited_once()
+        embed = error_channel.send.await_args.kwargs["embed"]
+        fields = {field.name: field.value for field in embed.fields}
+
+        self.assertEqual(embed.title, "Habbo Role Sync Failed")
+        self.assertEqual(fields["User"], "<@456>")
+        self.assertEqual(fields["Habbo Username"], "Siren")
+        self.assertEqual(fields["Context"], "Trigger: auto_loop")
+        self.assertEqual(fields["Error"], "Failed (bot lacks permission to manage one or more roles).")
+
 
 if __name__ == "__main__":
     unittest.main()

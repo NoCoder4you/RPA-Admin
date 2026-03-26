@@ -326,6 +326,19 @@ class ServerConfigStore:
         config = self._read_config()
         return self._safe_int(config.get("audit_log_channel_id"))
 
+    def get_main_server_id(self) -> int | None:
+        """Return the configured main server ID used for guild-specific sync tasks."""
+
+        config = self._read_config()
+        return self._safe_int(config.get("main_server_id"))
+
+    def set_main_server_id(self, guild_id: int) -> None:
+        """Persist the main server ID while preserving existing config keys."""
+
+        config = self._read_config()
+        config["main_server_id"] = str(guild_id)
+        self._write_config(config)
+
     def get_profanity_log_channel_id(self) -> int | None:
         """Return the configured channel ID used for profanity deletion logs."""
 

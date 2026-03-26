@@ -284,6 +284,21 @@ class ServerConfigStoreTests(unittest.TestCase):
             store = ServerConfigStore(file_path=file_path)
             self.assertIsNone(store.get_audit_channel_id())
 
+    def test_set_and_get_main_server_id(self) -> None:
+        """Ensure the main server ID is persisted in serverconfig.json."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "serverconfig.json"
+            file_path.write_text(json.dumps({"audit_log_channel_id": "456"}), encoding="utf-8")
+
+            store = ServerConfigStore(file_path=file_path)
+            store.set_main_server_id(1479383702499885109)
+
+            data = json.loads(file_path.read_text(encoding="utf-8"))
+            self.assertEqual(data.get("audit_log_channel_id"), "456")
+            self.assertEqual(data.get("main_server_id"), "1479383702499885109")
+            self.assertEqual(store.get_main_server_id(), 1479383702499885109)
+
     def test_set_and_get_message_log_channel_id(self) -> None:
         """Ensure the message event log channel ID is persisted in serverconfig.json."""
 

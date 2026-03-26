@@ -397,6 +397,47 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
         )
         cog._send_error_embed.assert_not_awaited()
 
+    async def test_uva_uses_interaction_guild_for_manual_sync(self) -> None:
+        """Manual /uva runs should sync the server where the command was executed."""
+
+        cog = HabboRoleUpdaterCog.__new__(HabboRoleUpdaterCog)
+        cog._sync_all_verified_users = AsyncMock(
+            return_value={"total_entries": 1, "updated": 0, "skipped": 1, "errors": 0}
+        )
+
+        interaction_guild = SimpleNamespace(id=123)
+        interaction = SimpleNamespace(
+            guild=interaction_guild,
+            user="Siren",
+            response=SimpleNamespace(defer=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+
+        await cog.UVA.callback(cog, interaction)
+
+        cog._sync_all_verified_users.assert_awaited_once_with(
+            trigger="manual_command",
+            triggered_by="Siren",
+            guild_override=interaction_guild,
+        )
+        interaction.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
+        interaction.followup.send.assert_awaited_once()
+
+    async def test_get_primary_guild_prefers_configured_main_server(self) -> None:
+        """Automatic sync should target the configured main server when one is set."""
+
+        configured_guild = SimpleNamespace(id=200)
+        fallback_guild = SimpleNamespace(id=100)
+
+        cog = HabboRoleUpdaterCog.__new__(HabboRoleUpdaterCog)
+        cog.server_config_store = SimpleNamespace(get_main_server_id=lambda: 200)
+        cog.bot = SimpleNamespace(
+            get_guild=lambda guild_id: configured_guild if guild_id == 200 else None,
+            guilds=[fallback_guild],
+        )
+
+        self.assertIs(cog._get_primary_guild(), configured_guild)
+
 
 if __name__ == "__main__":
     unittest.main()

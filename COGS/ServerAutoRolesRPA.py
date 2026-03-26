@@ -54,18 +54,22 @@ class HabboRoleUpdaterCog(commands.Cog):
 
     @app_commands.command(
         name="uva",
-        description="Manually run the automatic verified-user role updater now.",
+        description="Manually run the verified-user role updater, including uncached members.",
     )
     @app_commands.checks.has_permissions(manage_roles=True)
     async def UVA(self, interaction: discord.Interaction) -> None:
         """Manually trigger standalone updater and return a concise summary."""
 
         await interaction.response.defer(ephemeral=True, thinking=True)
-        summary = await self._sync_all_verified_users(trigger="manual_command", triggered_by=str(interaction.user))
+        summary = await self._sync_all_verified_users(
+            trigger="manual_command",
+            triggered_by=str(interaction.user),
+            guild_override=interaction.guild,
+        )
 
         embed = discord.Embed(
             title="Verified Role Updater Complete",
-            description="Finished syncing roles for saved verified users.",
+            description="Finished syncing roles for saved verified users, including uncached members.",
             color=discord.Color.blurple(),
             timestamp=datetime.now(timezone.utc),
         )
@@ -82,7 +86,7 @@ class HabboRoleUpdaterCog(commands.Cog):
 
         if isinstance(error, app_commands.MissingPermissions):
             await interaction.response.send_message(
-                "You need the **Manage Roles** permission to run `/update_verified_roles`.",
+                "You need the **Manage Roles** permission to run `/uva`.",
                 ephemeral=True,
             )
             return
@@ -127,11 +131,17 @@ class HabboRoleUpdaterCog(commands.Cog):
             return
         raise error
 
-    async def _sync_all_verified_users(self, *, trigger: str, triggered_by: str | None = None) -> dict[str, int]:
+    async def _sync_all_verified_users(
+        self,
+        *,
+        trigger: str,
+        triggered_by: str | None = None,
+        guild_override: discord.Guild | None = None,
+    ) -> dict[str, int]:
         """Sync roles for every verified entry from JSON/VerifiedUsers.json."""
 
         summary = {"total_entries": 0, "updated": 0, "skipped": 0, "errors": 0}
-        guild = self._get_primary_guild()
+        guild = guild_override or self._get_primary_guild()
         if guild is None:
             return summary
 
@@ -355,7 +365,13 @@ class HabboRoleUpdaterCog(commands.Cog):
         return True, role_status
 
     def _get_primary_guild(self) -> discord.Guild | None:
-        """Return the first guild because this bot is configured for one server."""
+        """Return the configured main guild when available, otherwise fall back to the first guild."""
+
+        configured_main_server_id = self.server_config_store.get_main_server_id()
+        if configured_main_server_id is not None:
+            configured_guild = self.bot.get_guild(configured_main_server_id)
+            if configured_guild is not None:
+                return configured_guild
 
         if not self.bot.guilds:
             return None

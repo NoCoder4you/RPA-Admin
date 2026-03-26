@@ -88,6 +88,45 @@ class HabboRoleUpdaterCog(commands.Cog):
             return
         raise error
 
+    @commands.command(name="refreshroles", help="Silently refresh one member's mapped roles from their saved VerifiedUsers entry.")
+    @commands.has_permissions(manage_roles=True)
+    async def refreshroles(self, ctx: commands.Context, member: discord.Member) -> None:
+        """Quietly force a saved verified user's role sync from their stored Habbo username."""
+
+        try:
+            await ctx.message.delete()
+        except (discord.Forbidden, discord.HTTPException, AttributeError):
+            pass
+
+        if ctx.guild is None:
+            await ctx.send("This command can only be used in a server.", delete_after=10)
+            return
+
+        success, message = await self._refresh_member_roles_from_saved_username(
+            guild=ctx.guild,
+            member=member,
+            trigger="text_command",
+        )
+        if success:
+            return
+
+        await ctx.send(message, delete_after=10)
+
+    @refreshroles.error
+    async def refreshroles_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
+        """Return compact feedback for text-command usage errors."""
+
+        if isinstance(error, commands.MissingPermissions):
+            await ctx.send("You need the **Manage Roles** permission to run `RPA refreshroles`.", delete_after=10)
+            return
+        if isinstance(error, commands.MissingRequiredArgument):
+            await ctx.send("Usage: `RPA refreshroles @member`", delete_after=10)
+            return
+        if isinstance(error, commands.BadArgument):
+            await ctx.send("I couldn't resolve that member. Use a mention or valid member ID.", delete_after=10)
+            return
+        raise error
+
     async def _sync_all_verified_users(self, *, trigger: str, triggered_by: str | None = None) -> dict[str, int]:
         """Sync roles for every verified entry from JSON/VerifiedUsers.json."""
 
@@ -243,6 +282,64 @@ class HabboRoleUpdaterCog(commands.Cog):
             added_role_names=added_role_names,
             removed_role_names=removed_role_names,
         )
+
+    async def _refresh_member_roles_from_saved_username(
+        self,
+        *,
+        guild: discord.Guild,
+        member: discord.Member,
+        trigger: str,
+    ) -> tuple[bool, str]:
+        """Refresh one member's roles using the Habbo username already saved for that Discord ID."""
+
+        stored_habbo_username = self.verified_store.get_habbo_username(str(member.id))
+        if not stored_habbo_username:
+            return False, "That member does not have a saved verified Habbo username in `VerifiedUsers.json`."
+
+        try:
+            profile = fetch_habbo_profile(stored_habbo_username)
+        except HabboApiError as exc:
+            await self._send_error_embed(
+                guild=guild,
+                member=member,
+                habbo_username=stored_habbo_username,
+                title="Habbo Manual Refresh Fetch Failed",
+                error_text=str(exc),
+                context=f"Trigger: {trigger}",
+            )
+            return False, "I couldn't fetch that member's saved Habbo profile right now."
+
+        await self._handle_hidden_profile_audit_state(
+            guild=guild,
+            member=member,
+            habbo_username=stored_habbo_username,
+            profile=profile,
+        )
+
+        role_status, added_role_names, removed_role_names = await self._assign_roles_to_member_from_profile(
+            guild,
+            member,
+            profile,
+        )
+        await self._send_role_change_embed_for_guild(
+            guild=guild,
+            member=member,
+            added_role_names=added_role_names,
+            removed_role_names=removed_role_names,
+        )
+
+        if role_status.startswith("Failed"):
+            await self._send_error_embed(
+                guild=guild,
+                member=member,
+                habbo_username=stored_habbo_username,
+                title="Habbo Manual Refresh Failed",
+                error_text=role_status,
+                context=f"Trigger: {trigger}",
+            )
+            return False, role_status
+
+        return True, role_status
 
     def _get_primary_guild(self) -> discord.Guild | None:
         """Return the first guild because this bot is configured for one server."""

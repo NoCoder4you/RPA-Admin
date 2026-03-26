@@ -300,6 +300,63 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fields["Context"], "Trigger: auto_loop")
         self.assertEqual(fields["Error"], "Failed (bot lacks permission to manage one or more roles).")
 
+    async def test_refresh_member_roles_from_saved_username_syncs_using_verified_store_entry(self) -> None:
+        """Manual text refresh should use the saved Habbo username for the target member."""
+
+        cog = HabboRoleUpdaterCog.__new__(HabboRoleUpdaterCog)
+        cog.verified_store = SimpleNamespace(get_habbo_username=lambda discord_id: "Siren" if discord_id == "456" else None)
+        cog._handle_hidden_profile_audit_state = AsyncMock()
+        cog._assign_roles_to_member_from_profile = AsyncMock(
+            return_value=("Added: Role A | Removed: none", ["Role A"], [])
+        )
+        cog._send_role_change_embed_for_guild = AsyncMock()
+        cog._send_error_embed = AsyncMock()
+
+        guild = SimpleNamespace()
+        member = SimpleNamespace(id=456)
+
+        with unittest.mock.patch("COGS.ServerAutoRolesRPA.fetch_habbo_profile", return_value={"name": "Siren"}):
+            success, message = await cog._refresh_member_roles_from_saved_username(
+                guild=guild,
+                member=member,
+                trigger="text_command",
+            )
+
+        self.assertTrue(success)
+        self.assertEqual(message, "Added: Role A | Removed: none")
+        cog._handle_hidden_profile_audit_state.assert_awaited_once_with(
+            guild=guild,
+            member=member,
+            habbo_username="Siren",
+            profile={"name": "Siren"},
+        )
+        cog._assign_roles_to_member_from_profile.assert_awaited_once_with(guild, member, {"name": "Siren"})
+        cog._send_role_change_embed_for_guild.assert_awaited_once_with(
+            guild=guild,
+            member=member,
+            added_role_names=["Role A"],
+            removed_role_names=[],
+        )
+        cog._send_error_embed.assert_not_awaited()
+
+    async def test_refresh_member_roles_from_saved_username_fails_when_no_verified_mapping_exists(self) -> None:
+        """Manual text refresh should stop cleanly when the member has no saved Habbo username."""
+
+        cog = HabboRoleUpdaterCog.__new__(HabboRoleUpdaterCog)
+        cog.verified_store = SimpleNamespace(get_habbo_username=lambda _discord_id: None)
+
+        success, message = await cog._refresh_member_roles_from_saved_username(
+            guild=SimpleNamespace(),
+            member=SimpleNamespace(id=999),
+            trigger="text_command",
+        )
+
+        self.assertFalse(success)
+        self.assertEqual(
+            message,
+            "That member does not have a saved verified Habbo username in `VerifiedUsers.json`.",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

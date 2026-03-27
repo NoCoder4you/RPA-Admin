@@ -20,7 +20,7 @@ class AutoRoleUpdater(commands.Cog):
         self.verified_users = self.load_server_data()
 
         self.guild_id = 1479383702499885109
-        self.log_channel_id = 1481456997726425168
+        self.log_channel_id = 1481456898346713208
 
         self.verified_role_id = 1481444119971627208
         self.awaiting_verification_role_id = 1481443898369900667

@@ -1,15 +1,19 @@
 import discord
 import aiohttp
 import json
-import os
+from pathlib import Path
 from discord.ext import commands, tasks
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+JSON_DIR = BASE_DIR / "JSON"
 
 
 class AutoRoleUpdater(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.roles_file_path = data_path("JSON/BadgesToRoles.json")
-        self.server_data_path = data_path("JSON/VerifiedUsers.json")
+        self.roles_file_path = JSON_DIR / "BadgesToRoles.json"
+        self.server_data_path = JSON_DIR / "VerifiedUsers.json"
 
         self.roles_data = self.load_roles_data()
         self.verified_users = self.load_server_data()

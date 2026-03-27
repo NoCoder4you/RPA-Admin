@@ -86,7 +86,7 @@ class EmbedMakerCog(commands.Cog):
 
     @staticmethod
     def _resolve_color(color_hex: str | None) -> discord.Color:
-        """Parse an optional hex color string, falling back to Discord red.
+        """Parse an optional hex colour string, falling back to Discord red.
 
         The command accepts values like `#ff0000` or `ff0000`. Invalid input is
         intentionally rejected by the caller so staff immediately know what to fix.

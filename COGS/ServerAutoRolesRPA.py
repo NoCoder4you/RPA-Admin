@@ -1,6 +1,7 @@
 import discord
 import aiohttp
 import json
+import os
 from pathlib import Path
 from discord.ext import commands, tasks
 

@@ -603,6 +603,7 @@ class RaffleCog(commands.Cog):
         user="Member to enter (ID, mention, Discord name, or verified Habbo username).",
         entries="How many entries to add for this member.",
     )
+    @app_commands.autocomplete(raffle_id=_raffle_id_autocomplete)
     async def raffle_add(
         self,
         interaction: discord.Interaction,
@@ -611,6 +612,13 @@ class RaffleCog(commands.Cog):
         entries: app_commands.Range[int, 1] = 1,
     ) -> None:
         if not await self._check_permissions(interaction):
+            return
+        if interaction.guild is None:
+            await self._respond_and_log(
+                interaction,
+                embed=self._build_embed("Server Only", "Raffles can only be managed inside a server.", color=discord.Color.red()),
+                ephemeral=True,
+            )
             return
         raffle = self._get_guild_raffle(interaction, raffle_id)
         if raffle is None:
@@ -712,6 +720,7 @@ class RaffleCog(commands.Cog):
         user="Member whose entries should be removed.",
         entries="How many entries to remove when multiple entries are allowed.",
     )
+    @app_commands.autocomplete(raffle_id=_raffle_id_autocomplete)
     async def raffle_remove(
         self,
         interaction: discord.Interaction,
@@ -753,6 +762,7 @@ class RaffleCog(commands.Cog):
 
     @raffle.command(name="entries", description="View entries for a raffle.")
     @app_commands.describe(raffle_id="The raffle ID to inspect.")
+    @app_commands.autocomplete(raffle_id=_raffle_id_autocomplete)
     async def raffle_entries(self, interaction: discord.Interaction, raffle_id: str) -> None:
         if not await self._check_permissions(interaction):
             return
@@ -790,6 +800,7 @@ class RaffleCog(commands.Cog):
         raffle_id="The raffle ID to draw from.",
         winners="How many winners to draw.",
     )
+    @app_commands.autocomplete(raffle_id=_raffle_id_autocomplete)
     async def raffle_draw(
         self,
         interaction: discord.Interaction,
@@ -876,6 +887,7 @@ class RaffleCog(commands.Cog):
 
     @raffle.command(name="end", description="Close a raffle so no more entries can be added.")
     @app_commands.describe(raffle_id="The raffle ID to close.")
+    @app_commands.autocomplete(raffle_id=_raffle_id_autocomplete)
     async def raffle_end(self, interaction: discord.Interaction, raffle_id: str) -> None:
         if not await self._check_permissions(interaction):
             return
@@ -913,7 +925,17 @@ class RaffleCog(commands.Cog):
             await self._respond_and_log(interaction, embed=embed, ephemeral=True, public_response=True, mirror_to_log=True)
             return
 
-        for raffle in sorted(active_raffles, key=lambda item: item["created_at"]):
+        sorted_active_raffles = sorted(active_raffles, key=lambda item: item["created_at"])
+
+        # Staff requested a dedicated raffle-ID list so moderators can quickly copy
+        # identifiers without scanning each full raffle details card.
+        embed.add_field(
+            name="Raffle IDs",
+            value=self._build_raffle_id_list_value(sorted_active_raffles),
+            inline=False,
+        )
+
+        for raffle in sorted_active_raffles:
             embed.add_field(
                 name="Raffle",
                 value=self._build_raffle_list_value(raffle),

@@ -12,7 +12,7 @@ from uuid import uuid4
 import discord
 from discord import app_commands
 from discord.ext import commands
-from habbo_verification_core import HabboApiError, VerifiedUserStore, fetch_habbo_profile
+from habbo_verification_core import HabboApiError, ServerConfigStore, VerifiedUserStore, fetch_habbo_profile
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_STORAGE_PATH = Path(__file__).resolve().parent.parent / "JSON" / "raffles.json"
@@ -31,6 +31,9 @@ class RaffleCog(commands.Cog):
         self._storage_lock = asyncio.Lock()
         self._raffles: dict[str, dict[str, Any]] = {}
         self.verified_store = VerifiedUserStore()
+        # Reuse the shared server configuration store so raffle audit notices
+        # land in the same staff audit-log channel used by other moderation cogs.
+        self.server_config_store = ServerConfigStore()
 
     async def cog_load(self) -> None:
         """Load persisted raffle data when the cog is added to the bot."""
@@ -133,7 +136,7 @@ class RaffleCog(commands.Cog):
                 continue
             entrants[user_id] = {"username": username, "entries": entry_count}
 
-        winners = [winner for winner in raffle_data["winners"] if isinstance(winner, int)]
+        winners = [str(winner) for winner in raffle_data["winners"] if isinstance(winner, (int, str))]
         normalized = dict(raffle_data)
         normalized["raffle_id"] = raffle_id
         normalized["entrants"] = entrants
@@ -303,6 +306,50 @@ class RaffleCog(commands.Cog):
             return None
         return raffle
 
+    @staticmethod
+    def _normalize_user_text(user_text: str) -> str:
+        """Normalize free-form user input into a stable non-empty label."""
+        clean_user_text = " ".join(user_text.strip().split())
+        return clean_user_text
+
+    @staticmethod
+    def _parse_discord_id_from_text(user_text: str) -> int | None:
+        """Extract a Discord user ID from raw ID text or mention syntax when possible."""
+        candidate_id_text = user_text.strip()
+        if candidate_id_text.startswith("<@") and candidate_id_text.endswith(">"):
+            candidate_id_text = candidate_id_text[2:-1].lstrip("!")
+        if not candidate_id_text.isdigit():
+            return None
+        return int(candidate_id_text)
+
+    def _find_verified_discord_id(self, user_text: str) -> int | None:
+        """Map free-form input to a verified Discord ID using VerifiedUsers.json."""
+        parsed_id = self._parse_discord_id_from_text(user_text)
+        if parsed_id is not None and self.verified_store.is_verified(str(parsed_id)):
+            return parsed_id
+
+        lowered_input = user_text.casefold()
+        for entry in self.verified_store.get_all_entries():
+            habbo_username = str(entry.get("habbo_username", "")).strip()
+            discord_id_text = str(entry.get("discord_id", "")).strip()
+            if not habbo_username or habbo_username.casefold() != lowered_input or not discord_id_text.isdigit():
+                continue
+            return int(discord_id_text)
+        return None
+
+    def _build_entrant_key(self, user_text: str, verified_discord_id: int | None) -> str:
+        """Build a stable entrant key that supports both verified IDs and free-text names."""
+        if verified_discord_id is not None:
+            return str(verified_discord_id)
+        return f"text:{user_text.casefold()}"
+
+    @staticmethod
+    def _display_entrant_label(entrant_key: str, entrant: dict[str, Any]) -> str:
+        """Format entrant labels without assuming every key maps to a Discord mention."""
+        if entrant_key.isdigit():
+            return f"<@{entrant_key}>"
+        return str(entrant.get("username", entrant_key))
+
     def _total_entries(self, raffle: dict[str, Any]) -> int:
         return sum(entrant["entries"] for entrant in raffle["entrants"].values())
 
@@ -322,18 +369,16 @@ class RaffleCog(commands.Cog):
             f"Multiple Entries: **{'Enabled' if raffle['allow_multiple_entries'] else 'Disabled'}**"
         )
 
-    def _build_weighted_pool(self, raffle: dict[str, Any]) -> list[int]:
-        weighted_entries: list[int] = []
+    def _build_weighted_pool(self, raffle: dict[str, Any]) -> list[str]:
+        weighted_entries: list[str] = []
         for user_id, entrant in raffle["entrants"].items():
-            weighted_entries.extend([int(user_id)] * entrant["entries"])
+            weighted_entries.extend([user_id] * entrant["entries"])
         return weighted_entries
 
-    def _pick_unique_weighted_winners(self, raffle: dict[str, Any], winner_count: int) -> list[int]:
+    def _pick_unique_weighted_winners(self, raffle: dict[str, Any], winner_count: int) -> list[str]:
         """Draw unique winners while preserving weighted odds from entry counts."""
-        remaining_entries = {
-            int(user_id): entrant["entries"] for user_id, entrant in raffle["entrants"].items() if entrant["entries"] > 0
-        }
-        winners: list[int] = []
+        remaining_entries = {user_id: entrant["entries"] for user_id, entrant in raffle["entrants"].items() if entrant["entries"] > 0}
+        winners: list[str] = []
 
         for _ in range(winner_count):
             pool: list[int] = []
@@ -348,7 +393,7 @@ class RaffleCog(commands.Cog):
 
     async def _send_entry_dm(
         self,
-        member: discord.Member,
+        member: discord.abc.User,
         *,
         raffle_name: str,
         guild_name: str,
@@ -376,6 +421,56 @@ class RaffleCog(commands.Cog):
         except discord.HTTPException:
             LOGGER.exception("Failed to DM raffle entry confirmation to %s", member.id)
             return False
+
+    async def _send_entry_audit_log(
+        self,
+        *,
+        interaction: discord.Interaction,
+        raffle: dict[str, Any],
+        entrant_label: str,
+        entrant_user: discord.abc.User | None,
+        entries_added: int,
+        user_total_entries: int,
+        is_verified_user: bool,
+        dm_sent: bool,
+    ) -> None:
+        """Post raffle entry DM handling details to the configured audit-log channel."""
+        guild = interaction.guild
+        if guild is None:
+            return
+
+        audit_channel_id = self.server_config_store.get_audit_channel_id()
+        if audit_channel_id is None:
+            return
+
+        audit_channel = guild.get_channel(audit_channel_id)
+        # Avoid hard-coding channel concrete types here: any guild channel with `send`
+        # support (text/news/thread-compatible wrappers in tests) is acceptable.
+        if audit_channel is None or not hasattr(audit_channel, "send"):
+            return
+
+        embed = discord.Embed(
+            title="Raffle Entry Audit",
+            color=discord.Color.blurple(),
+            timestamp=self._utcnow(),
+        )
+        embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
+        embed.add_field(name="Raffle Name", value=raffle["name"], inline=True)
+        embed.add_field(name="Entrant", value=entrant_user.mention if entrant_user is not None else entrant_label, inline=False)
+        embed.add_field(name="Added By", value=interaction.user.mention, inline=False)
+        embed.add_field(name="Entries Added", value=str(entries_added), inline=True)
+        embed.add_field(name="User Total Entries", value=str(user_total_entries), inline=True)
+        embed.add_field(name="Verified User", value="Yes" if is_verified_user else "No", inline=True)
+        if is_verified_user:
+            dm_status = "Sent" if dm_sent else "Failed"
+        else:
+            dm_status = "Skipped (not in VerifiedUsers.json)"
+        embed.add_field(name="Entry DM Status", value=dm_status, inline=False)
+
+        try:
+            await audit_channel.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            LOGGER.exception("Failed to send raffle entry audit log for raffle %s", raffle["raffle_id"])
 
     def _build_winner_embed(
         self,
@@ -505,14 +600,14 @@ class RaffleCog(commands.Cog):
     @raffle.command(name="add", description="Manually add a member to a raffle.")
     @app_commands.describe(
         raffle_id="The raffle ID returned when the raffle was created.",
-        user="Member to enter into the raffle.",
+        user="Member to enter (ID, mention, Discord name, or verified Habbo username).",
         entries="How many entries to add for this member.",
     )
     async def raffle_add(
         self,
         interaction: discord.Interaction,
         raffle_id: str,
-        user: discord.Member,
+        user: str,
         entries: app_commands.Range[int, 1] = 1,
     ) -> None:
         if not await self._check_permissions(interaction):
@@ -525,7 +620,22 @@ class RaffleCog(commands.Cog):
             await self._respond_and_log(interaction, embed=self._build_embed("Raffle Closed", "That raffle is no longer active.", color=discord.Color.red()), ephemeral=True, channel_id=raffle["log_channel_id"])
             return
 
-        user_key = str(user.id)
+        entrant_label = self._normalize_user_text(user)
+        if not entrant_label:
+            await self._respond_and_log(
+                interaction,
+                embed=self._build_embed(
+                    "User Not Found",
+                    "Provide a non-empty user label (Discord ID, mention, Habbo username, or plain text name).",
+                    color=discord.Color.orange(),
+                ),
+                ephemeral=True,
+                channel_id=raffle["log_channel_id"],
+            )
+            return
+
+        verified_discord_id = self._find_verified_discord_id(entrant_label)
+        user_key = self._build_entrant_key(entrant_label, verified_discord_id)
         existing_entry = raffle["entrants"].get(user_key)
         current_count = existing_entry["entries"] if existing_entry else 0
 
@@ -535,7 +645,7 @@ class RaffleCog(commands.Cog):
             if current_count >= 1:
                 await self._respond_and_log(
                     interaction,
-                    embed=self._build_embed("Entry Exists", f"{user.mention} already has their single allowed entry in this raffle.", color=discord.Color.orange()),
+                    embed=self._build_embed("Entry Exists", f"**{entrant_label}** already has their single allowed entry in this raffle.", color=discord.Color.orange()),
                     ephemeral=True,
                     channel_id=raffle["log_channel_id"],
                 )
@@ -543,31 +653,57 @@ class RaffleCog(commands.Cog):
             new_count = 1
 
         raffle["entrants"][user_key] = {
-            "username": str(user),
+            "username": entrant_label,
             "entries": new_count,
         }
         await self._save_raffles()
-        dm_sent = await self._send_entry_dm(
-            user,
-            raffle_name=raffle["name"],
-            guild_name=interaction.guild.name if interaction.guild else "Unknown Server",
-            added_by=interaction.user,
-            entry_count=new_count,
-        )
+        # Only DM players who are present in VerifiedUsers.json.
+        # Unverified free-text entrants are accepted but will not receive entry DMs.
+        is_verified_user = verified_discord_id is not None
+        dm_sent = False
+        entrant_user: discord.abc.User | None = None
+        if is_verified_user and verified_discord_id is not None:
+            entrant_user = self.bot.get_user(verified_discord_id)
+            if entrant_user is None:
+                try:
+                    entrant_user = await self.bot.fetch_user(verified_discord_id)
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    entrant_user = None
+
+        if entrant_user is not None:
+            dm_sent = await self._send_entry_dm(
+                entrant_user,
+                raffle_name=raffle["name"],
+                guild_name=interaction.guild.name if interaction.guild else "Unknown Server",
+                added_by=interaction.user,
+                entry_count=new_count,
+            )
 
         embed = self._build_embed(
             "Entry Added",
-            f"Added {entries if raffle['allow_multiple_entries'] else 1} entrie(s) for {user.mention} in **{raffle['name']}**.",
+            f"Added {entries if raffle['allow_multiple_entries'] else 1} entrie(s) for **{entrant_label}** in **{raffle['name']}**.",
             color=discord.Color.green(),
         )
         # Reuse the verified Habbo avatar on the staff-facing confirmation embed so
         # moderators can immediately identify which player the entry update belongs to.
-        thumbnail_url = self._get_habbo_thumbnail_url(user.id)
+        thumbnail_url = self._get_habbo_thumbnail_url(verified_discord_id) if verified_discord_id is not None else None
         if thumbnail_url:
             embed.set_thumbnail(url=thumbnail_url)
         embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
         embed.add_field(name="User Total Entries", value=str(new_count), inline=True)
-        embed.add_field(name="DM Status", value="Sent successfully" if dm_sent else "Entry added, but the DM could not be delivered.", inline=False)
+
+        # Keep the public/staff-facing raffle embed concise by removing DM status details.
+        # The delivery outcome is still captured in the dedicated audit-log channel.
+        await self._send_entry_audit_log(
+            interaction=interaction,
+            raffle=raffle,
+            entrant_label=entrant_label,
+            entrant_user=entrant_user,
+            entries_added=entries if raffle["allow_multiple_entries"] else 1,
+            user_total_entries=new_count,
+            is_verified_user=is_verified_user,
+            dm_sent=dm_sent if entrant_user is not None else False,
+        )
         await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True, mirror_to_log=True)
 
     @raffle.command(name="remove", description="Remove one or more entries from a raffle member.")
@@ -638,10 +774,9 @@ class RaffleCog(commands.Cog):
         if not raffle["entrants"]:
             embed.add_field(name="Entrants", value="No entries have been added yet.", inline=False)
         else:
-            entrant_lines = [
-                f"<@{user_id}> — **{entrant['entries']}** entrie(s)"
-                for user_id, entrant in sorted(raffle["entrants"].items(), key=lambda item: (-item[1]["entries"], item[1]["username"].lower()))
-            ]
+            entrant_lines = []
+            for user_id, entrant in sorted(raffle["entrants"].items(), key=lambda item: (-item[1]["entries"], item[1]["username"].lower())):
+                entrant_lines.append(f"{self._display_entrant_label(user_id, entrant)} — **{entrant['entries']}** entrie(s)")
             if len(entrant_lines) <= MAX_ENTRIES_DISPLAY:
                 embed.add_field(name="Entrants", value="\n".join(entrant_lines), inline=False)
             else:
@@ -696,8 +831,9 @@ class RaffleCog(commands.Cog):
         dm_successes = 0
         total_entries = self._total_entries(raffle)
         for placement, winner_id in enumerate(winner_ids, start=1):
-            winner_member = interaction.guild.get_member(winner_id) if interaction.guild else None
-            winner_mentions.append(winner_member.mention if winner_member else f"<@{winner_id}>")
+            winner_entry = raffle["entrants"].get(winner_id, {})
+            winner_member = interaction.guild.get_member(int(winner_id)) if interaction.guild and winner_id.isdigit() else None
+            winner_mentions.append(winner_member.mention if winner_member else self._display_entrant_label(winner_id, winner_entry))
             if winner_member is None:
                 continue
 

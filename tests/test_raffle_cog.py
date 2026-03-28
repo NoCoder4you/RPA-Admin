@@ -24,9 +24,20 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         self.storage_path = Path(self.tempdir.name) / "raffles.json"
         self.bot = MagicMock()
         self.cog = RaffleCog(self.bot, storage_path=self.storage_path)
+        self.cog.server_config_store = SimpleNamespace(get_audit_channel_id=lambda: None)
 
     def tearDown(self) -> None:
         self.tempdir.cleanup()
+
+    @staticmethod
+    def _member(member_id: int) -> SimpleNamespace:
+        """Build a lightweight member-like object with a stable display string for embeds."""
+
+        class DummyMember(SimpleNamespace):
+            def __str__(self) -> str:
+                return "Player#0001"
+
+        return DummyMember(id=member_id, mention=f"<@{member_id}>", send=AsyncMock())
 
     async def test_load_creates_storage_file_when_missing(self) -> None:
         await self.cog._load_raffles()
@@ -54,16 +65,22 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         }
         member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
         response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        member = self._member(55)
+        guild = SimpleNamespace(
+            id=999,
+            name="Guild",
+            members=[member],
+            get_member=lambda member_id: member if member_id == 55 else None,
+        )
         interaction = SimpleNamespace(
-            guild=SimpleNamespace(id=999, name="Guild"),
+            guild=guild,
             channel=SimpleNamespace(id=111, mention="#general"),
             user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
-        member = SimpleNamespace(id=55, mention="<@55>")
 
-        await self.cog.raffle_add.callback(self.cog, interaction, "ABC12345", member, 1)
+        await self.cog.raffle_add.callback(self.cog, interaction, "ABC12345", "55", 1)
 
         embed = response.send_message.await_args.kwargs["embed"]
         self.assertEqual(embed.title, "Entry Exists")
@@ -88,20 +105,223 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         }
         member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
         response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        member = self._member(55)
+        member.send = AsyncMock(side_effect=discord.Forbidden(MagicMock(), "closed"))
+        guild = SimpleNamespace(
+            id=999,
+            name="Guild",
+            members=[member],
+            get_member=lambda member_id: member if member_id == 55 else None,
+        )
         interaction = SimpleNamespace(
-            guild=SimpleNamespace(id=999, name="Guild"),
+            guild=guild,
             channel=SimpleNamespace(id=111, mention="#general"),
             user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
-        member = SimpleNamespace(id=55, mention="<@55>", send=AsyncMock(side_effect=discord.Forbidden(MagicMock(), "closed")))
 
-        await self.cog.raffle_add.callback(self.cog, interaction, "ABC12345", member, 3)
+        await self.cog.raffle_add.callback(self.cog, interaction, "ABC12345", "55", 3)
 
         self.assertEqual(self.cog._raffles["ABC12345"]["entrants"]["55"]["entries"], 4)
         embed = response.send_message.await_args.kwargs["embed"]
-        self.assertIn("could not be delivered", embed.fields[2].value)
+        self.assertNotIn("<@55>", embed.description)
+        self.assertEqual(embed.fields[0].name, "Raffle ID")
+        self.assertEqual(embed.fields[1].name, "User Total Entries")
+
+    async def test_add_skips_dm_for_unverified_user(self) -> None:
+        self.cog._raffles = {
+            "ABC12345": {
+                "raffle_id": "ABC12345",
+                "name": "Spring Event",
+                "description": None,
+                "guild_id": 999,
+                "channel_id": 111,
+                "created_by": 10,
+                "created_at": "2026-03-23T00:00:00+00:00",
+                "active": True,
+                "allow_multiple_entries": True,
+                "entrants": {},
+                "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
+            }
+        }
+        member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        member = self._member(55)
+        guild = SimpleNamespace(
+            id=999,
+            name="Guild",
+            members=[member],
+            get_member=lambda member_id: member if member_id == 55 else None,
+        )
+        interaction = SimpleNamespace(
+            guild=guild,
+            channel=SimpleNamespace(id=111, mention="#general"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            response=response,
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        self.cog.verified_store = SimpleNamespace(
+            is_verified=lambda discord_id: False,
+            get_habbo_username=lambda discord_id: None,
+            get_all_entries=lambda: [],
+        )
+
+        with patch.object(self.cog, "_send_entry_dm", AsyncMock(return_value=True)) as mock_dm:
+            await self.cog.raffle_add.callback(self.cog, interaction, "ABC12345", "55", 1)
+
+        mock_dm.assert_not_awaited()
+        embed = response.send_message.await_args.kwargs["embed"]
+        self.assertNotIn("<@55>", embed.description)
+        self.assertEqual(len(embed.fields), 2)
+
+    async def test_add_attempts_dm_for_verified_user(self) -> None:
+        self.cog._raffles = {
+            "ABC12345": {
+                "raffle_id": "ABC12345",
+                "name": "Spring Event",
+                "description": None,
+                "guild_id": 999,
+                "channel_id": 111,
+                "created_by": 10,
+                "created_at": "2026-03-23T00:00:00+00:00",
+                "active": True,
+                "allow_multiple_entries": True,
+                "entrants": {},
+                "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
+            }
+        }
+        member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        member = self._member(55)
+        guild = SimpleNamespace(
+            id=999,
+            name="Guild",
+            members=[member],
+            get_member=lambda member_id: member if member_id == 55 else None,
+        )
+        interaction = SimpleNamespace(
+            guild=guild,
+            channel=SimpleNamespace(id=111, mention="#general"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            response=response,
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        self.cog.verified_store = SimpleNamespace(
+            is_verified=lambda discord_id: True,
+            get_habbo_username=lambda discord_id: None,
+            get_all_entries=lambda: [],
+        )
+
+        with patch.object(self.cog, "_send_entry_dm", AsyncMock(return_value=True)) as mock_dm:
+            await self.cog.raffle_add.callback(self.cog, interaction, "ABC12345", "55", 2)
+
+        mock_dm.assert_awaited_once()
+        embed = response.send_message.await_args.kwargs["embed"]
+        self.assertNotIn("<@55>", embed.description)
+        self.assertEqual(len(embed.fields), 2)
+
+    async def test_add_resolves_member_from_plain_text_name(self) -> None:
+        self.cog._raffles = {
+            "ABC12345": {
+                "raffle_id": "ABC12345",
+                "name": "Spring Event",
+                "description": None,
+                "guild_id": 999,
+                "channel_id": 111,
+                "created_by": 10,
+                "created_at": "2026-03-23T00:00:00+00:00",
+                "active": True,
+                "allow_multiple_entries": True,
+                "entrants": {},
+                "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
+            }
+        }
+        member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        member = self._member(55)
+        member.display_name = "PlayerOne"
+        member.name = "PlayerOne"
+        member.global_name = "PlayerOne"
+        guild = SimpleNamespace(
+            id=999,
+            name="Guild",
+            members=[member],
+            get_member=lambda member_id: member if member_id == 55 else None,
+        )
+        interaction = SimpleNamespace(
+            guild=guild,
+            channel=SimpleNamespace(id=111, mention="#general"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            response=response,
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        self.cog.verified_store = SimpleNamespace(
+            is_verified=lambda discord_id: True,
+            get_habbo_username=lambda discord_id: None,
+            get_all_entries=lambda: [],
+        )
+
+        await self.cog.raffle_add.callback(self.cog, interaction, "ABC12345", "PlayerOne", 1)
+
+        self.assertIn("55", self.cog._raffles["ABC12345"]["entrants"])
+
+    async def test_add_logs_dm_outcome_to_audit_channel(self) -> None:
+        self.cog._raffles = {
+            "ABC12345": {
+                "raffle_id": "ABC12345",
+                "name": "Spring Event",
+                "description": None,
+                "guild_id": 999,
+                "channel_id": 111,
+                "created_by": 10,
+                "created_at": "2026-03-23T00:00:00+00:00",
+                "active": True,
+                "allow_multiple_entries": True,
+                "entrants": {},
+                "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
+            }
+        }
+        member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        member = self._member(55)
+        audit_channel = MagicMock(spec=discord.TextChannel)
+        audit_channel.send = AsyncMock()
+        guild = SimpleNamespace(
+            id=999,
+            name="Guild",
+            members=[member],
+            get_channel=lambda channel_id: audit_channel if channel_id == 777 else None,
+            get_member=lambda member_id: member if member_id == 55 else None,
+        )
+        interaction = SimpleNamespace(
+            guild=guild,
+            channel=SimpleNamespace(id=111, mention="#general"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            response=response,
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        self.cog.verified_store = SimpleNamespace(
+            is_verified=lambda discord_id: False,
+            get_habbo_username=lambda discord_id: None,
+            get_all_entries=lambda: [],
+        )
+        self.cog.server_config_store = SimpleNamespace(get_audit_channel_id=lambda: 777)
+
+        await self.cog.raffle_add.callback(self.cog, interaction, "ABC12345", "55", 1)
+
+        audit_channel.send.assert_awaited_once()
+        audit_embed = audit_channel.send.await_args.kwargs["embed"]
+        audit_fields = {field.name: field.value for field in audit_embed.fields}
+        self.assertEqual(audit_fields["Entry DM Status"], "Skipped (not in VerifiedUsers.json)")
 
     async def test_add_uses_verified_habbo_thumbnail_on_staff_embed(self) -> None:
         self.cog._raffles = {
@@ -123,18 +343,28 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         }
         member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
         response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        member = self._member(55)
+        guild = SimpleNamespace(
+            id=999,
+            name="Guild",
+            members=[member],
+            get_member=lambda member_id: member if member_id == 55 else None,
+        )
         interaction = SimpleNamespace(
-            guild=SimpleNamespace(id=999, name="Guild"),
+            guild=guild,
             channel=SimpleNamespace(id=111, mention="#general"),
             user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
-        member = SimpleNamespace(id=55, mention="<@55>", send=AsyncMock())
-        self.cog.verified_store = SimpleNamespace(get_habbo_username=lambda discord_id: "Siren" if discord_id == "55" else None)
+        self.cog.verified_store = SimpleNamespace(
+            is_verified=lambda discord_id: True,
+            get_habbo_username=lambda discord_id: "Siren" if discord_id == "55" else None,
+            get_all_entries=lambda: [],
+        )
 
         with patch("COGS.raffle.fetch_habbo_profile", return_value={"figureString": "hr-1-1"}) as mock_fetch:
-            await self.cog.raffle_add.callback(self.cog, interaction, "ABC12345", member, 2)
+            await self.cog.raffle_add.callback(self.cog, interaction, "ABC12345", "55", 2)
 
         mock_fetch.assert_called_once_with("Siren")
         embed = response.send_message.await_args.kwargs["embed"]
@@ -164,18 +394,24 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
     async def test_raffle_not_found_does_not_mirror_to_raffle_channel(self) -> None:
         member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
         response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        member = self._member(55)
+        guild = SimpleNamespace(
+            id=999,
+            name="Guild",
+            members=[member],
+            get_member=lambda member_id: member if member_id == 55 else None,
+        )
         interaction = SimpleNamespace(
-            guild=SimpleNamespace(id=999, name="Guild"),
+            guild=guild,
             channel=SimpleNamespace(id=111, mention="#general"),
             user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
-        member = SimpleNamespace(id=55, mention="<@55>", send=AsyncMock())
         log_channel = SimpleNamespace(send=AsyncMock())
         self.bot.get_channel.return_value = log_channel
 
-        await self.cog.raffle_add.callback(self.cog, interaction, "MISSING", member, 1)
+        await self.cog.raffle_add.callback(self.cog, interaction, "MISSING", "55", 1)
 
         embed = response.send_message.await_args.kwargs["embed"]
         self.assertEqual(embed.title, "Raffle Not Found")
@@ -201,18 +437,24 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         }
         member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
         response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        member = self._member(55)
+        guild = SimpleNamespace(
+            id=999,
+            name="Guild",
+            members=[member],
+            get_member=lambda member_id: member if member_id == 55 else None,
+        )
         interaction = SimpleNamespace(
-            guild=SimpleNamespace(id=999, name="Guild"),
+            guild=guild,
             channel=SimpleNamespace(id=111, mention="#general"),
             user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
-        member = SimpleNamespace(id=55, mention="<@55>", send=AsyncMock())
         log_channel = SimpleNamespace(send=AsyncMock())
         self.bot.get_channel.return_value = log_channel
 
-        await self.cog.raffle_add.callback(self.cog, interaction, "ABC12345", member, 2)
+        await self.cog.raffle_add.callback(self.cog, interaction, "ABC12345", "55", 2)
 
         log_channel.send.assert_awaited_once()
 

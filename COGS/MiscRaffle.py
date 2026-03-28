@@ -816,7 +816,7 @@ class RaffleCog(commands.Cog):
     @raffle.command(name="remove", description="Remove one or more entries from a raffle member.")
     @app_commands.describe(
         raffle_id="The raffle ID to edit.",
-        user="Member whose entries should be removed.",
+        user="Member to remove (ID, mention, Discord name, or verified Habbo username).",
         entries="How many entries to remove when multiple entries are allowed.",
     )
     @app_commands.autocomplete(raffle_id=raffle_id_autocomplete)
@@ -824,20 +824,61 @@ class RaffleCog(commands.Cog):
         self,
         interaction: discord.Interaction,
         raffle_id: str,
-        user: discord.Member,
+        user: str,
         entries: app_commands.Range[int, 1] = 1,
     ) -> None:
         if not await self._check_permissions(interaction):
+            return
+        if interaction.guild is None:
+            await self._respond_and_log(
+                interaction,
+                embed=self._build_embed("Server Only", "Raffles can only be managed inside a server.", color=discord.Color.red()),
+                ephemeral=True,
+            )
             return
         raffle = self._get_guild_raffle(interaction, raffle_id)
         if raffle is None:
             await self._respond_and_log(interaction, embed=self._build_embed("Raffle Not Found", "That raffle ID does not exist in this server.", color=discord.Color.red()), ephemeral=True)
             return
+        if not raffle["active"]:
+            await self._respond_and_log(interaction, embed=self._build_embed("Raffle Closed", "That raffle is no longer active.", color=discord.Color.red()), ephemeral=True, channel_id=raffle["log_channel_id"])
+            return
 
-        user_key = str(user.id)
+        entrant_label = self._normalize_user_text(user)
+        if not entrant_label:
+            await self._respond_and_log(
+                interaction,
+                embed=self._build_embed(
+                    "User Not Found",
+                    "Provide a non-empty user label (Discord ID, mention, Habbo username, or plain text name).",
+                    color=discord.Color.orange(),
+                ),
+                ephemeral=True,
+                channel_id=raffle["log_channel_id"],
+            )
+            return
+
+        verified_discord_id = self._find_verified_discord_id(entrant_label)
+        user_key = self._build_entrant_key(entrant_label, verified_discord_id)
         entrant = raffle["entrants"].get(user_key)
+        # Keep legacy numeric-ID entries removable for staff even if they were
+        # stored before free-text entrant keys were introduced.
+        if entrant is None and verified_discord_id is None:
+            parsed_discord_id = self._parse_discord_id_from_text(entrant_label)
+            if parsed_discord_id is not None:
+                user_key = str(parsed_discord_id)
+                entrant = raffle["entrants"].get(user_key)
         if entrant is None:
-            await self._respond_and_log(interaction, embed=self._build_embed("User Not Entered", f"{user.mention} does not have any entries in this raffle.", color=discord.Color.orange()), ephemeral=True, channel_id=raffle["log_channel_id"])
+            await self._respond_and_log(
+                interaction,
+                embed=self._build_embed(
+                    "User Not Entered",
+                    f"**{entrant_label}** does not have any entries in this raffle.",
+                    color=discord.Color.orange(),
+                ),
+                ephemeral=True,
+                channel_id=raffle["log_channel_id"],
+            )
             return
 
         removed_entries = entrant["entries"] if not raffle["allow_multiple_entries"] else min(entries, entrant["entries"])
@@ -847,16 +888,16 @@ class RaffleCog(commands.Cog):
             remaining_entries = 0
         else:
             entrant["entries"] = remaining_entries
-            entrant["username"] = str(user)
+            entrant["username"] = entrant_label
 
         await self._save_raffles()
         embed = self._build_embed(
             "Entries Removed",
-            f"Removed {removed_entries} entrie(s) from {user.mention} in **{raffle['name']}**.",
+            f"Removed {removed_entries} entrie(s) for **{entrant_label}** in **{raffle['name']}**.",
             color=discord.Color.green(),
         )
-        embed.add_field(name="Remaining Entries", value=str(remaining_entries), inline=True)
-        embed.add_field(name="Total Raffle Entries", value=str(self._total_entries(raffle)), inline=True)
+        embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
+        embed.add_field(name="User Total Entries", value=str(remaining_entries), inline=True)
         await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True, mirror_to_log=True)
 
     @raffle.command(name="entries", description="View entries for a raffle.")

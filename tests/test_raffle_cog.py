@@ -504,6 +504,117 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
 
         log_channel.send.assert_awaited_once()
 
+    async def test_remove_accepts_plain_text_user_label_for_external_entrant(self) -> None:
+        self.cog._raffles = {
+            "ABC12345": {
+                "raffle_id": "ABC12345",
+                "name": "Spring Event",
+                "description": None,
+                "guild_id": 999,
+                "channel_id": 111,
+                "created_by": 10,
+                "created_at": "2026-03-23T00:00:00+00:00",
+                "active": True,
+                "allow_multiple_entries": True,
+                "entrants": {"text:external player": {"username": "External Player", "entries": 3}},
+                "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
+            }
+        }
+        member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        interaction = SimpleNamespace(
+            guild=SimpleNamespace(id=999, name="Guild"),
+            channel=SimpleNamespace(id=111, mention="#general"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            response=response,
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        self.cog.verified_store = SimpleNamespace(
+            is_verified=lambda discord_id: False,
+            get_habbo_username=lambda discord_id: None,
+            get_all_entries=lambda: [],
+        )
+
+        await self.cog.raffle_remove.callback(self.cog, interaction, "ABC12345", "External Player", 2)
+
+        self.assertEqual(self.cog._raffles["ABC12345"]["entrants"]["text:external player"]["entries"], 1)
+        embed = response.send_message.await_args.kwargs["embed"]
+        self.assertEqual(embed.title, "Entries Removed")
+        self.assertEqual(embed.fields[0].name, "Raffle ID")
+        self.assertEqual(embed.fields[1].name, "User Total Entries")
+
+    async def test_remove_rejects_empty_user_text(self) -> None:
+        self.cog._raffles = {
+            "ABC12345": {
+                "raffle_id": "ABC12345",
+                "name": "Spring Event",
+                "description": None,
+                "guild_id": 999,
+                "channel_id": 111,
+                "created_by": 10,
+                "created_at": "2026-03-23T00:00:00+00:00",
+                "active": True,
+                "allow_multiple_entries": True,
+                "entrants": {},
+                "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
+            }
+        }
+        member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        interaction = SimpleNamespace(
+            guild=SimpleNamespace(id=999, name="Guild"),
+            channel=SimpleNamespace(id=111, mention="#general"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            response=response,
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+
+        await self.cog.raffle_remove.callback(self.cog, interaction, "ABC12345", "   ", 1)
+
+        embed = response.send_message.await_args.kwargs["embed"]
+        self.assertEqual(embed.title, "User Not Found")
+
+    async def test_remove_finds_legacy_numeric_key_when_user_id_is_unverified(self) -> None:
+        self.cog._raffles = {
+            "ABC12345": {
+                "raffle_id": "ABC12345",
+                "name": "Spring Event",
+                "description": None,
+                "guild_id": 999,
+                "channel_id": 111,
+                "created_by": 10,
+                "created_at": "2026-03-23T00:00:00+00:00",
+                "active": True,
+                "allow_multiple_entries": True,
+                "entrants": {"55": {"username": "Player#0001", "entries": 2}},
+                "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
+            }
+        }
+        member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        interaction = SimpleNamespace(
+            guild=SimpleNamespace(id=999, name="Guild"),
+            channel=SimpleNamespace(id=111, mention="#general"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            response=response,
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        self.cog.verified_store = SimpleNamespace(
+            is_verified=lambda discord_id: False,
+            get_habbo_username=lambda discord_id: None,
+            get_all_entries=lambda: [],
+        )
+
+        await self.cog.raffle_remove.callback(self.cog, interaction, "ABC12345", "55", 1)
+
+        self.assertEqual(self.cog._raffles["ABC12345"]["entrants"]["55"]["entries"], 1)
+
     async def test_list_avoids_same_channel_duplicate_when_public_response_is_used(self) -> None:
         self.cog._raffles = {
             "ABC12345": {

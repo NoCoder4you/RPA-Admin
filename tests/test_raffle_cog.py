@@ -524,11 +524,63 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         await self.cog.raffle_list.callback(self.cog, interaction)
 
         embed = response.send_message.await_args.kwargs["embed"]
-        self.assertEqual(embed.fields[0].name, "Raffle")
-        self.assertIn("**ID**", embed.fields[0].value)
+        self.assertEqual(embed.fields[0].name, "Raffle IDs")
         self.assertIn("`ABC12345`", embed.fields[0].value)
-        self.assertIn("**Raffle Name**", embed.fields[0].value)
-        self.assertIn("Spring Event", embed.fields[0].value)
+        self.assertEqual(embed.fields[1].name, "Raffle")
+        self.assertIn("**ID**", embed.fields[1].value)
+        self.assertIn("`ABC12345`", embed.fields[1].value)
+        self.assertIn("**Raffle Name**", embed.fields[1].value)
+        self.assertIn("Spring Event", embed.fields[1].value)
+
+    async def test_list_includes_all_active_raffle_ids_in_single_field(self) -> None:
+        self.cog._raffles = {
+            "ABC12345": {
+                "raffle_id": "ABC12345",
+                "name": "Spring Event",
+                "description": None,
+                "guild_id": 999,
+                "channel_id": 111,
+                "created_by": 10,
+                "created_at": "2026-03-23T00:00:00+00:00",
+                "active": True,
+                "allow_multiple_entries": True,
+                "entrants": {"55": {"username": "Player#0001", "entries": 2}},
+                "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
+            },
+            "DEF67890": {
+                "raffle_id": "DEF67890",
+                "name": "Summer Event",
+                "description": None,
+                "guild_id": 999,
+                "channel_id": 111,
+                "created_by": 10,
+                "created_at": "2026-03-24T00:00:00+00:00",
+                "active": True,
+                "allow_multiple_entries": False,
+                "entrants": {"77": {"username": "Player#0002", "entries": 1}},
+                "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
+            },
+        }
+        member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        interaction = SimpleNamespace(
+            guild=SimpleNamespace(id=999, name="Guild"),
+            channel=SimpleNamespace(id=111, mention="#general"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            response=response,
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+
+        await self.cog.raffle_list.callback(self.cog, interaction)
+
+        embed = response.send_message.await_args.kwargs["embed"]
+        self.assertEqual(embed.fields[0].name, "Raffle IDs")
+        self.assertIn("• `ABC12345`", embed.fields[0].value)
+        self.assertIn("• `DEF67890`", embed.fields[0].value)
 
     async def test_draw_auto_closes_raffle_and_dms_each_winner(self) -> None:
         self.cog._raffles = {

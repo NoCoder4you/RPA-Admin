@@ -12,7 +12,7 @@ from uuid import uuid4
 import discord
 from discord import app_commands
 from discord.ext import commands
-from habbo_verification_core import HabboApiError, VerifiedUserStore, fetch_habbo_profile
+from habbo_verification_core import HabboApiError, ServerConfigStore, VerifiedUserStore, fetch_habbo_profile
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_STORAGE_PATH = Path(__file__).resolve().parent.parent / "JSON" / "raffles.json"
@@ -31,6 +31,9 @@ class RaffleCog(commands.Cog):
         self._storage_lock = asyncio.Lock()
         self._raffles: dict[str, dict[str, Any]] = {}
         self.verified_store = VerifiedUserStore()
+        # Reuse the shared server configuration store so raffle audit notices
+        # land in the same staff audit-log channel used by other moderation cogs.
+        self.server_config_store = ServerConfigStore()
 
     async def cog_load(self) -> None:
         """Load persisted raffle data when the cog is added to the bot."""
@@ -377,6 +380,55 @@ class RaffleCog(commands.Cog):
             LOGGER.exception("Failed to DM raffle entry confirmation to %s", member.id)
             return False
 
+    async def _send_entry_audit_log(
+        self,
+        *,
+        interaction: discord.Interaction,
+        raffle: dict[str, Any],
+        member: discord.Member,
+        entries_added: int,
+        user_total_entries: int,
+        is_verified_user: bool,
+        dm_sent: bool,
+    ) -> None:
+        """Post raffle entry DM handling details to the configured audit-log channel."""
+        guild = interaction.guild
+        if guild is None:
+            return
+
+        audit_channel_id = self.server_config_store.get_audit_channel_id()
+        if audit_channel_id is None:
+            return
+
+        audit_channel = guild.get_channel(audit_channel_id)
+        # Avoid hard-coding channel concrete types here: any guild channel with `send`
+        # support (text/news/thread-compatible wrappers in tests) is acceptable.
+        if audit_channel is None or not hasattr(audit_channel, "send"):
+            return
+
+        embed = discord.Embed(
+            title="Raffle Entry Audit",
+            color=discord.Color.blurple(),
+            timestamp=self._utcnow(),
+        )
+        embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
+        embed.add_field(name="Raffle Name", value=raffle["name"], inline=True)
+        embed.add_field(name="Member", value=member.mention, inline=False)
+        embed.add_field(name="Added By", value=interaction.user.mention, inline=False)
+        embed.add_field(name="Entries Added", value=str(entries_added), inline=True)
+        embed.add_field(name="User Total Entries", value=str(user_total_entries), inline=True)
+        embed.add_field(name="Verified User", value="Yes" if is_verified_user else "No", inline=True)
+        if is_verified_user:
+            dm_status = "Sent" if dm_sent else "Failed"
+        else:
+            dm_status = "Skipped (not in VerifiedUsers.json)"
+        embed.add_field(name="Entry DM Status", value=dm_status, inline=False)
+
+        try:
+            await audit_channel.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            LOGGER.exception("Failed to send raffle entry audit log for raffle %s", raffle["raffle_id"])
+
     def _build_winner_embed(
         self,
         member: discord.abc.User,
@@ -547,17 +599,22 @@ class RaffleCog(commands.Cog):
             "entries": new_count,
         }
         await self._save_raffles()
-        dm_sent = await self._send_entry_dm(
-            user,
-            raffle_name=raffle["name"],
-            guild_name=interaction.guild.name if interaction.guild else "Unknown Server",
-            added_by=interaction.user,
-            entry_count=new_count,
-        )
+        # Only DM players who are present in VerifiedUsers.json.
+        # Staff requested that unverified players should still be entered, but not pinged in DMs.
+        is_verified_user = self.verified_store.is_verified(user_key)
+        dm_sent = False
+        if is_verified_user:
+            dm_sent = await self._send_entry_dm(
+                user,
+                raffle_name=raffle["name"],
+                guild_name=interaction.guild.name if interaction.guild else "Unknown Server",
+                added_by=interaction.user,
+                entry_count=new_count,
+            )
 
         embed = self._build_embed(
             "Entry Added",
-            f"Added {entries if raffle['allow_multiple_entries'] else 1} entrie(s) for {user.mention} in **{raffle['name']}**.",
+            f"Added {entries if raffle['allow_multiple_entries'] else 1} entrie(s) for **{user}** in **{raffle['name']}**.",
             color=discord.Color.green(),
         )
         # Reuse the verified Habbo avatar on the staff-facing confirmation embed so
@@ -567,7 +624,18 @@ class RaffleCog(commands.Cog):
             embed.set_thumbnail(url=thumbnail_url)
         embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
         embed.add_field(name="User Total Entries", value=str(new_count), inline=True)
-        embed.add_field(name="DM Status", value="Sent successfully" if dm_sent else "Entry added, but the DM could not be delivered.", inline=False)
+
+        # Keep the public/staff-facing raffle embed concise by removing DM status details.
+        # The delivery outcome is still captured in the dedicated audit-log channel.
+        await self._send_entry_audit_log(
+            interaction=interaction,
+            raffle=raffle,
+            member=user,
+            entries_added=entries if raffle["allow_multiple_entries"] else 1,
+            user_total_entries=new_count,
+            is_verified_user=is_verified_user,
+            dm_sent=dm_sent,
+        )
         await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True, mirror_to_log=True)
 
     @raffle.command(name="remove", description="Remove one or more entries from a raffle member.")

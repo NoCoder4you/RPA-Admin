@@ -180,7 +180,7 @@ class RaffleCog(commands.Cog):
                 continue
             entrants[user_id] = {"username": username, "entries": entry_count}
 
-        winners = [winner for winner in raffle_data["winners"] if isinstance(winner, int)]
+        winners = [str(winner) for winner in raffle_data["winners"] if isinstance(winner, (int, str))]
         normalized = dict(raffle_data)
         normalized["raffle_id"] = raffle_id
         normalized["entrants"] = entrants
@@ -350,52 +350,49 @@ class RaffleCog(commands.Cog):
             return None
         return raffle
 
-    def _resolve_member_from_text(self, guild: discord.Guild, user_text: str) -> discord.Member | None:
-        """Resolve a raffle target member from plain-text input.
+    @staticmethod
+    def _normalize_user_text(user_text: str) -> str:
+        """Normalize free-form user input into a stable non-empty label."""
+        clean_user_text = " ".join(user_text.strip().split())
+        return clean_user_text
 
-        Supported inputs:
-        - Raw Discord mention (`<@123...>` / `<@!123...>`)
-        - Raw Discord user ID
-        - Exact username/display name/global name (case-insensitive)
-        - Verified Habbo username from VerifiedUsers.json (case-insensitive)
-        """
-        clean_user_text = user_text.strip()
-        if not clean_user_text:
-            return None
-
-        # Fast path: mention or numeric ID.
-        candidate_id_text = clean_user_text
+    @staticmethod
+    def _parse_discord_id_from_text(user_text: str) -> int | None:
+        """Extract a Discord user ID from raw ID text or mention syntax when possible."""
+        candidate_id_text = user_text.strip()
         if candidate_id_text.startswith("<@") and candidate_id_text.endswith(">"):
             candidate_id_text = candidate_id_text[2:-1].lstrip("!")
-        if candidate_id_text.isdigit():
-            member = guild.get_member(int(candidate_id_text))
-            if member is not None:
-                return member
+        if not candidate_id_text.isdigit():
+            return None
+        return int(candidate_id_text)
 
-        lowered_input = clean_user_text.casefold()
+    def _find_verified_discord_id(self, user_text: str) -> int | None:
+        """Map free-form input to a verified Discord ID using VerifiedUsers.json."""
+        parsed_id = self._parse_discord_id_from_text(user_text)
+        if parsed_id is not None and self.verified_store.is_verified(str(parsed_id)):
+            return parsed_id
 
-        # Resolve by visible Discord names.
-        for member in guild.members:
-            candidate_names = {
-                str(member).casefold(),
-                getattr(member, "display_name", "").casefold(),
-                (getattr(member, "name", None) or "").casefold(),
-                (getattr(member, "global_name", None) or "").casefold(),
-            }
-            if lowered_input in candidate_names:
-                return member
-
-        # Resolve by verified Habbo username mapping.
+        lowered_input = user_text.casefold()
         for entry in self.verified_store.get_all_entries():
             habbo_username = str(entry.get("habbo_username", "")).strip()
             discord_id_text = str(entry.get("discord_id", "")).strip()
             if not habbo_username or habbo_username.casefold() != lowered_input or not discord_id_text.isdigit():
                 continue
-            member = guild.get_member(int(discord_id_text))
-            if member is not None:
-                return member
-
+            return int(discord_id_text)
         return None
+
+    def _build_entrant_key(self, user_text: str, verified_discord_id: int | None) -> str:
+        """Build a stable entrant key that supports both verified IDs and free-text names."""
+        if verified_discord_id is not None:
+            return str(verified_discord_id)
+        return f"text:{user_text.casefold()}"
+
+    @staticmethod
+    def _display_entrant_label(entrant_key: str, entrant: dict[str, Any]) -> str:
+        """Format entrant labels without assuming every key maps to a Discord mention."""
+        if entrant_key.isdigit():
+            return f"<@{entrant_key}>"
+        return str(entrant.get("username", entrant_key))
 
     def _total_entries(self, raffle: dict[str, Any]) -> int:
         return sum(entrant["entries"] for entrant in raffle["entrants"].values())
@@ -424,15 +421,13 @@ class RaffleCog(commands.Cog):
     def _build_weighted_pool(self, raffle: dict[str, Any]) -> list[int]:
         weighted_entries: list[int] = []
         for user_id, entrant in raffle["entrants"].items():
-            weighted_entries.extend([int(user_id)] * entrant["entries"])
+            weighted_entries.extend([user_id] * entrant["entries"])
         return weighted_entries
 
-    def _pick_unique_weighted_winners(self, raffle: dict[str, Any], winner_count: int) -> list[int]:
+    def _pick_unique_weighted_winners(self, raffle: dict[str, Any], winner_count: int) -> list[str]:
         """Draw unique winners while preserving weighted odds from entry counts."""
-        remaining_entries = {
-            int(user_id): entrant["entries"] for user_id, entrant in raffle["entrants"].items() if entrant["entries"] > 0
-        }
-        winners: list[int] = []
+        remaining_entries = {user_id: entrant["entries"] for user_id, entrant in raffle["entrants"].items() if entrant["entries"] > 0}
+        winners: list[str] = []
 
         for _ in range(winner_count):
             pool: list[int] = []
@@ -447,7 +442,7 @@ class RaffleCog(commands.Cog):
 
     async def _send_entry_dm(
         self,
-        member: discord.Member,
+        member: discord.abc.User,
         *,
         raffle_name: str,
         guild_name: str,
@@ -481,7 +476,8 @@ class RaffleCog(commands.Cog):
         *,
         interaction: discord.Interaction,
         raffle: dict[str, Any],
-        member: discord.Member,
+        entrant_label: str,
+        entrant_user: discord.abc.User | None,
         entries_added: int,
         user_total_entries: int,
         is_verified_user: bool,
@@ -509,7 +505,7 @@ class RaffleCog(commands.Cog):
         )
         embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
         embed.add_field(name="Raffle Name", value=raffle["name"], inline=True)
-        embed.add_field(name="Member", value=member.mention, inline=False)
+        embed.add_field(name="Entrant", value=entrant_user.mention if entrant_user is not None else entrant_label, inline=False)
         embed.add_field(name="Added By", value=interaction.user.mention, inline=False)
         embed.add_field(name="Entries Added", value=str(entries_added), inline=True)
         embed.add_field(name="User Total Entries", value=str(user_total_entries), inline=True)
@@ -681,13 +677,13 @@ class RaffleCog(commands.Cog):
             await self._respond_and_log(interaction, embed=self._build_embed("Raffle Closed", "That raffle is no longer active.", color=discord.Color.red()), ephemeral=True, channel_id=raffle["log_channel_id"])
             return
 
-        member = self._resolve_member_from_text(interaction.guild, user)
-        if member is None:
+        entrant_label = self._normalize_user_text(user)
+        if not entrant_label:
             await self._respond_and_log(
                 interaction,
                 embed=self._build_embed(
                     "User Not Found",
-                    "Could not match that user text to a server member. Use a user ID, mention, Discord name, or verified Habbo username.",
+                    "Provide a non-empty user label (Discord ID, mention, Habbo username, or plain text name).",
                     color=discord.Color.orange(),
                 ),
                 ephemeral=True,
@@ -695,7 +691,8 @@ class RaffleCog(commands.Cog):
             )
             return
 
-        user_key = str(member.id)
+        verified_discord_id = self._find_verified_discord_id(entrant_label)
+        user_key = self._build_entrant_key(entrant_label, verified_discord_id)
         existing_entry = raffle["entrants"].get(user_key)
         current_count = existing_entry["entries"] if existing_entry else 0
 
@@ -705,7 +702,7 @@ class RaffleCog(commands.Cog):
             if current_count >= 1:
                 await self._respond_and_log(
                     interaction,
-                    embed=self._build_embed("Entry Exists", f"{member.mention} already has their single allowed entry in this raffle.", color=discord.Color.orange()),
+                    embed=self._build_embed("Entry Exists", f"**{entrant_label}** already has their single allowed entry in this raffle.", color=discord.Color.orange()),
                     ephemeral=True,
                     channel_id=raffle["log_channel_id"],
                 )
@@ -713,17 +710,26 @@ class RaffleCog(commands.Cog):
             new_count = 1
 
         raffle["entrants"][user_key] = {
-            "username": str(member),
+            "username": entrant_label,
             "entries": new_count,
         }
         await self._save_raffles()
         # Only DM players who are present in VerifiedUsers.json.
-        # Staff requested that unverified players should still be entered, but not pinged in DMs.
-        is_verified_user = self.verified_store.is_verified(user_key)
+        # Unverified free-text entrants are accepted but will not receive entry DMs.
+        is_verified_user = verified_discord_id is not None
         dm_sent = False
-        if is_verified_user:
+        entrant_user: discord.abc.User | None = None
+        if is_verified_user and verified_discord_id is not None:
+            entrant_user = self.bot.get_user(verified_discord_id)
+            if entrant_user is None:
+                try:
+                    entrant_user = await self.bot.fetch_user(verified_discord_id)
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    entrant_user = None
+
+        if entrant_user is not None:
             dm_sent = await self._send_entry_dm(
-                member,
+                entrant_user,
                 raffle_name=raffle["name"],
                 guild_name=interaction.guild.name if interaction.guild else "Unknown Server",
                 added_by=interaction.user,
@@ -732,12 +738,12 @@ class RaffleCog(commands.Cog):
 
         embed = self._build_embed(
             "Entry Added",
-            f"Added {entries if raffle['allow_multiple_entries'] else 1} entrie(s) for **{member}** in **{raffle['name']}**.",
+            f"Added {entries if raffle['allow_multiple_entries'] else 1} entrie(s) for **{entrant_label}** in **{raffle['name']}**.",
             color=discord.Color.green(),
         )
         # Reuse the verified Habbo avatar on the staff-facing confirmation embed so
         # moderators can immediately identify which player the entry update belongs to.
-        thumbnail_url = self._get_habbo_thumbnail_url(member.id)
+        thumbnail_url = self._get_habbo_thumbnail_url(verified_discord_id) if verified_discord_id is not None else None
         if thumbnail_url:
             embed.set_thumbnail(url=thumbnail_url)
         embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
@@ -748,11 +754,12 @@ class RaffleCog(commands.Cog):
         await self._send_entry_audit_log(
             interaction=interaction,
             raffle=raffle,
-            member=member,
+            entrant_label=entrant_label,
+            entrant_user=entrant_user,
             entries_added=entries if raffle["allow_multiple_entries"] else 1,
             user_total_entries=new_count,
             is_verified_user=is_verified_user,
-            dm_sent=dm_sent,
+            dm_sent=dm_sent if entrant_user is not None else False,
         )
         await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True, mirror_to_log=True)
 
@@ -826,10 +833,9 @@ class RaffleCog(commands.Cog):
         if not raffle["entrants"]:
             embed.add_field(name="Entrants", value="No entries have been added yet.", inline=False)
         else:
-            entrant_lines = [
-                f"<@{user_id}> — **{entrant['entries']}** entrie(s)"
-                for user_id, entrant in sorted(raffle["entrants"].items(), key=lambda item: (-item[1]["entries"], item[1]["username"].lower()))
-            ]
+            entrant_lines = []
+            for user_id, entrant in sorted(raffle["entrants"].items(), key=lambda item: (-item[1]["entries"], item[1]["username"].lower())):
+                entrant_lines.append(f"{self._display_entrant_label(user_id, entrant)} — **{entrant['entries']}** entrie(s)")
             if len(entrant_lines) <= MAX_ENTRIES_DISPLAY:
                 embed.add_field(name="Entrants", value="\n".join(entrant_lines), inline=False)
             else:
@@ -885,8 +891,9 @@ class RaffleCog(commands.Cog):
         dm_successes = 0
         total_entries = self._total_entries(raffle)
         for placement, winner_id in enumerate(winner_ids, start=1):
-            winner_member = interaction.guild.get_member(winner_id) if interaction.guild else None
-            winner_mentions.append(winner_member.mention if winner_member else f"<@{winner_id}>")
+            winner_entry = raffle["entrants"].get(winner_id, {})
+            winner_member = interaction.guild.get_member(int(winner_id)) if interaction.guild and winner_id.isdigit() else None
+            winner_mentions.append(winner_member.mention if winner_member else self._display_entrant_label(winner_id, winner_entry))
             if winner_member is None:
                 continue
 

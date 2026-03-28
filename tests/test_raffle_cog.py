@@ -10,14 +10,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 try:
     import discord
-    from COGS.MiscRaffle import RAFFLE_LOG_CHANNEL_ID, RaffleCog
+    from COGS.MiscRaffle import RAFFLE_LOG_CHANNEL_ID, RaffleCog, raffle_id_autocomplete
 except Exception:
     discord = None
     RAFFLE_LOG_CHANNEL_ID = 1485484040055427132
     RaffleCog = None
+    raffle_id_autocomplete = None
 
 
-@unittest.skipIf(RaffleCog is None or discord is None, "discord.py is not installed in the test environment")
+@unittest.skipIf(RaffleCog is None or discord is None or raffle_id_autocomplete is None, "discord.py is not installed in the test environment")
 class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
@@ -675,9 +676,9 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
                 "log_message_id": None,
             },
         }
-        interaction = SimpleNamespace(guild=SimpleNamespace(id=999))
+        interaction = SimpleNamespace(guild=SimpleNamespace(id=999), client=SimpleNamespace(get_cog=lambda _name: self.cog))
 
-        choices = await self.cog._raffle_id_autocomplete(interaction, "")
+        choices = await raffle_id_autocomplete(interaction, "")
 
         self.assertEqual([choice.value for choice in choices], ["NEWER002", "OLDER001"])
         self.assertIn("Closed", choices[0].name)
@@ -716,10 +717,10 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
                 "log_message_id": None,
             },
         }
-        interaction = SimpleNamespace(guild=SimpleNamespace(id=999))
+        interaction = SimpleNamespace(guild=SimpleNamespace(id=999), client=SimpleNamespace(get_cog=lambda _name: self.cog))
 
-        by_name = await self.cog._raffle_id_autocomplete(interaction, "spring")
-        by_id = await self.cog._raffle_id_autocomplete(interaction, "99999")
+        by_name = await raffle_id_autocomplete(interaction, "spring")
+        by_id = await raffle_id_autocomplete(interaction, "99999")
 
         self.assertEqual(len(by_name), 1)
         self.assertEqual(by_name[0].value, "ABC12345")

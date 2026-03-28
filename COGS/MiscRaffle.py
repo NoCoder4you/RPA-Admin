@@ -20,6 +20,50 @@ MAX_ENTRIES_DISPLAY = 20
 RAFFLE_LOG_CHANNEL_ID = 1485484040055427132
 
 
+async def raffle_id_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    """Provide raffle-ID autocomplete entries for raffle subcommands.
+
+    This helper lives at module scope (instead of as a class method) so decorator
+    lookup is always valid across discord.py versions during extension import.
+    """
+    guild = interaction.guild
+    if guild is None:
+        return []
+
+    cog = interaction.client.get_cog("RaffleCog") if interaction.client else None
+    if cog is None:
+        return []
+
+    raffles = getattr(cog, "_raffles", {})
+    if not isinstance(raffles, dict):
+        return []
+
+    normalized_query = current.strip().casefold()
+    guild_raffles = [raffle for raffle in raffles.values() if isinstance(raffle, dict) and raffle.get("guild_id") == guild.id]
+    guild_raffles.sort(key=lambda raffle: str(raffle.get("created_at", "")), reverse=True)
+
+    choices: list[app_commands.Choice[str]] = []
+    for raffle in guild_raffles:
+        raffle_id = str(raffle.get("raffle_id", "")).upper()
+        raffle_name = str(raffle.get("name", "Unnamed Raffle")).strip() or "Unnamed Raffle"
+        status_text = "Active" if raffle.get("active") else "Closed"
+        if normalized_query and normalized_query not in raffle_id.casefold() and normalized_query not in raffle_name.casefold():
+            continue
+
+        choices.append(
+            app_commands.Choice(
+                name=f"{raffle_id} • {raffle_name} ({status_text})"[:100],
+                value=raffle_id,
+            )
+        )
+        if len(choices) >= 25:
+            break
+    return choices
+
+
 class RaffleCog(commands.Cog):
     """Slash-command-only raffle management with persistent JSON storage."""
 
@@ -369,8 +413,13 @@ class RaffleCog(commands.Cog):
             f"Multiple Entries: **{'Enabled' if raffle['allow_multiple_entries'] else 'Disabled'}**"
         )
 
-    def _build_weighted_pool(self, raffle: dict[str, Any]) -> list[str]:
-        weighted_entries: list[str] = []
+    @staticmethod
+    def _build_raffle_id_list_value(raffles: list[dict[str, Any]]) -> str:
+        """Build a compact newline-delimited list of raffle IDs for quick copy/paste usage."""
+        return "\n".join(f"• `{raffle['raffle_id']}`" for raffle in raffles)
+
+    def _build_weighted_pool(self, raffle: dict[str, Any]) -> list[int]:
+        weighted_entries: list[int] = []
         for user_id, entrant in raffle["entrants"].items():
             weighted_entries.extend([user_id] * entrant["entries"])
         return weighted_entries
@@ -603,7 +652,7 @@ class RaffleCog(commands.Cog):
         user="Member to enter (ID, mention, Discord name, or verified Habbo username).",
         entries="How many entries to add for this member.",
     )
-    @app_commands.autocomplete(raffle_id=_raffle_id_autocomplete)
+    @app_commands.autocomplete(raffle_id=raffle_id_autocomplete)
     async def raffle_add(
         self,
         interaction: discord.Interaction,
@@ -720,7 +769,7 @@ class RaffleCog(commands.Cog):
         user="Member whose entries should be removed.",
         entries="How many entries to remove when multiple entries are allowed.",
     )
-    @app_commands.autocomplete(raffle_id=_raffle_id_autocomplete)
+    @app_commands.autocomplete(raffle_id=raffle_id_autocomplete)
     async def raffle_remove(
         self,
         interaction: discord.Interaction,
@@ -762,7 +811,7 @@ class RaffleCog(commands.Cog):
 
     @raffle.command(name="entries", description="View entries for a raffle.")
     @app_commands.describe(raffle_id="The raffle ID to inspect.")
-    @app_commands.autocomplete(raffle_id=_raffle_id_autocomplete)
+    @app_commands.autocomplete(raffle_id=raffle_id_autocomplete)
     async def raffle_entries(self, interaction: discord.Interaction, raffle_id: str) -> None:
         if not await self._check_permissions(interaction):
             return
@@ -800,7 +849,7 @@ class RaffleCog(commands.Cog):
         raffle_id="The raffle ID to draw from.",
         winners="How many winners to draw.",
     )
-    @app_commands.autocomplete(raffle_id=_raffle_id_autocomplete)
+    @app_commands.autocomplete(raffle_id=raffle_id_autocomplete)
     async def raffle_draw(
         self,
         interaction: discord.Interaction,
@@ -887,7 +936,7 @@ class RaffleCog(commands.Cog):
 
     @raffle.command(name="end", description="Close a raffle so no more entries can be added.")
     @app_commands.describe(raffle_id="The raffle ID to close.")
-    @app_commands.autocomplete(raffle_id=_raffle_id_autocomplete)
+    @app_commands.autocomplete(raffle_id=raffle_id_autocomplete)
     async def raffle_end(self, interaction: discord.Interaction, raffle_id: str) -> None:
         if not await self._check_permissions(interaction):
             return

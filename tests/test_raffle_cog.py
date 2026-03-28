@@ -628,7 +628,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("• `ABC12345`", embed.fields[0].value)
         self.assertIn("• `DEF67890`", embed.fields[0].value)
 
-    async def test_raffle_id_autocomplete_returns_recent_guild_raffles(self) -> None:
+    async def test_raffle_id_autocomplete_returns_only_active_recent_guild_raffles(self) -> None:
         self.cog._raffles = {
             "OLDER001": {
                 "raffle_id": "OLDER001",
@@ -680,9 +680,10 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
 
         choices = await raffle_id_autocomplete(interaction, "")
 
-        self.assertEqual([choice.value for choice in choices], ["NEWER002", "OLDER001"])
-        self.assertIn("Closed", choices[0].name)
-        self.assertIn("Active", choices[1].name)
+        # Closed raffles are intentionally excluded from autocomplete so staff
+        # only see raffle IDs that can still accept moderation actions.
+        self.assertEqual([choice.value for choice in choices], ["OLDER001"])
+        self.assertIn("Active", choices[0].name)
 
     async def test_raffle_id_autocomplete_filters_by_name_or_id(self) -> None:
         self.cog._raffles = {
@@ -796,6 +797,57 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([embed.title for embed in mirrored_embeds], ["Raffle Winner", "Raffle Winner", "Winner Drawn"])
         self.assertEqual(mirrored_embeds[0].fields[1].value, "1 of 2")
         self.assertEqual(mirrored_embeds[1].fields[1].value, "2 of 2")
+
+    async def test_draw_builds_winner_log_embed_for_user_not_in_server(self) -> None:
+        self.cog._raffles = {
+            "ABC12345": {
+                "raffle_id": "ABC12345",
+                "name": "Spring Event",
+                "description": None,
+                "guild_id": 999,
+                "channel_id": 111,
+                "created_by": 10,
+                "created_at": "2026-03-23T00:00:00+00:00",
+                "active": True,
+                "allow_multiple_entries": True,
+                "entrants": {"55": {"username": "PlayerOne#0001", "entries": 3}},
+                "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
+            }
+        }
+        member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        guild = SimpleNamespace(
+            id=999,
+            name="Guild",
+            get_member=lambda _member_id: None,
+        )
+        interaction = SimpleNamespace(
+            guild=guild,
+            channel=SimpleNamespace(id=111, mention="#general"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            response=response,
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        log_channel = SimpleNamespace(send=AsyncMock())
+        self.bot.get_channel.return_value = log_channel
+
+        with patch("COGS.raffle.random.choice", side_effect=[55]), patch.object(
+            self.cog,
+            "_get_habbo_thumbnail_url_with_timeout",
+            AsyncMock(return_value="https://www.habbo.com/habbo-imaging/avatarimage?figure=hr-1-1"),
+        ) as mock_thumbnail:
+            await self.cog.raffle_draw.callback(self.cog, interaction, "ABC12345", 1)
+
+        mock_thumbnail.assert_awaited_once_with(55)
+        response_embed = response.send_message.await_args.kwargs["embed"]
+        self.assertIn("PlayerOne#0001", response_embed.description)
+        self.assertEqual(log_channel.send.await_count, 2)
+        winner_embed = log_channel.send.await_args_list[0].kwargs["embed"]
+        self.assertEqual(winner_embed.title, "Raffle Winner")
+        self.assertIn("not currently in server", winner_embed.description)
+        self.assertIn("figure=hr-1-1", winner_embed.thumbnail.url)
 
     async def test_send_winner_dm_reports_failure_when_dms_are_closed(self) -> None:
         member = SimpleNamespace(id=55, send=AsyncMock(side_effect=discord.Forbidden(MagicMock(), "closed")))

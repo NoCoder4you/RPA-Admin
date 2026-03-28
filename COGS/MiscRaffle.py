@@ -42,20 +42,25 @@ async def raffle_id_autocomplete(
         return []
 
     normalized_query = current.strip().casefold()
-    guild_raffles = [raffle for raffle in raffles.values() if isinstance(raffle, dict) and raffle.get("guild_id") == guild.id]
+    # Autocomplete is used to target currently-runnable raffles, so keep the
+    # suggestion list focused on active raffles for the current guild only.
+    guild_raffles = [
+        raffle
+        for raffle in raffles.values()
+        if isinstance(raffle, dict) and raffle.get("guild_id") == guild.id and raffle.get("active")
+    ]
     guild_raffles.sort(key=lambda raffle: str(raffle.get("created_at", "")), reverse=True)
 
     choices: list[app_commands.Choice[str]] = []
     for raffle in guild_raffles:
         raffle_id = str(raffle.get("raffle_id", "")).upper()
         raffle_name = str(raffle.get("name", "Unnamed Raffle")).strip() or "Unnamed Raffle"
-        status_text = "Active" if raffle.get("active") else "Closed"
         if normalized_query and normalized_query not in raffle_id.casefold() and normalized_query not in raffle_name.casefold():
             continue
 
         choices.append(
             app_commands.Choice(
-                name=f"{raffle_id} • {raffle_name} ({status_text})"[:100],
+                name=f"{raffle_id} • {raffle_name} (Active)"[:100],
                 value=raffle_id,
             )
         )
@@ -342,6 +347,27 @@ class RaffleCog(commands.Cog):
             return None
         return self._build_avatar_thumbnail_url(profile)
 
+    async def _get_habbo_thumbnail_url_with_timeout(self, discord_user_id: int, *, timeout_seconds: float = 2.0) -> str | None:
+        """Resolve a Habbo thumbnail without blocking the bot for longer than the timeout budget."""
+        habbo_username = self.verified_store.get_habbo_username(str(discord_user_id))
+        if not habbo_username:
+            return None
+
+        try:
+            # Run the profile lookup in a worker thread and enforce a short timeout
+            # so winner announcements for users who left the guild never stall the bot.
+            profile = await asyncio.wait_for(
+                asyncio.to_thread(fetch_habbo_profile, habbo_username),
+                timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            LOGGER.warning("Timed out fetching Habbo profile for raffle embed thumbnail: %s", habbo_username)
+            return None
+        except HabboApiError:
+            LOGGER.exception("Failed to fetch Habbo profile for raffle embed thumbnail: %s", habbo_username)
+            return None
+        return self._build_avatar_thumbnail_url(profile)
+
     def _get_guild_raffle(self, interaction: discord.Interaction, raffle_id: str) -> dict[str, Any] | None:
         raffle = self._raffles.get(raffle_id.upper())
         if raffle is None or interaction.guild is None:
@@ -541,6 +567,30 @@ class RaffleCog(commands.Cog):
         embed.add_field(name="Placement", value=f"{placement} of {total_winners}", inline=True)
         embed.add_field(name="Total Entries", value=str(self._total_entries(raffle)), inline=True)
         thumbnail_url = self._get_habbo_thumbnail_url(member.id)
+        if thumbnail_url:
+            embed.set_thumbnail(url=thumbnail_url)
+        return embed
+
+    def _build_missing_member_winner_embed(
+        self,
+        winner_label: str,
+        *,
+        raffle: dict[str, Any],
+        guild_name: str,
+        placement: int,
+        total_winners: int,
+        thumbnail_url: str | None,
+    ) -> discord.Embed:
+        """Build a winner embed for users no longer in the guild, for log-channel visibility."""
+        embed = discord.Embed(
+            title="Raffle Winner",
+            description=f"**{winner_label}** won **{raffle['name']}** in **{guild_name}** (not currently in server).",
+            color=discord.Color.gold(),
+            timestamp=self._utcnow(),
+        )
+        embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
+        embed.add_field(name="Placement", value=f"{placement} of {total_winners}", inline=True)
+        embed.add_field(name="Total Entries", value=str(self._total_entries(raffle)), inline=True)
         if thumbnail_url:
             embed.set_thumbnail(url=thumbnail_url)
         return embed
@@ -893,8 +943,21 @@ class RaffleCog(commands.Cog):
         for placement, winner_id in enumerate(winner_ids, start=1):
             winner_entry = raffle["entrants"].get(winner_id, {})
             winner_member = interaction.guild.get_member(int(winner_id)) if interaction.guild and winner_id.isdigit() else None
-            winner_mentions.append(winner_member.mention if winner_member else self._display_entrant_label(winner_id, winner_entry))
+            winner_label = self._display_entrant_label(winner_id, winner_entry)
+            winner_mentions.append(winner_member.mention if winner_member else winner_label)
             if winner_member is None:
+                # Winner may have left the server: still post a winner card and try a
+                # fast Habbo thumbnail lookup so staff have a recognizable record.
+                thumbnail_url = await self._get_habbo_thumbnail_url_with_timeout(int(winner_id)) if winner_id.isdigit() else None
+                winner_embed = self._build_missing_member_winner_embed(
+                    winner_label,
+                    raffle=raffle,
+                    guild_name=interaction.guild.name if interaction.guild else "Unknown Server",
+                    placement=placement,
+                    total_winners=len(winner_ids),
+                    thumbnail_url=thumbnail_url,
+                )
+                await self._mirror_embed_to_log_channel(winner_embed, channel_id=raffle["log_channel_id"])
                 continue
 
             # Build the winner card once so the same embed can be reused for the

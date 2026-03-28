@@ -582,6 +582,105 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("• `ABC12345`", embed.fields[0].value)
         self.assertIn("• `DEF67890`", embed.fields[0].value)
 
+    async def test_raffle_id_autocomplete_returns_recent_guild_raffles(self) -> None:
+        self.cog._raffles = {
+            "OLDER001": {
+                "raffle_id": "OLDER001",
+                "name": "Older Event",
+                "description": None,
+                "guild_id": 999,
+                "channel_id": 111,
+                "created_by": 10,
+                "created_at": "2026-03-21T00:00:00+00:00",
+                "active": True,
+                "allow_multiple_entries": True,
+                "entrants": {},
+                "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
+            },
+            "NEWER002": {
+                "raffle_id": "NEWER002",
+                "name": "Newer Event",
+                "description": None,
+                "guild_id": 999,
+                "channel_id": 111,
+                "created_by": 10,
+                "created_at": "2026-03-24T00:00:00+00:00",
+                "active": False,
+                "allow_multiple_entries": False,
+                "entrants": {},
+                "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
+            },
+            "OTHER003": {
+                "raffle_id": "OTHER003",
+                "name": "Other Guild Event",
+                "description": None,
+                "guild_id": 555,
+                "channel_id": 111,
+                "created_by": 10,
+                "created_at": "2026-03-25T00:00:00+00:00",
+                "active": True,
+                "allow_multiple_entries": True,
+                "entrants": {},
+                "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
+            },
+        }
+        interaction = SimpleNamespace(guild=SimpleNamespace(id=999))
+
+        choices = await self.cog._raffle_id_autocomplete(interaction, "")
+
+        self.assertEqual([choice.value for choice in choices], ["NEWER002", "OLDER001"])
+        self.assertIn("Closed", choices[0].name)
+        self.assertIn("Active", choices[1].name)
+
+    async def test_raffle_id_autocomplete_filters_by_name_or_id(self) -> None:
+        self.cog._raffles = {
+            "ABC12345": {
+                "raffle_id": "ABC12345",
+                "name": "Spring Event",
+                "description": None,
+                "guild_id": 999,
+                "channel_id": 111,
+                "created_by": 10,
+                "created_at": "2026-03-24T00:00:00+00:00",
+                "active": True,
+                "allow_multiple_entries": True,
+                "entrants": {},
+                "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
+            },
+            "ZZZ99999": {
+                "raffle_id": "ZZZ99999",
+                "name": "Winter Event",
+                "description": None,
+                "guild_id": 999,
+                "channel_id": 111,
+                "created_by": 10,
+                "created_at": "2026-03-25T00:00:00+00:00",
+                "active": True,
+                "allow_multiple_entries": True,
+                "entrants": {},
+                "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
+            },
+        }
+        interaction = SimpleNamespace(guild=SimpleNamespace(id=999))
+
+        by_name = await self.cog._raffle_id_autocomplete(interaction, "spring")
+        by_id = await self.cog._raffle_id_autocomplete(interaction, "99999")
+
+        self.assertEqual(len(by_name), 1)
+        self.assertEqual(by_name[0].value, "ABC12345")
+        self.assertEqual(len(by_id), 1)
+        self.assertEqual(by_id[0].value, "ZZZ99999")
+
     async def test_draw_auto_closes_raffle_and_dms_each_winner(self) -> None:
         self.cog._raffles = {
             "ABC12345": {

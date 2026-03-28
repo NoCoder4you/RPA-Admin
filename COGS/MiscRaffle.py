@@ -383,6 +383,46 @@ class RaffleCog(commands.Cog):
             weighted_entries.extend([int(user_id)] * entrant["entries"])
         return weighted_entries
 
+    async def _raffle_id_autocomplete(
+        self,
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[app_commands.Choice[str]]:
+        """Return raffle-ID suggestions so every raffle command can pick from a live list.
+
+        The slash command menu caps autocomplete choices at 25 items, so we sort by
+        most-recent creation date and trim the result to keep suggestions relevant.
+        """
+        guild = interaction.guild
+        if guild is None:
+            return []
+
+        normalized_query = current.strip().casefold()
+        guild_raffles = [
+            raffle
+            for raffle in self._raffles.values()
+            if raffle["guild_id"] == guild.id
+        ]
+        guild_raffles.sort(key=lambda raffle: raffle.get("created_at", ""), reverse=True)
+
+        suggestions: list[app_commands.Choice[str]] = []
+        for raffle in guild_raffles:
+            raffle_id = str(raffle.get("raffle_id", "")).upper()
+            raffle_name = str(raffle.get("name", "Unnamed Raffle")).strip() or "Unnamed Raffle"
+            status_text = "Active" if raffle.get("active") else "Closed"
+            if normalized_query and normalized_query not in raffle_id.casefold() and normalized_query not in raffle_name.casefold():
+                continue
+
+            suggestions.append(
+                app_commands.Choice(
+                    name=f"{raffle_id} • {raffle_name} ({status_text})"[:100],
+                    value=raffle_id,
+                )
+            )
+            if len(suggestions) >= 25:
+                break
+        return suggestions
+
     def _pick_unique_weighted_winners(self, raffle: dict[str, Any], winner_count: int) -> list[int]:
         """Draw unique winners while preserving weighted odds from entry counts."""
         remaining_entries = {
@@ -612,6 +652,7 @@ class RaffleCog(commands.Cog):
         user="Member to enter (ID, mention, Discord name, or verified Habbo username).",
         entries="How many entries to add for this member.",
     )
+    @app_commands.autocomplete(raffle_id=_raffle_id_autocomplete)
     async def raffle_add(
         self,
         interaction: discord.Interaction,
@@ -717,6 +758,7 @@ class RaffleCog(commands.Cog):
         user="Member whose entries should be removed.",
         entries="How many entries to remove when multiple entries are allowed.",
     )
+    @app_commands.autocomplete(raffle_id=_raffle_id_autocomplete)
     async def raffle_remove(
         self,
         interaction: discord.Interaction,
@@ -758,6 +800,7 @@ class RaffleCog(commands.Cog):
 
     @raffle.command(name="entries", description="View entries for a raffle.")
     @app_commands.describe(raffle_id="The raffle ID to inspect.")
+    @app_commands.autocomplete(raffle_id=_raffle_id_autocomplete)
     async def raffle_entries(self, interaction: discord.Interaction, raffle_id: str) -> None:
         if not await self._check_permissions(interaction):
             return
@@ -796,6 +839,7 @@ class RaffleCog(commands.Cog):
         raffle_id="The raffle ID to draw from.",
         winners="How many winners to draw.",
     )
+    @app_commands.autocomplete(raffle_id=_raffle_id_autocomplete)
     async def raffle_draw(
         self,
         interaction: discord.Interaction,
@@ -881,6 +925,7 @@ class RaffleCog(commands.Cog):
 
     @raffle.command(name="end", description="Close a raffle so no more entries can be added.")
     @app_commands.describe(raffle_id="The raffle ID to close.")
+    @app_commands.autocomplete(raffle_id=_raffle_id_autocomplete)
     async def raffle_end(self, interaction: discord.Interaction, raffle_id: str) -> None:
         if not await self._check_permissions(interaction):
             return

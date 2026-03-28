@@ -272,6 +272,51 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("55", self.cog._raffles["ABC12345"]["entrants"])
 
+    async def test_add_allows_free_text_user_not_in_server(self) -> None:
+        self.cog._raffles = {
+            "ABC12345": {
+                "raffle_id": "ABC12345",
+                "name": "Spring Event",
+                "description": None,
+                "guild_id": 999,
+                "channel_id": 111,
+                "created_by": 10,
+                "created_at": "2026-03-23T00:00:00+00:00",
+                "active": True,
+                "allow_multiple_entries": True,
+                "entrants": {},
+                "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
+            }
+        }
+        member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        guild = SimpleNamespace(
+            id=999,
+            name="Guild",
+            members=[],
+            get_member=lambda member_id: None,
+            get_channel=lambda channel_id: None,
+        )
+        interaction = SimpleNamespace(
+            guild=guild,
+            channel=SimpleNamespace(id=111, mention="#general"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            response=response,
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        self.cog.verified_store = SimpleNamespace(
+            is_verified=lambda discord_id: False,
+            get_habbo_username=lambda discord_id: None,
+            get_all_entries=lambda: [],
+        )
+
+        await self.cog.raffle_add.callback(self.cog, interaction, "ABC12345", "External Player", 2)
+
+        self.assertIn("text:external player", self.cog._raffles["ABC12345"]["entrants"])
+        self.assertEqual(self.cog._raffles["ABC12345"]["entrants"]["text:external player"]["entries"], 2)
+
     async def test_add_logs_dm_outcome_to_audit_channel(self) -> None:
         self.cog._raffles = {
             "ABC12345": {

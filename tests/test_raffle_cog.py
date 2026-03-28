@@ -628,7 +628,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("• `ABC12345`", embed.fields[0].value)
         self.assertIn("• `DEF67890`", embed.fields[0].value)
 
-    async def test_raffle_id_autocomplete_returns_recent_guild_raffles(self) -> None:
+    async def test_raffle_id_autocomplete_returns_only_active_recent_guild_raffles(self) -> None:
         self.cog._raffles = {
             "OLDER001": {
                 "raffle_id": "OLDER001",
@@ -680,9 +680,10 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
 
         choices = await raffle_id_autocomplete(interaction, "")
 
-        self.assertEqual([choice.value for choice in choices], ["NEWER002", "OLDER001"])
-        self.assertIn("Closed", choices[0].name)
-        self.assertIn("Active", choices[1].name)
+        # Closed raffles are intentionally excluded from autocomplete so staff
+        # only see raffle IDs that can still accept moderation actions.
+        self.assertEqual([choice.value for choice in choices], ["OLDER001"])
+        self.assertIn("Active", choices[0].name)
 
     async def test_raffle_id_autocomplete_filters_by_name_or_id(self) -> None:
         self.cog._raffles = {

@@ -42,20 +42,25 @@ async def raffle_id_autocomplete(
         return []
 
     normalized_query = current.strip().casefold()
-    guild_raffles = [raffle for raffle in raffles.values() if isinstance(raffle, dict) and raffle.get("guild_id") == guild.id]
+    # Autocomplete is used to target currently-runnable raffles, so keep the
+    # suggestion list focused on active raffles for the current guild only.
+    guild_raffles = [
+        raffle
+        for raffle in raffles.values()
+        if isinstance(raffle, dict) and raffle.get("guild_id") == guild.id and raffle.get("active")
+    ]
     guild_raffles.sort(key=lambda raffle: str(raffle.get("created_at", "")), reverse=True)
 
     choices: list[app_commands.Choice[str]] = []
     for raffle in guild_raffles:
         raffle_id = str(raffle.get("raffle_id", "")).upper()
         raffle_name = str(raffle.get("name", "Unnamed Raffle")).strip() or "Unnamed Raffle"
-        status_text = "Active" if raffle.get("active") else "Closed"
         if normalized_query and normalized_query not in raffle_id.casefold() and normalized_query not in raffle_name.casefold():
             continue
 
         choices.append(
             app_commands.Choice(
-                name=f"{raffle_id} • {raffle_name} ({status_text})"[:100],
+                name=f"{raffle_id} • {raffle_name} (Active)"[:100],
                 value=raffle_id,
             )
         )

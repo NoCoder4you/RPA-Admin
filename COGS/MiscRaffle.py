@@ -372,6 +372,11 @@ class RaffleCog(commands.Cog):
             f"Multiple Entries: **{'Enabled' if raffle['allow_multiple_entries'] else 'Disabled'}**"
         )
 
+    @staticmethod
+    def _build_raffle_id_list_value(raffles: list[dict[str, Any]]) -> str:
+        """Build a compact newline-delimited list of raffle IDs for quick copy/paste usage."""
+        return "\n".join(f"• `{raffle['raffle_id']}`" for raffle in raffles)
+
     def _build_weighted_pool(self, raffle: dict[str, Any]) -> list[int]:
         weighted_entries: list[int] = []
         for user_id, entrant in raffle["entrants"].items():
@@ -913,7 +918,17 @@ class RaffleCog(commands.Cog):
             await self._respond_and_log(interaction, embed=embed, ephemeral=True, public_response=True, mirror_to_log=True)
             return
 
-        for raffle in sorted(active_raffles, key=lambda item: item["created_at"]):
+        sorted_active_raffles = sorted(active_raffles, key=lambda item: item["created_at"])
+
+        # Staff requested a dedicated raffle-ID list so moderators can quickly copy
+        # identifiers without scanning each full raffle details card.
+        embed.add_field(
+            name="Raffle IDs",
+            value=self._build_raffle_id_list_value(sorted_active_raffles),
+            inline=False,
+        )
+
+        for raffle in sorted_active_raffles:
             embed.add_field(
                 name="Raffle",
                 value=self._build_raffle_list_value(raffle),

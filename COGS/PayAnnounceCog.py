@@ -12,10 +12,7 @@ from discord.ext import commands, tasks
 # DST transitions correct without any custom offset math.
 EASTERN_TZ = ZoneInfo("America/New_York")
 
-# Resolve the repository JSON directory directly so this cog does not depend on
-# importing `common_paths` in environments where module paths are not configured.
 JSON_DIR = Path(__file__).resolve().parent.parent / "JSON"
-
 # The paid shift windows requested by the user.
 PAY_WINDOWS: tuple[str, ...] = (
     "12:00 AM",
@@ -89,13 +86,11 @@ class PayAnnounceCog(commands.Cog):
             print(f"[PayAnnounce] Invalid JSON in {config_path}: {exc}")
             return None
 
-        # Some JSON files in JSON/ are list payloads (for example persisted data),
-        # so only dictionary-based config documents can contain channel settings.
+
         if not isinstance(config, dict):
             return None
 
-        # Prefer an explicit top-level key in serverconfig-style files, but keep
-        # support for nested {"channels": {"payannounce": ...}} structures.
+
         channel_id = config.get("payannounce_channel_id")
         if channel_id is None:
             channel_id = config.get("channels", {}).get("payannounce")

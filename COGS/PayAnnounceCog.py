@@ -8,12 +8,11 @@ from zoneinfo import ZoneInfo
 import discord
 from discord.ext import commands, tasks
 
-from common_paths import json_file
-
 # Eastern time is required by the pay schedule. Using IANA timezone names keeps
 # DST transitions correct without any custom offset math.
 EASTERN_TZ = ZoneInfo("America/New_York")
 
+JSON_DIR = Path(__file__).resolve().parent.parent / "JSON"
 # The paid shift windows requested by the user.
 PAY_WINDOWS: tuple[str, ...] = (
     "12:00 AM",
@@ -56,7 +55,7 @@ class PayAnnounceCog(commands.Cog):
         if self.config_path is not None:
             candidate_paths = [self.config_path]
         else:
-            candidate_paths = [json_file("server.json"), json_file("serverconfig.json")]
+            candidate_paths = [JSON_DIR / "server.json", JSON_DIR / "serverconfig.json"]
 
         for candidate in candidate_paths:
             channel_id = self._read_channel_id_from_config(candidate)
@@ -64,7 +63,7 @@ class PayAnnounceCog(commands.Cog):
                 return channel_id
 
         # Fallback: scan every JSON file in JSON/ so custom config naming still works.
-        json_folder = json_file("").resolve()
+        json_folder = JSON_DIR.resolve()
         for candidate in sorted(json_folder.glob("*.json")):
             if candidate in candidate_paths:
                 continue
@@ -87,8 +86,11 @@ class PayAnnounceCog(commands.Cog):
             print(f"[PayAnnounce] Invalid JSON in {config_path}: {exc}")
             return None
 
-        # Prefer an explicit top-level key in serverconfig-style files, but keep
-        # support for nested {"channels": {"payannounce": ...}} structures.
+
+        if not isinstance(config, dict):
+            return None
+
+
         channel_id = config.get("payannounce_channel_id")
         if channel_id is None:
             channel_id = config.get("channels", {}).get("payannounce")
@@ -110,8 +112,8 @@ class PayAnnounceCog(commands.Cog):
         if self.config_path is not None:
             candidate_paths = [self.config_path]
         else:
-            candidate_paths = [json_file("server.json"), json_file("serverconfig.json")]
-            json_folder = json_file("").resolve()
+            candidate_paths = [JSON_DIR / "server.json", JSON_DIR / "serverconfig.json"]
+            json_folder = JSON_DIR.resolve()
             for discovered in sorted(json_folder.glob("*.json")):
                 if discovered not in candidate_paths:
                     candidate_paths.append(discovered)
@@ -120,6 +122,10 @@ class PayAnnounceCog(commands.Cog):
             try:
                 config = json.loads(config_path.read_text(encoding="utf-8"))
             except (FileNotFoundError, json.JSONDecodeError):
+                continue
+
+            # Skip non-dict JSON files safely (e.g., persisted array data files).
+            if not isinstance(config, dict):
                 continue
 
             # Support a few obvious key names so older/newer config files work.

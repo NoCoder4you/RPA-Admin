@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+import types
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -9,14 +11,89 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-try:
-    from COGS.PayAnnounceCog import EASTERN_TZ, PayAnnounceCog
-except ModuleNotFoundError:
-    EASTERN_TZ = None
-    PayAnnounceCog = None
+def _install_discord_stubs() -> bool:
+    """Install a tiny discord/discord.ext stub so tests run without discord.py."""
+
+    if "discord" in sys.modules:
+        return False
+
+    discord_module = types.ModuleType("discord")
+    ext_module = types.ModuleType("discord.ext")
+    commands_module = types.ModuleType("discord.ext.commands")
+    tasks_module = types.ModuleType("discord.ext.tasks")
+
+    class _FakeCog:
+        """Minimal stand-in for discord.ext.commands.Cog used by class inheritance."""
+
+    class _FakeBot:
+        """Minimal Bot type used only for type hints in these tests."""
+
+    class _LoopDescriptor:
+        """Mimic discord.ext.tasks.loop descriptor API used by the cog."""
+
+        def __init__(self, func):
+            self._func = func
+            self._before_loop = None
+
+        def __get__(self, instance, owner):
+            if instance is None:
+                return self
+            return _BoundLoop(self, instance)
+
+        def before_loop(self, coroutine):
+            self._before_loop = coroutine
+            return coroutine
+
+        def start(self):
+            return None
+
+        def cancel(self):
+            return None
+
+    class _BoundLoop:
+        def __init__(self, descriptor, instance):
+            self._descriptor = descriptor
+            self._instance = instance
+
+        async def __call__(self, *args, **kwargs):
+            return await self._descriptor._func(self._instance, *args, **kwargs)
+
+        def start(self):
+            return None
+
+        def cancel(self):
+            return None
+
+    def _loop(*_args, **_kwargs):
+        def decorator(func):
+            return _LoopDescriptor(func)
+        return decorator
+
+    commands_module.Cog = _FakeCog
+    commands_module.Bot = _FakeBot
+    tasks_module.loop = _loop
+    ext_module.commands = commands_module
+    ext_module.tasks = tasks_module
+    discord_module.ext = ext_module
+
+    sys.modules["discord"] = discord_module
+    sys.modules["discord.ext"] = ext_module
+    sys.modules["discord.ext.commands"] = commands_module
+    sys.modules["discord.ext.tasks"] = tasks_module
+    return True
 
 
-@unittest.skipIf(PayAnnounceCog is None, "discord.py is not installed in the test environment")
+_STUBS_INSTALLED = _install_discord_stubs()
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from COGS.PayAnnounceCog import EASTERN_TZ, PayAnnounceCog
+
+# Remove temporary stubs so they do not impact other test modules when the
+# full test suite is collected in the same Python process.
+if _STUBS_INSTALLED:
+    for module_name in ("discord.ext.tasks", "discord.ext.commands", "discord.ext", "discord"):
+        sys.modules.pop(module_name, None)
+
+
 class PayAnnounceCogTests(unittest.IsolatedAsyncioTestCase):
     """Verify schedule matching and message rendering behavior."""
 

@@ -227,11 +227,22 @@ class PayAnnounceCog(commands.Cog):
         start_est = self._window_start_for(now_est, event_label)
         unix_timestamp = int(start_est.timestamp())
 
-        await channel.send(
+        # Keep a handle to the sent message so we can publish it automatically
+        # when the destination is a Discord announcement/news channel.
+        message = await channel.send(
             f"# {emoji} Pay Time: {event_label} {emoji}\n"
             f"## Pay begins at <t:{unix_timestamp}:T> (<t:{unix_timestamp}:R>).\n"
             f"## <@&{self.pay_role_id}>"
         )
+
+        # Announcement channels require an explicit publish/crosspost call.
+        # We gate this behind `is_news()` so normal text channels are unaffected.
+        is_news_method = getattr(channel, "is_news", None)
+        if callable(is_news_method) and is_news_method():
+            try:
+                await message.publish()
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                print(f"[PayAnnounce] Could not publish announcement message: {exc}")
 
 
 async def setup(bot: commands.Bot) -> None:

@@ -33,9 +33,11 @@ class PayAnnounceCog(commands.Cog):
 
     def __init__(self, bot: commands.Bot, *, config_path: Path | None = None) -> None:
         self.bot = bot
-        self.config_path = config_path or json_file("server.json")
+        # Prefer explicit config path, then well-known defaults. If neither exists,
+        # we can still discover the channel id by scanning JSON/*.json files.
+        self.config_path = config_path
         self.announcement_channel_id = self._load_announcement_channel_id()
-        self.external_emoji = "<:Pay:1305265714042765483>"
+        self.external_emoji = "<:RPA:1484696606111699166>"
         self.unicode_emoji = "💰"
         self._last_announcement_key: str | None = None
         self._pay_schedule_checker.start()
@@ -44,26 +46,52 @@ class PayAnnounceCog(commands.Cog):
         self._pay_schedule_checker.cancel()
 
     def _load_announcement_channel_id(self) -> int | None:
-        """Read the configured pay announcement channel from JSON/server.json."""
+        """Read the configured pay announcement channel from JSON configuration files."""
+
+        # Ordered candidates make behavior predictable while still supporting
+        # existing repositories that use serverconfig.json instead of server.json.
+        if self.config_path is not None:
+            candidate_paths = [self.config_path]
+        else:
+            candidate_paths = [json_file("server.json"), json_file("serverconfig.json")]
+
+        for candidate in candidate_paths:
+            channel_id = self._read_channel_id_from_config(candidate)
+            if channel_id is not None:
+                return channel_id
+
+        # Fallback: scan every JSON file in JSON/ so custom config naming still works.
+        json_folder = json_file("").resolve()
+        for candidate in sorted(json_folder.glob("*.json")):
+            if candidate in candidate_paths:
+                continue
+            channel_id = self._read_channel_id_from_config(candidate)
+            if channel_id is not None:
+                return channel_id
+
+        print("[PayAnnounce] Could not find channels.payannounce in any JSON config file.")
+        return None
+
+    def _read_channel_id_from_config(self, config_path: Path) -> int | None:
+        """Attempt to extract channels.payannounce from one specific JSON file."""
 
         try:
-            config = json.loads(self.config_path.read_text(encoding="utf-8"))
+            config = json.loads(config_path.read_text(encoding="utf-8"))
         except FileNotFoundError:
-            print(f"[PayAnnounce] Config file not found: {self.config_path}")
+            print(f"[PayAnnounce] Config file not found: {config_path}")
             return None
         except json.JSONDecodeError as exc:
-            print(f"[PayAnnounce] Invalid JSON in {self.config_path}: {exc}")
+            print(f"[PayAnnounce] Invalid JSON in {config_path}: {exc}")
             return None
 
         channel_id = config.get("channels", {}).get("payannounce")
         if channel_id is None:
-            print("[PayAnnounce] Missing channels.payannounce in configuration.")
             return None
 
         try:
             return int(channel_id)
         except (TypeError, ValueError):
-            print(f"[PayAnnounce] Invalid channel id value for payannounce: {channel_id!r}")
+            print(f"[PayAnnounce] Invalid channel id value for payannounce in {config_path}: {channel_id!r}")
             return None
 
     @staticmethod

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -31,6 +33,15 @@ class PayAnnounceCogTests(unittest.IsolatedAsyncioTestCase):
     def test_due_window_is_none_for_non_schedule_minute(self) -> None:
         due = PayAnnounceCog._due_window(datetime(2026, 3, 29, 11, 44, tzinfo=EASTERN_TZ))
         self.assertIsNone(due)
+
+    def test_load_announcement_channel_id_from_explicit_config_path(self) -> None:
+        bot = MagicMock()
+        with TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "serverconfig.json"
+            config_path.write_text('{\"channels\": {\"payannounce\": \"12345\"}}', encoding="utf-8")
+            cog = PayAnnounceCog(bot, config_path=config_path)
+
+        self.assertEqual(cog.announcement_channel_id, 12345)
 
     async def test_send_announcement_uses_unicode_emoji_when_external_not_allowed(self) -> None:
         bot = MagicMock()
@@ -69,5 +80,5 @@ class PayAnnounceCogTests(unittest.IsolatedAsyncioTestCase):
 
         channel.send.assert_awaited_once()
         sent_text = channel.send.await_args.args[0]
-        self.assertIn("<:Pay:1305265714042765483>", sent_text)
+        self.assertIn("<:RPA:1484696606111699166>", sent_text)
         self.assertIn("<@&84>", sent_text)

@@ -27,7 +27,7 @@ PAY_WINDOWS: tuple[str, ...] = (
 )
 
 # Per the latest requirement, announcements should mention one shared role.
-DEFAULT_PAY_ROLE_ID = "1378512350981914634"
+DEFAULT_PAY_ROLE_ID = "1487622625537560657"
 
 
 class PayAnnounceCog(commands.Cog):
@@ -87,7 +87,11 @@ class PayAnnounceCog(commands.Cog):
             print(f"[PayAnnounce] Invalid JSON in {config_path}: {exc}")
             return None
 
-        channel_id = config.get("channels", {}).get("payannounce")
+        # Prefer an explicit top-level key in serverconfig-style files, but keep
+        # support for nested {"channels": {"payannounce": ...}} structures.
+        channel_id = config.get("payannounce_channel_id")
+        if channel_id is None:
+            channel_id = config.get("channels", {}).get("payannounce")
         if channel_id is None:
             return None
 

@@ -38,11 +38,11 @@ class PayAnnounceCogTests(unittest.IsolatedAsyncioTestCase):
         bot = MagicMock()
         with TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "serverconfig.json"
-            config_path.write_text('{\"channels\": {\"payannounce\": \"12345\"}}', encoding="utf-8")
+            config_path.write_text('{\"payannounce_channel_id\": \"12345\"}', encoding="utf-8")
             cog = PayAnnounceCog(bot, config_path=config_path)
 
         self.assertEqual(cog.announcement_channel_id, 12345)
-        self.assertEqual(cog.pay_role_id, "1378512350981914634")
+        self.assertEqual(cog.pay_role_id, "1487622625537560657")
 
     def test_load_single_shared_pay_role_id_from_config(self) -> None:
         bot = MagicMock()

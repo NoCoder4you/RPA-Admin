@@ -174,3 +174,23 @@ class PayAnnounceCogTests(unittest.IsolatedAsyncioTestCase):
         sent_text = channel.send.await_args.args[0]
         self.assertIn("<:RPA:1484696606111699166>", sent_text)
         self.assertIn("<@&84>", sent_text)
+
+    async def test_send_announcement_publishes_when_channel_is_news(self) -> None:
+        bot = MagicMock()
+        cog = PayAnnounceCog(bot)
+        cog.announcement_channel_id = 123
+
+        sent_message = SimpleNamespace(publish=AsyncMock())
+        channel = SimpleNamespace(
+            guild=SimpleNamespace(
+                me=SimpleNamespace(guild_permissions=SimpleNamespace(use_external_emojis=False))
+            ),
+            is_news=MagicMock(return_value=True),
+            send=AsyncMock(return_value=sent_message),
+        )
+        bot.get_channel.return_value = channel
+
+        await cog._send_announcement("6:00 PM")
+
+        channel.send.assert_awaited_once()
+        sent_message.publish.assert_awaited_once()

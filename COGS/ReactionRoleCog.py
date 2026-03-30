@@ -255,11 +255,11 @@ class ReactionRoleCog(commands.Cog):
 
         return (
             "╔════════════════════╗\n"
-            "✨ **REACTION ROLE** ✨\n"
+            "       ✨ **REACTION ROLE** ✨\n"
             "╚════════════════════╝\n\n"
-            f"{normalized_emoji} **{role.mention}**\n\n"
+            f"# {normalized_emoji}{normalized_emoji}{normalized_emoji} \n# {role.mention}\n\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"{message_text}\n"
+            f"## {message_text}\n"
             f"━━━━━━━━━━━━━━━━━━"
         )
 

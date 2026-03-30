@@ -254,11 +254,10 @@ class ReactionRoleCog(commands.Cog):
         normalized_emoji = self._normalize_emoji(emoji)
 
         return (
-            "# ╔════════════════╗\n"
+            "# ╔══════════════╗\n"
             "# ✨ **REACTION ROLE** ✨\n"
-            "# ╚═══════════════╝\n\n"
-            f"# {role.mention}\n"
-            f"## {message_text}\n"
+            "# ╚══════════════╝\n\n"
+            f"### {role.mention} - {message_text}"
         )
 
     async def _resolve_member(self, payload: discord.RawReactionActionEvent) -> discord.Member | None:

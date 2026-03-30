@@ -1,0 +1,70 @@
+"""Unit tests for the reaction role cog helper behavior."""
+
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import MagicMock
+
+try:
+    from COGS.ReactionRoleCog import ReactionRoleCog
+except ModuleNotFoundError:
+    ReactionRoleCog = None
+
+
+@unittest.skipIf(ReactionRoleCog is None, "discord.py is not installed in the test environment")
+class ReactionRoleCogTests(unittest.TestCase):
+    """Validate local helper logic for reaction role persistence/matching."""
+
+    def setUp(self) -> None:
+        self.bot = MagicMock()
+        self.cog = ReactionRoleCog(self.bot)
+
+    def test_normalize_emoji_handles_custom_and_unicode(self) -> None:
+        self.assertEqual(self.cog._normalize_emoji("✅"), "✅")
+        self.assertEqual(self.cog._normalize_emoji("<:rpa:123456>"), "rpa:123456")
+        self.assertEqual(self.cog._normalize_emoji("<a:dance:555>"), "dance:555")
+
+    def test_find_entry_filters_by_optional_fields(self) -> None:
+        self.cog.reaction_roles = [
+            {
+                "guild_id": 1,
+                "channel_id": 2,
+                "message_id": 3,
+                "emoji": "✅",
+                "role_id": 4,
+            }
+        ]
+
+        match = self.cog._find_entry(guild_id=1, message_id=3, emoji="✅")
+        self.assertIsNotNone(match)
+
+        no_match = self.cog._find_entry(guild_id=1, message_id=3, emoji="❌")
+        self.assertIsNone(no_match)
+
+    def test_save_and_load_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            file_path = Path(tmp) / "ReactionRoles.json"
+            self.cog.data_file = file_path
+            self.cog.reaction_roles = [
+                {
+                    "guild_id": 100,
+                    "channel_id": 200,
+                    "message_id": 300,
+                    "emoji": "check:123",
+                    "role_id": 400,
+                }
+            ]
+
+            self.cog._save_data()
+            self.cog.reaction_roles = []
+            loaded = self.cog._load_data()
+
+            self.assertEqual(len(loaded), 1)
+            self.assertEqual(loaded[0]["message_id"], 300)
+            self.assertEqual(loaded[0]["emoji"], "check:123")
+
+
+if __name__ == "__main__":
+    unittest.main()

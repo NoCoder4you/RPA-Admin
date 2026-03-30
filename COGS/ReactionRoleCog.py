@@ -15,8 +15,6 @@ logger = logging.getLogger(__name__)
 
 
 class ReactionRoleCog(commands.Cog):
-    """Manage one reaction-role mapping per message using raw reaction events."""
-
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.data_file: Path = json_file("ReactionRoles.json")
@@ -245,22 +243,24 @@ class ReactionRoleCog(commands.Cog):
         return True, f"Configured reaction role: message `{message.id}`, emoji `{normalized_emoji}`, role {role.mention}."
 
     def _build_reaction_role_message(
-        self,
-        *,
-        emoji: str,
-        role: discord.Role,
-        message_text: str,
+            self,
+            *,
+            emoji: str,
+            role: discord.Role,
+            message_text: str,
     ) -> str:
-        """Build a bold, readable, and role-mentioning reaction-role prompt."""
+        """Build a minimal, eye-catching reaction-role prompt."""
 
         normalized_emoji = self._normalize_emoji(emoji)
-        # The role mention is intentionally included in the message body so users can
-        # clearly see which role they receive when reacting.
+
         return (
-            "✨ **REACTION ROLE** ✨\n\n"
-            f"React with {normalized_emoji} to get {role.mention}.\n"
-            f"Remove your reaction to lose {role.mention}.\n\n"
-            f"{message_text}"
+            "╔════════════════════╗\n"
+            "✨ **REACTION ROLE** ✨\n"
+            "╚════════════════════╝\n\n"
+            f"{normalized_emoji} **{role.mention}**\n\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"{message_text}\n"
+            f"━━━━━━━━━━━━━━━━━━"
         )
 
     async def _resolve_member(self, payload: discord.RawReactionActionEvent) -> discord.Member | None:
@@ -281,7 +281,7 @@ class ReactionRoleCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
-        """Grant role when a user adds the configured reaction."""
+        """Toggle role when a user adds the configured reaction, then remove their reaction."""
 
         if payload.guild_id is None:
             return
@@ -300,34 +300,31 @@ class ReactionRoleCog(commands.Cog):
             return
 
         try:
-            await member.add_roles(role, reason="Reaction role added")
+            if role in member.roles:
+                await member.remove_roles(role, reason="Reaction role toggled off")
+            else:
+                await member.add_roles(role, reason="Reaction role toggled on")
         except (discord.Forbidden, discord.HTTPException):
-            logger.exception("Failed to add reaction role guild=%s user=%s", payload.guild_id, payload.user_id)
+            logger.exception("Failed to toggle reaction role guild=%s user=%s", payload.guild_id, payload.user_id)
+            return
+
+        guild = self.bot.get_guild(entry["guild_id"])
+        if guild is None:
+            return
+
+        channel = guild.get_channel(entry["channel_id"])
+        if channel is None or not isinstance(channel, discord.abc.Messageable):
+            return
+
+        try:
+            message = await channel.fetch_message(entry["message_id"])
+            await message.remove_reaction(payload.emoji, member)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            pass
 
     @commands.Cog.listener()
     async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent) -> None:
-        """Remove role when a user removes the configured reaction."""
-
-        if payload.guild_id is None:
-            return
-
-        member = await self._resolve_member(payload)
-        if member is None or member.bot:
-            return
-
-        normalized = self._normalize_emoji(str(payload.emoji))
-        entry = self._find_entry(guild_id=payload.guild_id, message_id=payload.message_id, emoji=normalized)
-        if entry is None:
-            return
-
-        role = member.guild.get_role(entry["role_id"])
-        if role is None:
-            return
-
-        try:
-            await member.remove_roles(role, reason="Reaction role removed")
-        except (discord.Forbidden, discord.HTTPException):
-            logger.exception("Failed to remove reaction role guild=%s user=%s", payload.guild_id, payload.user_id)
+        return
 
     @commands.group(name="reactionrole", invoke_without_command=True)
     @commands.guild_only()

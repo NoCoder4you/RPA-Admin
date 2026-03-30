@@ -254,9 +254,9 @@ class ReactionRoleCog(commands.Cog):
         normalized_emoji = self._normalize_emoji(emoji)
 
         return (
-            "╔════════════════════╗\n"
-            "       ✨ **REACTION ROLE** ✨\n"
-            "╚════════════════════╝\n\n"
+            "# ╔════════════════════╗\n"
+            "#       ✨ **REACTION ROLE** ✨\n"
+            "# ╚════════════════════╝\n\n"
             f"# {normalized_emoji}{normalized_emoji}{normalized_emoji} \n# {role.mention}\n\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"## {message_text}\n"

@@ -178,6 +178,72 @@ class ReactionRoleCog(commands.Cog):
             return entry
         return None
 
+    def _missing_bot_permissions(
+        self,
+        *,
+        channel: discord.TextChannel,
+        me: discord.Member,
+    ) -> list[str]:
+        """Return a list of permission names the bot is missing in a channel."""
+
+        perms = channel.permissions_for(me)
+        missing_permissions: list[str] = []
+        if not perms.view_channel:
+            missing_permissions.append("View Channel")
+        if not perms.read_message_history:
+            missing_permissions.append("Read Message History")
+        if not perms.add_reactions:
+            missing_permissions.append("Add Reactions")
+        if not perms.manage_roles:
+            missing_permissions.append("Manage Roles")
+        if not perms.send_messages:
+            missing_permissions.append("Send Messages")
+        return missing_permissions
+
+    async def _upsert_reaction_role_for_message(
+        self,
+        *,
+        guild: discord.Guild,
+        channel: discord.TextChannel,
+        message: discord.Message,
+        emoji: str,
+        role: discord.Role,
+    ) -> tuple[bool, str]:
+        """Create/replace the reaction-role mapping for one target message."""
+
+        normalized_emoji = self._normalize_emoji(emoji)
+
+        # Remove any previous entry for this message first, then add the new one.
+        old_entry = self._find_entry(guild_id=guild.id, message_id=message.id)
+        if old_entry is not None:
+            self.reaction_roles.remove(old_entry)
+            self._save_data()
+
+        new_entry = {
+            "guild_id": guild.id,
+            "channel_id": channel.id,
+            "message_id": message.id,
+            "emoji": normalized_emoji,
+            "role_id": role.id,
+        }
+
+        # Prevent duplicate message+emoji entries in case of hand-edited JSON.
+        duplicate = self._find_entry(guild_id=guild.id, message_id=message.id, emoji=normalized_emoji)
+        if duplicate is not None:
+            return False, "That message + emoji pair is already configured."
+
+        if not await self._sync_message_reaction(new_entry):
+            # Attempt to restore old reaction mapping if the new config is invalid.
+            if old_entry is not None:
+                self.reaction_roles.append(old_entry)
+                self._save_data()
+                await self._sync_message_reaction(old_entry)
+            return False, "Failed to add the configured bot reaction. Check channel/message/emoji validity."
+
+        self.reaction_roles.append(new_entry)
+        self._save_data()
+        return True, f"Configured reaction role: message `{message.id}`, emoji `{normalized_emoji}`, role {role.mention}."
+
     async def _resolve_member(self, payload: discord.RawReactionActionEvent) -> discord.Member | None:
         """Get member for raw events, including uncached scenarios after restart."""
 
@@ -249,7 +315,7 @@ class ReactionRoleCog(commands.Cog):
     async def reactionrole_group(self, ctx: commands.Context) -> None:
         """Base command group for reaction-role management."""
 
-        await ctx.send("Use: reactionrole add | reactionrole remove | reactionrole list")
+        await ctx.send("# Use: \nreactionrole add \nreactionrole create \nreactionrole remove \nreactionrole list")
 
     @reactionrole_group.command(name="add")
     @commands.has_permissions(manage_roles=True)
@@ -268,16 +334,7 @@ class ReactionRoleCog(commands.Cog):
             await ctx.send("This command can only be used in a server.")
             return
 
-        perms = channel.permissions_for(ctx.me)
-        missing_permissions = []
-        if not perms.view_channel:
-            missing_permissions.append("View Channel")
-        if not perms.read_message_history:
-            missing_permissions.append("Read Message History")
-        if not perms.add_reactions:
-            missing_permissions.append("Add Reactions")
-        if not perms.manage_roles:
-            missing_permissions.append("Manage Roles")
+        missing_permissions = self._missing_bot_permissions(channel=channel, me=ctx.me)
 
         if missing_permissions:
             await ctx.send(f"I am missing required permissions in {channel.mention}: {', '.join(missing_permissions)}")
@@ -301,40 +358,65 @@ class ReactionRoleCog(commands.Cog):
             await ctx.send("Discord API error while fetching that message.")
             return
 
-        # Remove any previous entry for this message first, then add the new one.
-        old_entry = self._find_entry(guild_id=ctx.guild.id, message_id=message.id)
-        if old_entry is not None:
-            self.reaction_roles.remove(old_entry)
-            self._save_data()
-
-        new_entry = {
-            "guild_id": ctx.guild.id,
-            "channel_id": channel.id,
-            "message_id": message.id,
-            "emoji": normalized_emoji,
-            "role_id": role.id,
-        }
-
-        # Prevent duplicate message+emoji entries in case of hand-edited JSON.
-        duplicate = self._find_entry(guild_id=ctx.guild.id, message_id=message.id, emoji=normalized_emoji)
-        if duplicate is not None:
-            await ctx.send("That message + emoji pair is already configured.")
-            return
-
-        if not await self._sync_message_reaction(new_entry):
-            # Attempt to restore old reaction mapping if the new config is invalid.
-            if old_entry is not None:
-                self.reaction_roles.append(old_entry)
-                self._save_data()
-                await self._sync_message_reaction(old_entry)
-            await ctx.send("Failed to add the configured bot reaction. Check channel/message/emoji validity.")
-            return
-
-        self.reaction_roles.append(new_entry)
-        self._save_data()
-        await ctx.send(
-            f"Configured reaction role: message `{message.id}`, emoji `{normalized_emoji}`, role {role.mention}."
+        success, response_text = await self._upsert_reaction_role_for_message(
+            guild=ctx.guild,
+            channel=channel,
+            message=message,
+            emoji=normalized_emoji,
+            role=role,
         )
+        await ctx.send(response_text)
+        if not success:
+            return
+
+    @reactionrole_group.command(name="create")
+    @commands.has_permissions(manage_roles=True)
+    @commands.guild_only()
+    async def reactionrole_create(
+        self,
+        ctx: commands.Context,
+        channel: discord.TextChannel,
+        emoji: str,
+        role: discord.Role,
+        *,
+        message_text: str,
+    ) -> None:
+        """Create a new message and immediately configure it as a reaction-role message."""
+
+        if ctx.guild is None or ctx.me is None:
+            await ctx.send("This command can only be used in a server.")
+            return
+
+        missing_permissions = self._missing_bot_permissions(channel=channel, me=ctx.me)
+        if missing_permissions:
+            await ctx.send(f"I am missing required permissions in {channel.mention}: {', '.join(missing_permissions)}")
+            return
+
+        if role >= ctx.me.top_role:
+            await ctx.send("I cannot manage that role because it is above or equal to my top role.")
+            return
+
+        try:
+            # Let administrators provide the full message body; this becomes the
+            # visible reaction-role prompt users react to.
+            message = await channel.send(message_text)
+        except discord.Forbidden:
+            await ctx.send(f"I do not have permission to send messages in {channel.mention}.")
+            return
+        except discord.HTTPException:
+            await ctx.send("Discord API error while creating the reaction-role message.")
+            return
+
+        success, response_text = await self._upsert_reaction_role_for_message(
+            guild=ctx.guild,
+            channel=channel,
+            message=message,
+            emoji=emoji,
+            role=role,
+        )
+        await ctx.send(response_text)
+        if not success:
+            return
 
     @reactionrole_group.command(name="remove")
     @commands.has_permissions(manage_roles=True)

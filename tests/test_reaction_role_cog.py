@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -64,6 +65,30 @@ class ReactionRoleCogTests(unittest.TestCase):
             self.assertEqual(len(loaded), 1)
             self.assertEqual(loaded[0]["message_id"], 300)
             self.assertEqual(loaded[0]["emoji"], "check:123")
+
+    def test_missing_bot_permissions_reports_all_required_flags(self) -> None:
+        channel = MagicMock()
+        channel.permissions_for.return_value = SimpleNamespace(
+            view_channel=False,
+            read_message_history=False,
+            add_reactions=False,
+            manage_roles=False,
+            send_messages=False,
+        )
+        me = MagicMock()
+
+        missing = self.cog._missing_bot_permissions(channel=channel, me=me)
+
+        self.assertEqual(
+            missing,
+            [
+                "View Channel",
+                "Read Message History",
+                "Add Reactions",
+                "Manage Roles",
+                "Send Messages",
+            ],
+        )
 
 
 if __name__ == "__main__":

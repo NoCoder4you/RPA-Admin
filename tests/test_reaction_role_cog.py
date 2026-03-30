@@ -90,6 +90,19 @@ class ReactionRoleCogTests(unittest.TestCase):
             ],
         )
 
+    def test_build_reaction_role_message_mentions_role_and_instruction(self) -> None:
+        role = SimpleNamespace(mention="<@&999>")
+        text = self.cog._build_reaction_role_message(
+            emoji="✅",
+            role=role,
+            message_text="Pick your team role below.",
+        )
+
+        self.assertIn("✨ **REACTION ROLE** ✨", text)
+        self.assertIn("React with ✅ to get <@&999>.", text)
+        self.assertIn("Remove your reaction to lose <@&999>.", text)
+        self.assertIn("Pick your team role below.", text)
+
 
 if __name__ == "__main__":
     unittest.main()

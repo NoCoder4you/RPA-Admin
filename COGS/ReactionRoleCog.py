@@ -244,6 +244,25 @@ class ReactionRoleCog(commands.Cog):
         self._save_data()
         return True, f"Configured reaction role: message `{message.id}`, emoji `{normalized_emoji}`, role {role.mention}."
 
+    def _build_reaction_role_message(
+        self,
+        *,
+        emoji: str,
+        role: discord.Role,
+        message_text: str,
+    ) -> str:
+        """Build a bold, readable, and role-mentioning reaction-role prompt."""
+
+        normalized_emoji = self._normalize_emoji(emoji)
+        # The role mention is intentionally included in the message body so users can
+        # clearly see which role they receive when reacting.
+        return (
+            "✨ **REACTION ROLE** ✨\n\n"
+            f"React with {normalized_emoji} to get {role.mention}.\n"
+            f"Remove your reaction to lose {role.mention}.\n\n"
+            f"{message_text}"
+        )
+
     async def _resolve_member(self, payload: discord.RawReactionActionEvent) -> discord.Member | None:
         """Get member for raw events, including uncached scenarios after restart."""
 
@@ -399,7 +418,17 @@ class ReactionRoleCog(commands.Cog):
         try:
             # Let administrators provide the full message body; this becomes the
             # visible reaction-role prompt users react to.
-            message = await channel.send(message_text)
+            prompt = self._build_reaction_role_message(
+                emoji=emoji,
+                role=role,
+                message_text=message_text,
+            )
+            # allowed_mentions ensures the role mention is actually rendered as a
+            # mention (instead of inert text) and remains clear/eye-catching.
+            message = await channel.send(
+                prompt,
+                allowed_mentions=discord.AllowedMentions(roles=True),
+            )
         except discord.Forbidden:
             await ctx.send(f"I do not have permission to send messages in {channel.mention}.")
             return

@@ -334,7 +334,7 @@ class ReactionRoleCog(commands.Cog):
     async def reactionrole_group(self, ctx: commands.Context) -> None:
         """Base command group for reaction-role management."""
 
-        await ctx.send("Use: reactionrole add | reactionrole create | reactionrole remove | reactionrole list")
+        await ctx.send("# Use: \nreactionrole add \nreactionrole create \nreactionrole remove \nreactionrole list")
 
     @reactionrole_group.command(name="add")
     @commands.has_permissions(manage_roles=True)

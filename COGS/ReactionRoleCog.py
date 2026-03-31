@@ -15,8 +15,6 @@ logger = logging.getLogger(__name__)
 
 
 class ReactionRoleCog(commands.Cog):
-    """Manage one reaction-role mapping per message using raw reaction events."""
-
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.data_file: Path = json_file("ReactionRoles.json")
@@ -103,8 +101,6 @@ class ReactionRoleCog(commands.Cog):
             grouped.setdefault(key, []).append(entry)
 
         for (guild_id, channel_id, message_id), entries in grouped.items():
-            # Keep at most one entry per message+emoji pair, but allow multiple
-            # different emojis on one message so roles remain independently toggleable.
             deduped_by_emoji: dict[str, dict[str, Any]] = {}
             for entry in entries:
                 deduped_by_emoji[entry["emoji"]] = entry
@@ -180,7 +176,6 @@ class ReactionRoleCog(commands.Cog):
         emoji: str | None = None,
         role_id: int | None = None,
     ) -> dict[str, Any] | None:
-        """Find a configured entry using message id and optional filters."""
 
         for entry in self.reaction_roles:
             if entry["guild_id"] != guild_id or entry["message_id"] != message_id:
@@ -223,7 +218,6 @@ class ReactionRoleCog(commands.Cog):
         emoji: str,
         role: discord.Role,
     ) -> tuple[bool, str]:
-        """Create a reaction-role mapping for one target message without overwriting others."""
 
         normalized_emoji = self._normalize_emoji(emoji)
 
@@ -257,11 +251,7 @@ class ReactionRoleCog(commands.Cog):
         role: discord.Role,
         message_text: str,
     ) -> list[discord.Embed]:
-        """Build one or more embeds for the reaction-role prompt.
 
-        Discord embed descriptions have a hard size limit (4096 chars), so this
-        helper chunks the details across multiple embeds when needed.
-        """
 
         normalized_emoji = self._normalize_emoji(emoji)
         detail_lines = [line.strip() for line in message_text.splitlines() if line.strip()]
@@ -403,7 +393,7 @@ class ReactionRoleCog(commands.Cog):
     async def reactionrole_group(self, ctx: commands.Context) -> None:
         """Base command group for reaction-role management."""
 
-        await ctx.send("Use: reactionrole add | reactionrole create | reactionrole remove | reactionrole list")
+        await ctx.send("# Use: \nreactionrole add \nreactionrole create \nreactionrole remove \nreactionrole list")
 
     @reactionrole_group.command(name="add")
     @commands.has_permissions(manage_roles=True)

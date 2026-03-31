@@ -15,8 +15,6 @@ logger = logging.getLogger(__name__)
 
 
 class ReactionRoleCog(commands.Cog):
-    """Manage one reaction-role mapping per message using raw reaction events."""
-
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.data_file: Path = json_file("ReactionRoles.json")
@@ -338,8 +336,6 @@ class ReactionRoleCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
-        """Grant role when a user adds the configured reaction."""
-
         if payload.guild_id is None:
             return
 
@@ -391,7 +387,7 @@ class ReactionRoleCog(commands.Cog):
     async def reactionrole_group(self, ctx: commands.Context) -> None:
         """Base command group for reaction-role management."""
 
-        await ctx.send("Use: reactionrole add | reactionrole create | reactionrole remove | reactionrole list")
+        await ctx.send("# Use: \nreactionrole add \nreactionrole create \nreactionrole remove \nreactionrole list")
 
     @reactionrole_group.command(name="add")
     @commands.has_permissions(manage_roles=True)

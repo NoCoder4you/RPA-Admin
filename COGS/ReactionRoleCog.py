@@ -245,7 +245,11 @@ class ReactionRoleCog(commands.Cog):
     ) -> list[discord.Embed]:
 
         normalized_emoji = self._normalize_emoji(emoji)
-        intro_block = f"{normalized_emoji} = {role.mention}"
+
+        intro_block = (
+            "React to this message to assign yourself roles and gain channel access.\n\n"
+            f"{normalized_emoji} = {role.mention}\n"
+        )
 
         max_description_length = 4096
         embeds: list[discord.Embed] = []

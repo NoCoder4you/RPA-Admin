@@ -90,7 +90,7 @@ class ReactionRoleCogTests(unittest.TestCase):
             ],
         )
 
-    def test_build_reaction_role_embeds_keeps_only_mapping_line(self) -> None:
+    def test_build_reaction_role_embeds_keeps_instruction_and_mapping_only(self) -> None:
         role = SimpleNamespace(mention="<@&999>")
         embeds = self.cog._build_reaction_role_embeds(
             emoji="✅",
@@ -99,7 +99,10 @@ class ReactionRoleCogTests(unittest.TestCase):
         )
         text = embeds[0].description or ""
 
-        self.assertEqual(text, "✅ = <@&999>")
+        self.assertEqual(
+            text,
+            "React to this message to assign yourself roles and gain channel access.\n\n✅ = <@&999>\n",
+        )
 
     def test_build_reaction_role_embeds_splits_when_description_is_too_large(self) -> None:
         role = SimpleNamespace(mention="<@&999>")

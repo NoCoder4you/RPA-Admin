@@ -193,6 +193,21 @@ class ReactionRoleCog(commands.Cog):
             if entry["guild_id"] == guild_id and entry["message_id"] == message_id
         ]
 
+    def _other_entries_for_message(
+        self,
+        *,
+        guild_id: int,
+        message_id: int,
+        keep_emoji: str,
+    ) -> list[dict[str, Any]]:
+        """Return configured message entries except the selected emoji entry."""
+
+        return [
+            entry
+            for entry in self._entries_for_message(guild_id=guild_id, message_id=message_id)
+            if entry["emoji"] != keep_emoji
+        ]
+
     async def _sync_message_reactions(
         self,
         *,
@@ -355,6 +370,40 @@ class ReactionRoleCog(commands.Cog):
         await member.add_roles(role, reason="Reaction role toggled on")
         return "added"
 
+    async def _remove_member_reaction(self, *, payload: discord.RawReactionActionEvent, emoji: str) -> None:
+
+        guild = self.bot.get_guild(payload.guild_id) if payload.guild_id else None
+        if guild is None:
+            return
+
+        channel = guild.get_channel(payload.channel_id)
+        if channel is None or not isinstance(channel, discord.abc.Messageable):
+            return
+
+        try:
+            message = await channel.fetch_message(payload.message_id)
+            await message.remove_reaction(emoji, discord.Object(id=payload.user_id))
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return
+
+    async def _enforce_single_member_reaction(
+        self,
+        *,
+        payload: discord.RawReactionActionEvent,
+        selected_emoji: str,
+    ) -> None:
+        """Ensure the reacting member keeps only one configured reaction on a message."""
+
+        if payload.guild_id is None:
+            return
+
+        for entry in self._other_entries_for_message(
+            guild_id=payload.guild_id,
+            message_id=payload.message_id,
+            keep_emoji=selected_emoji,
+        ):
+            await self._remove_member_reaction(payload=payload, emoji=entry["emoji"])
+
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
         """Grant role when a user adds the configured reaction."""
@@ -379,8 +428,20 @@ class ReactionRoleCog(commands.Cog):
             return
 
         try:
-
-            await self._toggle_member_role(member=member, role=role)
+            # Treat reaction add as a toggle event:
+            # - if member does not have role yet -> add it
+            # - if member already has role -> remove it
+            action = await self._toggle_member_role(member=member, role=role)
+            if action == "added":
+                # Keep only one configured reaction per member for this message.
+                await self._enforce_single_member_reaction(
+                    payload=payload,
+                    selected_emoji=normalized,
+                )
+            else:
+                # Toggle-off path: remove the member's same reaction so a second click
+                # immediately reflects the role removal in the UI.
+                await self._remove_member_reaction(payload=payload, emoji=normalized)
         except (discord.Forbidden, discord.HTTPException):
             logger.exception("Failed to toggle reaction role guild=%s user=%s", payload.guild_id, payload.user_id)
 

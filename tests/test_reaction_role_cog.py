@@ -64,6 +64,17 @@ class ReactionRoleCogTests(unittest.TestCase):
         self.assertEqual(len(same_message), 2)
         self.assertEqual({entry["emoji"] for entry in same_message}, {"✅", "🎉"})
 
+    def test_other_entries_for_message_excludes_selected_emoji(self) -> None:
+        self.cog.reaction_roles = [
+            {"guild_id": 1, "channel_id": 10, "message_id": 99, "emoji": "✅", "role_id": 100},
+            {"guild_id": 1, "channel_id": 10, "message_id": 99, "emoji": "🎉", "role_id": 101},
+        ]
+
+        remaining = self.cog._other_entries_for_message(guild_id=1, message_id=99, keep_emoji="🎉")
+
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(remaining[0]["emoji"], "✅")
+
     def test_save_and_load_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             file_path = Path(tmp) / "ReactionRoles.json"

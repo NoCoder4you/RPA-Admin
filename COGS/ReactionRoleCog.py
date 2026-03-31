@@ -15,8 +15,6 @@ logger = logging.getLogger(__name__)
 
 
 class ReactionRoleCog(commands.Cog):
-    """Manage one reaction-role mapping per message using raw reaction events."""
-
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.data_file: Path = json_file("ReactionRoles.json")
@@ -103,8 +101,7 @@ class ReactionRoleCog(commands.Cog):
             grouped.setdefault(key, []).append(entry)
 
         for (guild_id, channel_id, message_id), entries in grouped.items():
-            # Keep at most one entry per message+emoji pair, but allow multiple
-            # different emojis on one message so roles remain independently toggleable.
+
             deduped_by_emoji: dict[str, dict[str, Any]] = {}
             for entry in entries:
                 deduped_by_emoji[entry["emoji"]] = entry
@@ -180,7 +177,7 @@ class ReactionRoleCog(commands.Cog):
         emoji: str | None = None,
         role_id: int | None = None,
     ) -> dict[str, Any] | None:
-        """Find a configured entry using message id and optional filters."""
+
 
         for entry in self.reaction_roles:
             if entry["guild_id"] != guild_id or entry["message_id"] != message_id:
@@ -223,7 +220,7 @@ class ReactionRoleCog(commands.Cog):
         emoji: str,
         role: discord.Role,
     ) -> tuple[bool, str]:
-        """Create a reaction-role mapping for one target message without overwriting others."""
+
 
         normalized_emoji = self._normalize_emoji(emoji)
 
@@ -345,7 +342,7 @@ class ReactionRoleCog(commands.Cog):
     async def reactionrole_group(self, ctx: commands.Context) -> None:
         """Base command group for reaction-role management."""
 
-        await ctx.send("Use: reactionrole add | reactionrole create | reactionrole remove | reactionrole list")
+        await ctx.send("# Use: \nreactionrole add \nreactionrole create \nreactionrole remove \nreactionrole list")
 
     @reactionrole_group.command(name="add")
     @commands.has_permissions(manage_roles=True)
@@ -358,7 +355,7 @@ class ReactionRoleCog(commands.Cog):
         emoji: str,
         role: discord.Role,
     ) -> None:
-        """Add a reaction-role entry for a specific message without overriding others."""
+
 
         if ctx.guild is None or ctx.me is None:
             await ctx.send("This command can only be used in a server.")
@@ -409,7 +406,6 @@ class ReactionRoleCog(commands.Cog):
         emoji: str,
         role: discord.Role,
     ) -> None:
-        """Create a new message and immediately configure it as a reaction-role message."""
 
         if ctx.guild is None or ctx.me is None:
             await ctx.send("This command can only be used in a server.")
@@ -430,8 +426,7 @@ class ReactionRoleCog(commands.Cog):
                 emoji=emoji,
                 role=role,
             )
-            # Post the first embed and attach the reaction-role mapping to that
-            # message. When content exceeds embed limits, send continuation embeds.
+
             message = await channel.send(
                 embed=embeds[0],
                 allowed_mentions=discord.AllowedMentions(roles=True),

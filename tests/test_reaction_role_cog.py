@@ -27,6 +27,13 @@ class ReactionRoleCogTests(unittest.TestCase):
         self.assertEqual(self.cog._normalize_emoji("<:rpa:123456>"), "rpa:123456")
         self.assertEqual(self.cog._normalize_emoji("<a:dance:555>"), "dance:555")
 
+    def test_display_emoji_returns_unicode_or_custom_markup(self) -> None:
+        guild = MagicMock()
+        guild.get_emoji.return_value = None
+
+        self.assertEqual(self.cog._display_emoji(guild=guild, stored_emoji="✅"), "✅")
+        self.assertEqual(self.cog._display_emoji(guild=guild, stored_emoji="party:12345"), "<:party:12345>")
+
     def test_find_entry_filters_by_optional_fields(self) -> None:
         self.cog.reaction_roles = [
             {

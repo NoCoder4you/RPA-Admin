@@ -12,9 +12,12 @@ from discord.ext import commands
 from common_paths import json_file
 
 logger = logging.getLogger(__name__)
+CUSTOM_EMOJI_PATTERN = re.compile(r"^([A-Za-z0-9_]+):(\d+)$")
 
 
 class ReactionRoleCog(commands.Cog):
+    """Manage one reaction-role mapping per message using raw reaction events."""
+
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.data_file: Path = json_file("ReactionRoles.json")
@@ -87,6 +90,55 @@ class ReactionRoleCog(commands.Cog):
         if custom_match:
             return f"{custom_match.group(1)}:{custom_match.group(2)}"
         return raw
+
+    def _display_emoji(self, *, guild: discord.Guild, stored_emoji: str) -> str:
+        """Convert stored emoji values to a display-ready string for embeds."""
+
+        custom_match = CUSTOM_EMOJI_PATTERN.fullmatch(stored_emoji)
+        if not custom_match:
+            return stored_emoji
+
+        emoji_id = int(custom_match.group(2))
+        custom_emoji = guild.get_emoji(emoji_id)
+        if custom_emoji is not None:
+            return str(custom_emoji)
+        # Fallback to Discord custom emoji text format if the emoji object is not cached.
+        return f"<:{custom_match.group(1)}:{emoji_id}>"
+
+    async def _refresh_reaction_role_embed(
+        self,
+        *,
+        guild: discord.Guild,
+        channel: discord.TextChannel,
+        message: discord.Message,
+    ) -> None:
+        """Update the target message embed so it reflects all configured mappings."""
+
+        entries = self._entries_for_message(guild_id=guild.id, message_id=message.id)
+        if not entries:
+            return
+
+        mapping_lines = []
+        for entry in entries:
+            mapping_lines.append(f"{self._display_emoji(guild=guild, stored_emoji=entry['emoji'])} = <@&{entry['role_id']}>")
+
+        description = (
+            "React to this message to assign yourself roles and gain channel access.\n\n"
+            + "\n".join(mapping_lines)
+            + "\n"
+        )
+        embed = discord.Embed(description=description, color=discord.Color.blurple())
+
+        try:
+            await message.edit(embed=embed, allowed_mentions=discord.AllowedMentions(roles=True))
+        except (discord.Forbidden, discord.HTTPException):
+            # Keep role mapping functionality even when cosmetic embed updates fail.
+            logger.exception(
+                "Failed to refresh reaction role embed guild=%s channel=%s message=%s",
+                guild.id,
+                channel.id,
+                message.id,
+            )
 
     async def _restore_bot_reactions(self) -> None:
         """Ensure each configured message has exactly one bot reaction for its entry."""
@@ -244,6 +296,8 @@ class ReactionRoleCog(commands.Cog):
             self.reaction_roles.remove(new_entry)
             self._save_data()
             return False, "Failed to add the configured bot reaction. Check channel/message/emoji validity."
+
+        await self._refresh_reaction_role_embed(guild=guild, channel=channel, message=message)
 
         return True, f"Configured reaction role: message `{message.id}`, emoji `{normalized_emoji}`, role {role.mention}."
 
@@ -492,6 +546,7 @@ class ReactionRoleCog(commands.Cog):
             try:
                 message = await channel.fetch_message(entry["message_id"])
                 await message.remove_reaction(entry["emoji"], self.bot.user)
+                await self._refresh_reaction_role_embed(guild=guild, channel=channel, message=message)
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 # Clean failure: keep DB removal even if Discord cleanup fails.
                 pass

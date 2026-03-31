@@ -245,20 +245,12 @@ class ReactionRoleCog(commands.Cog):
     ) -> list[discord.Embed]:
 
         normalized_emoji = self._normalize_emoji(emoji)
-        detail_lines = [line.strip() for line in message_text.splitlines() if line.strip()]
-        if not detail_lines:
-            detail_lines = ["Choose your role below."]
-
-        # Keep each detail line visually consistent and list-like.
-        formatted_lines = [f"- {line}" for line in detail_lines]
-        intro_block = (
-            "React to this message to assign yourself roles and gain channel access.\n\n"
-            f"{normalized_emoji} = {role.mention}\n"
-            )
+        intro_block = f"{normalized_emoji} = {role.mention}"
 
         max_description_length = 4096
         embeds: list[discord.Embed] = []
         current_lines: list[str] = []
+        formatted_lines: list[str] = []
 
         for line in formatted_lines:
             candidate_lines = current_lines + [line]

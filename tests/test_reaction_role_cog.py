@@ -90,7 +90,7 @@ class ReactionRoleCogTests(unittest.TestCase):
             ],
         )
 
-    def test_build_reaction_role_embeds_mentions_role_and_instruction(self) -> None:
+    def test_build_reaction_role_embeds_keeps_only_mapping_line(self) -> None:
         role = SimpleNamespace(mention="<@&999>")
         embeds = self.cog._build_reaction_role_embeds(
             emoji="✅",
@@ -99,11 +99,7 @@ class ReactionRoleCogTests(unittest.TestCase):
         )
         text = embeds[0].description or ""
 
-        self.assertIn("- Pick your team role below.", text)
-        self.assertIn("✅ = <@&999>", text)
-        self.assertNotIn("Role mapping", text)
-        self.assertNotIn("Remove your reaction", text)
-        self.assertNotIn("**Details**", text)
+        self.assertEqual(text, "✅ = <@&999>")
 
     def test_build_reaction_role_embeds_splits_when_description_is_too_large(self) -> None:
         role = SimpleNamespace(mention="<@&999>")

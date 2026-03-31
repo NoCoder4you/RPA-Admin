@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import asyncio
 from types import SimpleNamespace
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 try:
     from COGS.ReactionRoleCog import ReactionRoleCog
@@ -133,6 +134,34 @@ class ReactionRoleCogTests(unittest.TestCase):
         )
 
         self.assertEqual(len(embeds), 1)
+
+    def test_toggle_member_role_removes_when_member_already_has_role(self) -> None:
+        member = SimpleNamespace(
+            roles=[SimpleNamespace(id=22)],
+            add_roles=AsyncMock(),
+            remove_roles=AsyncMock(),
+        )
+        role = SimpleNamespace(id=22)
+
+        action = asyncio.run(self.cog._toggle_member_role(member=member, role=role))
+
+        self.assertEqual(action, "removed")
+        member.remove_roles.assert_awaited_once()
+        member.add_roles.assert_not_awaited()
+
+    def test_toggle_member_role_adds_when_member_does_not_have_role(self) -> None:
+        member = SimpleNamespace(
+            roles=[SimpleNamespace(id=33)],
+            add_roles=AsyncMock(),
+            remove_roles=AsyncMock(),
+        )
+        role = SimpleNamespace(id=22)
+
+        action = asyncio.run(self.cog._toggle_member_role(member=member, role=role))
+
+        self.assertEqual(action, "added")
+        member.add_roles.assert_awaited_once()
+        member.remove_roles.assert_not_awaited()
 
 
 if __name__ == "__main__":

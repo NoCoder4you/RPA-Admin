@@ -345,6 +345,17 @@ class ReactionRoleCog(commands.Cog):
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             return None
 
+    async def _toggle_member_role(self, *, member: discord.Member, role: discord.Role) -> str:
+        """Toggle a role for a member and return the performed action."""
+
+        has_role = any(existing_role.id == role.id for existing_role in member.roles)
+        if has_role:
+            await member.remove_roles(role, reason="Reaction role toggled off")
+            return "removed"
+
+        await member.add_roles(role, reason="Reaction role toggled on")
+        return "added"
+
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
         """Grant role when a user adds the configured reaction."""
@@ -369,9 +380,12 @@ class ReactionRoleCog(commands.Cog):
             return
 
         try:
-            await member.add_roles(role, reason="Reaction role added")
+            # Treat reaction add as a toggle event:
+            # - if member does not have role yet -> add it
+            # - if member already has role -> remove it
+            await self._toggle_member_role(member=member, role=role)
         except (discord.Forbidden, discord.HTTPException):
-            logger.exception("Failed to add reaction role guild=%s user=%s", payload.guild_id, payload.user_id)
+            logger.exception("Failed to toggle reaction role guild=%s user=%s", payload.guild_id, payload.user_id)
 
     @commands.Cog.listener()
     async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent) -> None:

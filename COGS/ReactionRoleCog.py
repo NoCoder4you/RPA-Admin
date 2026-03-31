@@ -120,10 +120,6 @@ class ReactionRoleCog(commands.Cog):
             await self._sync_message_reaction(active_entry)
 
     async def _sync_message_reaction(self, entry: dict[str, Any]) -> bool:
-        """Remove stale bot reactions for a configured message and add the active one.
-
-        Returns ``True`` when the target reaction add operation succeeded.
-        """
 
         guild = self.bot.get_guild(entry["guild_id"])
         if guild is None:
@@ -164,7 +160,6 @@ class ReactionRoleCog(commands.Cog):
         emoji: str | None = None,
         role_id: int | None = None,
     ) -> dict[str, Any] | None:
-        """Find a configured entry using message id and optional filters."""
 
         for entry in self.reaction_roles:
             if entry["guild_id"] != guild_id or entry["message_id"] != message_id:
@@ -207,7 +202,6 @@ class ReactionRoleCog(commands.Cog):
         emoji: str,
         role: discord.Role,
     ) -> tuple[bool, str]:
-        """Create/replace the reaction-role mapping for one target message."""
 
         normalized_emoji = self._normalize_emoji(emoji)
 
@@ -249,17 +243,9 @@ class ReactionRoleCog(commands.Cog):
         role: discord.Role,
         message_text: str,
     ) -> list[discord.Embed]:
-        """Build one or more embeds for the reaction-role prompt.
-
-        Discord embed descriptions have a hard size limit (4096 chars), so this
-        helper chunks the details across multiple embeds when needed.
-        """
 
         normalized_emoji = self._normalize_emoji(emoji)
 
-        # Keep the embed concise with a single instruction sentence and the
-        # emoji-to-role mapping. We intentionally ignore freeform `message_text`
-        # to avoid noisy descriptions in the reaction-role prompt.
         intro_block = (
             "React to this message to assign yourself roles and gain channel access.\n\n"
             f"{normalized_emoji} = {role.mention}\n"

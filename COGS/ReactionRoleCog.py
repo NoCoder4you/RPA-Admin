@@ -101,10 +101,12 @@ class ReactionRoleCog(commands.Cog):
             grouped.setdefault(key, []).append(entry)
 
         for (guild_id, channel_id, message_id), entries in grouped.items():
-            # Keep the latest entry for a message and discard extras so the bot only
-            # ever shows one active reaction-role reaction on that message.
-            active_entry = entries[-1]
-            if len(entries) > 1:
+            deduped_by_emoji: dict[str, dict[str, Any]] = {}
+            for entry in entries:
+                deduped_by_emoji[entry["emoji"]] = entry
+
+            deduped_entries = list(deduped_by_emoji.values())
+            if len(deduped_entries) != len(entries):
                 self.reaction_roles = [
                     item
                     for item in self.reaction_roles
@@ -112,43 +114,57 @@ class ReactionRoleCog(commands.Cog):
                         item["guild_id"] == guild_id
                         and item["channel_id"] == channel_id
                         and item["message_id"] == message_id
-                        and item is not active_entry
                     )
-                ]
+                ] + deduped_entries
                 self._save_data()
 
-            await self._sync_message_reaction(active_entry)
+            await self._sync_message_reactions(
+                guild_id=guild_id,
+                channel_id=channel_id,
+                message_id=message_id,
+            )
 
-    async def _sync_message_reaction(self, entry: dict[str, Any]) -> bool:
+    def _entries_for_message(self, *, guild_id: int, message_id: int) -> list[dict[str, Any]]:
+        """Return all reaction-role entries configured for one message."""
 
-        guild = self.bot.get_guild(entry["guild_id"])
+        return [
+            entry
+            for entry in self.reaction_roles
+            if entry["guild_id"] == guild_id and entry["message_id"] == message_id
+        ]
+
+    async def _sync_message_reactions(
+        self,
+        *,
+        guild_id: int,
+        channel_id: int,
+        message_id: int,
+    ) -> bool:
+        """Ensure all configured emojis for a message are present as bot reactions."""
+
+        guild = self.bot.get_guild(guild_id)
         if guild is None:
             return False
 
-        channel = guild.get_channel(entry["channel_id"])
+        channel = guild.get_channel(channel_id)
         if channel is None or not isinstance(channel, discord.abc.Messageable):
             return False
 
         try:
-            message = await channel.fetch_message(entry["message_id"])
+            message = await channel.fetch_message(message_id)
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             return False
 
-        bot_user = self.bot.user
-        if bot_user is None:
-            return False
-
-        # Remove any previous bot reaction(s) on this message first.
-        for reaction in message.reactions:
-            try:
-                if reaction.me:
-                    await message.remove_reaction(reaction.emoji, bot_user)
-            except (discord.Forbidden, discord.HTTPException):
-                continue
-
-        try:
-            await message.add_reaction(entry["emoji"])
+        entries = self._entries_for_message(guild_id=guild_id, message_id=message_id)
+        if not entries:
             return True
+
+        added_any = False
+        try:
+            for entry in entries:
+                await message.add_reaction(entry["emoji"])
+                added_any = True
+            return added_any
         except (discord.HTTPException, TypeError):
             return False
 
@@ -193,7 +209,7 @@ class ReactionRoleCog(commands.Cog):
             missing_permissions.append("Send Messages")
         return missing_permissions
 
-    async def _upsert_reaction_role_for_message(
+    async def _add_reaction_role_for_message(
         self,
         *,
         guild: discord.Guild,
@@ -204,12 +220,6 @@ class ReactionRoleCog(commands.Cog):
     ) -> tuple[bool, str]:
 
         normalized_emoji = self._normalize_emoji(emoji)
-
-        # Remove any previous entry for this message first, then add the new one.
-        old_entry = self._find_entry(guild_id=guild.id, message_id=message.id)
-        if old_entry is not None:
-            self.reaction_roles.remove(old_entry)
-            self._save_data()
 
         new_entry = {
             "guild_id": guild.id,
@@ -224,16 +234,14 @@ class ReactionRoleCog(commands.Cog):
         if duplicate is not None:
             return False, "That message + emoji pair is already configured."
 
-        if not await self._sync_message_reaction(new_entry):
-            # Attempt to restore old reaction mapping if the new config is invalid.
-            if old_entry is not None:
-                self.reaction_roles.append(old_entry)
-                self._save_data()
-                await self._sync_message_reaction(old_entry)
-            return False, "Failed to add the configured bot reaction. Check channel/message/emoji validity."
-
         self.reaction_roles.append(new_entry)
         self._save_data()
+        if not await self._sync_message_reactions(guild_id=guild.id, channel_id=channel.id, message_id=message.id):
+            # Roll back persistence when the reaction cannot be applied.
+            self.reaction_roles.remove(new_entry)
+            self._save_data()
+            return False, "Failed to add the configured bot reaction. Check channel/message/emoji validity."
+
         return True, f"Configured reaction role: message `{message.id}`, emoji `{normalized_emoji}`, role {role.mention}."
 
     def _build_reaction_role_embeds(
@@ -244,20 +252,26 @@ class ReactionRoleCog(commands.Cog):
         message_text: str,
     ) -> list[discord.Embed]:
 
-        normalized_emoji = self._normalize_emoji(emoji)
 
-        # Keep the embed concise with a single instruction sentence and the
-        # emoji-to-role mapping. We intentionally ignore freeform `message_text`
-        # to avoid noisy descriptions in the reaction-role prompt.
+        normalized_emoji = self._normalize_emoji(emoji)
+        detail_lines = [line.strip() for line in message_text.splitlines() if line.strip()]
+        if not detail_lines:
+            detail_lines = ["Choose your role below."]
+
+        # Keep each detail line visually consistent and list-like.
+        formatted_lines = [f"- {line}" for line in detail_lines]
+
         intro_block = (
             "React to this message to assign yourself roles and gain channel access.\n\n"
+            "**Role mapping**\n"
             f"{normalized_emoji} = {role.mention}\n"
+            f"Remove your reaction to lose {role.mention}.\n\n"
+            "**Details**\n"
         )
 
         max_description_length = 4096
         embeds: list[discord.Embed] = []
         current_lines: list[str] = []
-        formatted_lines: list[str] = []
 
         for line in formatted_lines:
             candidate_lines = current_lines + [line]
@@ -320,7 +334,12 @@ class ReactionRoleCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
+        """Grant role when a user adds the configured reaction."""
+
         if payload.guild_id is None:
+            return
+        if self.bot.user is not None and payload.user_id == self.bot.user.id:
+            # Ignore the bot's own reaction events so role toggling only tracks members.
             return
 
         member = await self._resolve_member(payload)
@@ -336,32 +355,19 @@ class ReactionRoleCog(commands.Cog):
         if role is None:
             return
 
-        # Treat each reaction click as a toggle action: if the member already has
-        # the role, remove it; otherwise add it. This keeps the UX simple.
         try:
-            if role in member.roles:
-                await member.remove_roles(role, reason="Reaction role toggled off")
-            else:
-                await member.add_roles(role, reason="Reaction role toggled on")
+            await member.add_roles(role, reason="Reaction role added")
         except (discord.Forbidden, discord.HTTPException):
-            logger.exception("Failed to toggle reaction role guild=%s user=%s", payload.guild_id, payload.user_id)
-            return
-
-        # Best-effort cleanup so users can click the same reaction repeatedly
-        # without manually un-reacting first.
-        channel = member.guild.get_channel(payload.channel_id)
-        if isinstance(channel, discord.TextChannel):
-            try:
-                message = await channel.fetch_message(payload.message_id)
-                await message.remove_reaction(payload.emoji, member)
-            except (discord.Forbidden, discord.NotFound, discord.HTTPException):
-                pass
+            logger.exception("Failed to add reaction role guild=%s user=%s", payload.guild_id, payload.user_id)
 
     @commands.Cog.listener()
     async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent) -> None:
-        """Remove role when a user removes the configured reaction manually."""
+        """Remove role when a user removes the configured reaction."""
 
         if payload.guild_id is None:
+            return
+        if self.bot.user is not None and payload.user_id == self.bot.user.id:
+            # Prevent bot-driven cleanup reaction removals from affecting member roles.
             return
 
         member = await self._resolve_member(payload)
@@ -430,7 +436,7 @@ class ReactionRoleCog(commands.Cog):
             await ctx.send("Discord API error while fetching that message.")
             return
 
-        success, response_text = await self._upsert_reaction_role_for_message(
+        success, response_text = await self._add_reaction_role_for_message(
             guild=ctx.guild,
             channel=channel,
             message=message,
@@ -450,6 +456,8 @@ class ReactionRoleCog(commands.Cog):
         channel: discord.TextChannel,
         emoji: str,
         role: discord.Role,
+        *,
+        message_text: str,
     ) -> None:
         """Create a new message and immediately configure it as a reaction-role message."""
 
@@ -467,12 +475,12 @@ class ReactionRoleCog(commands.Cog):
             return
 
         try:
-            # The create command intentionally posts a concise fixed-format embed,
-            # so no extra freeform description text is required from the command.
+            # Let administrators provide the full message body; this becomes the
+            # visible reaction-role prompt users react to.
             embeds = self._build_reaction_role_embeds(
                 emoji=emoji,
                 role=role,
-                message_text="",
+                message_text=message_text,
             )
             # Post the first embed and attach the reaction-role mapping to that
             # message. When content exceeds embed limits, send continuation embeds.
@@ -492,7 +500,7 @@ class ReactionRoleCog(commands.Cog):
             await ctx.send("Discord API error while creating the reaction-role message.")
             return
 
-        success, response_text = await self._upsert_reaction_role_for_message(
+        success, response_text = await self._add_reaction_role_for_message(
             guild=ctx.guild,
             channel=channel,
             message=message,

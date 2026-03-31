@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 try:
     from COGS.ReactionRoleCog import ReactionRoleCog
@@ -43,6 +43,18 @@ class ReactionRoleCogTests(unittest.TestCase):
 
         no_match = self.cog._find_entry(guild_id=1, message_id=3, emoji="❌")
         self.assertIsNone(no_match)
+
+    def test_entries_for_message_returns_all_rows_for_same_message(self) -> None:
+        self.cog.reaction_roles = [
+            {"guild_id": 1, "channel_id": 10, "message_id": 99, "emoji": "✅", "role_id": 100},
+            {"guild_id": 1, "channel_id": 10, "message_id": 99, "emoji": "🎉", "role_id": 101},
+            {"guild_id": 1, "channel_id": 10, "message_id": 98, "emoji": "📢", "role_id": 102},
+        ]
+
+        same_message = self.cog._entries_for_message(guild_id=1, message_id=99)
+
+        self.assertEqual(len(same_message), 2)
+        self.assertEqual({entry["emoji"] for entry in same_message}, {"✅", "🎉"})
 
     def test_save_and_load_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -90,7 +102,7 @@ class ReactionRoleCogTests(unittest.TestCase):
             ],
         )
 
-    def test_build_reaction_role_embeds_keeps_instruction_and_mapping_only(self) -> None:
+    def test_build_reaction_role_embeds_mentions_role_and_instruction(self) -> None:
         role = SimpleNamespace(mention="<@&999>")
         embeds = self.cog._build_reaction_role_embeds(
             emoji="✅",
@@ -99,10 +111,11 @@ class ReactionRoleCogTests(unittest.TestCase):
         )
         text = embeds[0].description or ""
 
-        self.assertEqual(
-            text,
-            "React to this message to assign yourself roles and gain channel access.\n\n✅ = <@&999>\n",
-        )
+        self.assertIn("React to this message to assign yourself roles and gain channel access.", text)
+        self.assertIn("- Pick your team role below.", text)
+        self.assertIn("**Role mapping**", text)
+        self.assertIn("✅ = <@&999>", text)
+        self.assertIn("Remove your reaction to lose <@&999>.", text)
 
     def test_build_reaction_role_embeds_splits_when_description_is_too_large(self) -> None:
         role = SimpleNamespace(mention="<@&999>")
@@ -117,35 +130,6 @@ class ReactionRoleCogTests(unittest.TestCase):
         self.assertGreater(len(embeds), 1)
         for embed in embeds:
             self.assertLessEqual(len(embed.description or ""), 4096)
-
-    def test_on_raw_reaction_add_toggles_existing_role_off(self) -> None:
-        role = SimpleNamespace(id=4)
-        member = MagicMock()
-        member.bot = False
-        member.roles = [role]
-        member.guild = MagicMock()
-        member.guild.get_role.return_value = role
-        member.guild.get_channel.return_value = None
-        member.remove_roles = AsyncMock()
-        member.add_roles = AsyncMock()
-
-        payload = SimpleNamespace(
-            guild_id=1,
-            channel_id=2,
-            message_id=3,
-            user_id=5,
-            emoji="✅",
-        )
-
-        self.cog._resolve_member = AsyncMock(return_value=member)
-        self.cog._find_entry = MagicMock(return_value={"role_id": 4})
-
-        import asyncio
-
-        asyncio.run(self.cog.on_raw_reaction_add(payload))
-
-        member.remove_roles.assert_awaited_once()
-        member.add_roles.assert_not_awaited()
 
 
 if __name__ == "__main__":

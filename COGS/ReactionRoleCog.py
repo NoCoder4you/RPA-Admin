@@ -246,6 +246,9 @@ class ReactionRoleCog(commands.Cog):
 
         normalized_emoji = self._normalize_emoji(emoji)
 
+        # Keep the embed concise with a single instruction sentence and the
+        # emoji-to-role mapping. We intentionally ignore freeform `message_text`
+        # to avoid noisy descriptions in the reaction-role prompt.
         intro_block = (
             "React to this message to assign yourself roles and gain channel access.\n\n"
             f"{normalized_emoji} = {role.mention}\n"
@@ -447,8 +450,6 @@ class ReactionRoleCog(commands.Cog):
         channel: discord.TextChannel,
         emoji: str,
         role: discord.Role,
-        *,
-        message_text: str,
     ) -> None:
         """Create a new message and immediately configure it as a reaction-role message."""
 
@@ -466,12 +467,12 @@ class ReactionRoleCog(commands.Cog):
             return
 
         try:
-            # Let administrators provide the full message body; this becomes the
-            # visible reaction-role prompt users react to.
+            # The create command intentionally posts a concise fixed-format embed,
+            # so no extra freeform description text is required from the command.
             embeds = self._build_reaction_role_embeds(
                 emoji=emoji,
                 role=role,
-                message_text=message_text,
+                message_text="",
             )
             # Post the first embed and attach the reaction-role mapping to that
             # message. When content exceeds embed limits, send continuation embeds.

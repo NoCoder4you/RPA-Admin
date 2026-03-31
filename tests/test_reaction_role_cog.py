@@ -107,29 +107,23 @@ class ReactionRoleCogTests(unittest.TestCase):
         embeds = self.cog._build_reaction_role_embeds(
             emoji="✅",
             role=role,
-            message_text="Pick your team role below.",
         )
         text = embeds[0].description or ""
 
         self.assertIn("React to this message to assign yourself roles and gain channel access.", text)
-        self.assertIn("- Pick your team role below.", text)
-        self.assertIn("**Role mapping**", text)
         self.assertIn("✅ = <@&999>", text)
-        self.assertIn("Remove your reaction to lose <@&999>.", text)
+        self.assertNotIn("Role mapping", text)
+        self.assertNotIn("Remove your reaction", text)
+        self.assertNotIn("Details", text)
 
-    def test_build_reaction_role_embeds_splits_when_description_is_too_large(self) -> None:
+    def test_build_reaction_role_embeds_returns_single_embed(self) -> None:
         role = SimpleNamespace(mention="<@&999>")
-        very_long = "\n".join([f"Line {index} {'x' * 120}" for index in range(120)])
-
         embeds = self.cog._build_reaction_role_embeds(
             emoji="✅",
             role=role,
-            message_text=very_long,
         )
 
-        self.assertGreater(len(embeds), 1)
-        for embed in embeds:
-            self.assertLessEqual(len(embed.description or ""), 4096)
+        self.assertEqual(len(embeds), 1)
 
 
 if __name__ == "__main__":

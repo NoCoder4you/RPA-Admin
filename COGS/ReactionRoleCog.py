@@ -101,6 +101,7 @@ class ReactionRoleCog(commands.Cog):
             grouped.setdefault(key, []).append(entry)
 
         for (guild_id, channel_id, message_id), entries in grouped.items():
+
             deduped_by_emoji: dict[str, dict[str, Any]] = {}
             for entry in entries:
                 deduped_by_emoji[entry["emoji"]] = entry
@@ -177,6 +178,7 @@ class ReactionRoleCog(commands.Cog):
         role_id: int | None = None,
     ) -> dict[str, Any] | None:
 
+
         for entry in self.reaction_roles:
             if entry["guild_id"] != guild_id or entry["message_id"] != message_id:
                 continue
@@ -219,6 +221,7 @@ class ReactionRoleCog(commands.Cog):
         role: discord.Role,
     ) -> tuple[bool, str]:
 
+
         normalized_emoji = self._normalize_emoji(emoji)
 
         new_entry = {
@@ -249,72 +252,18 @@ class ReactionRoleCog(commands.Cog):
         *,
         emoji: str,
         role: discord.Role,
-        message_text: str,
     ) -> list[discord.Embed]:
-
+        """Build the minimal reaction-role embed requested by server admins."""
 
         normalized_emoji = self._normalize_emoji(emoji)
-        detail_lines = [line.strip() for line in message_text.splitlines() if line.strip()]
-        if not detail_lines:
-            detail_lines = ["Choose your role below."]
-
-        # Keep each detail line visually consistent and list-like.
-        formatted_lines = [f"- {line}" for line in detail_lines]
-
-        intro_block = (
-            "React to this message to assign yourself roles and gain channel access.\n\n"
-            "**Role mapping**\n"
-            f"{normalized_emoji} = {role.mention}\n"
-            f"Remove your reaction to lose {role.mention}.\n\n"
-            "**Details**\n"
+        embed = discord.Embed(
+            description=(
+                "React to this message to assign yourself roles and gain channel access.\n\n"
+                f"{normalized_emoji} = {role.mention}\n"
+            ),
+            color=discord.Color.blurple(),
         )
-
-        max_description_length = 4096
-        embeds: list[discord.Embed] = []
-        current_lines: list[str] = []
-
-        for line in formatted_lines:
-            candidate_lines = current_lines + [line]
-            candidate_body = "\n".join(candidate_lines)
-            current_description = intro_block + candidate_body if not embeds else candidate_body
-
-            if len(current_description) <= max_description_length:
-                current_lines = candidate_lines
-                continue
-
-            # Flush current lines into an embed before starting the next chunk.
-            if current_lines:
-                body = "\n".join(current_lines)
-                description = intro_block + body if not embeds else body
-                embed = discord.Embed(
-                    title="Reaction Roles" if not embeds else "Reaction Roles (Continued)",
-                    description=description,
-                    color=discord.Color.blurple(),
-                )
-                embeds.append(embed)
-                current_lines = [line]
-            else:
-                # If one line is unexpectedly too long, trim safely to avoid API failure.
-                truncated = line[: max_description_length - 3] + "..."
-                embed = discord.Embed(
-                    title="Reaction Roles" if not embeds else "Reaction Roles (Continued)",
-                    description=intro_block + truncated if not embeds else truncated,
-                    color=discord.Color.blurple(),
-                )
-                embeds.append(embed)
-                current_lines = []
-
-        if current_lines or not embeds:
-            body = "\n".join(current_lines)
-            description = intro_block + body if not embeds else body
-            embed = discord.Embed(
-                title="Reaction Roles" if not embeds else "Reaction Roles (Continued)",
-                description=description,
-                color=discord.Color.blurple(),
-            )
-            embeds.append(embed)
-
-        return embeds
+        return [embed]
 
     async def _resolve_member(self, payload: discord.RawReactionActionEvent) -> discord.Member | None:
         """Get member for raw events, including uncached scenarios after restart."""
@@ -406,7 +355,7 @@ class ReactionRoleCog(commands.Cog):
         emoji: str,
         role: discord.Role,
     ) -> None:
-        """Create or replace the reaction-role entry for a specific message."""
+
 
         if ctx.guild is None or ctx.me is None:
             await ctx.send("This command can only be used in a server.")
@@ -456,10 +405,7 @@ class ReactionRoleCog(commands.Cog):
         channel: discord.TextChannel,
         emoji: str,
         role: discord.Role,
-        *,
-        message_text: str,
     ) -> None:
-        """Create a new message and immediately configure it as a reaction-role message."""
 
         if ctx.guild is None or ctx.me is None:
             await ctx.send("This command can only be used in a server.")
@@ -475,15 +421,12 @@ class ReactionRoleCog(commands.Cog):
             return
 
         try:
-            # Let administrators provide the full message body; this becomes the
-            # visible reaction-role prompt users react to.
+            # Create a minimal prompt embed and post it as the reaction-role message.
             embeds = self._build_reaction_role_embeds(
                 emoji=emoji,
                 role=role,
-                message_text=message_text,
             )
-            # Post the first embed and attach the reaction-role mapping to that
-            # message. When content exceeds embed limits, send continuation embeds.
+
             message = await channel.send(
                 embed=embeds[0],
                 allowed_mentions=discord.AllowedMentions(roles=True),

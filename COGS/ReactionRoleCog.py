@@ -263,13 +263,9 @@ class ReactionRoleCog(commands.Cog):
         # Keep each detail line visually consistent and list-like.
         formatted_lines = [f"- {line}" for line in detail_lines]
 
-        intro_block = (
-            "React to this message to assign yourself roles and gain channel access.\n\n"
-            "**Role mapping**\n"
-            f"{normalized_emoji} = {role.mention}\n"
-            f"Remove your reaction to lose {role.mention}.\n\n"
-            "**Details**\n"
-        )
+        # Keep the embed concise: only show the emoji/role mapping and any
+        # user-provided message lines.
+        intro_block = f"{normalized_emoji} = {role.mention}\n"
 
         max_description_length = 4096
         embeds: list[discord.Embed] = []
@@ -352,14 +348,30 @@ class ReactionRoleCog(commands.Cog):
         if role is None:
             return
 
+        # Treat each reaction click as a toggle action: if the member already has
+        # the role, remove it; otherwise add it. This keeps the UX simple.
         try:
-            await member.add_roles(role, reason="Reaction role added")
+            if role in member.roles:
+                await member.remove_roles(role, reason="Reaction role toggled off")
+            else:
+                await member.add_roles(role, reason="Reaction role toggled on")
         except (discord.Forbidden, discord.HTTPException):
-            logger.exception("Failed to add reaction role guild=%s user=%s", payload.guild_id, payload.user_id)
+            logger.exception("Failed to toggle reaction role guild=%s user=%s", payload.guild_id, payload.user_id)
+            return
+
+        # Best-effort cleanup so users can click the same reaction repeatedly
+        # without manually un-reacting first.
+        channel = member.guild.get_channel(payload.channel_id)
+        if isinstance(channel, discord.TextChannel):
+            try:
+                message = await channel.fetch_message(payload.message_id)
+                await message.remove_reaction(payload.emoji, member)
+            except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+                pass
 
     @commands.Cog.listener()
     async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent) -> None:
-        """Remove role when a user removes the configured reaction."""
+        """Remove role when a user removes the configured reaction manually."""
 
         if payload.guild_id is None:
             return

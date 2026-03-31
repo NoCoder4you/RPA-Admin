@@ -242,23 +242,81 @@ class ReactionRoleCog(commands.Cog):
         self._save_data()
         return True, f"Configured reaction role: message `{message.id}`, emoji `{normalized_emoji}`, role {role.mention}."
 
-    def _build_reaction_role_message(
-            self,
-            *,
-            emoji: str,
-            role: discord.Role,
-            message_text: str,
-    ) -> str:
-        """Build a minimal, eye-catching reaction-role prompt."""
+    def _build_reaction_role_embeds(
+        self,
+        *,
+        emoji: str,
+        role: discord.Role,
+        message_text: str,
+    ) -> list[discord.Embed]:
+        """Build one or more embeds for the reaction-role prompt.
+
+        Discord embed descriptions have a hard size limit (4096 chars), so this
+        helper chunks the details across multiple embeds when needed.
+        """
 
         normalized_emoji = self._normalize_emoji(emoji)
+        detail_lines = [line.strip() for line in message_text.splitlines() if line.strip()]
+        if not detail_lines:
+            detail_lines = ["Choose your role below."]
 
-        return (
-            "# ╔═════════════╗\n"
-            "# ✨ **REACTION ROLE** ✨\n"
-            "# ╚═════════════╝\n\n"
-            f"### {role.mention} - {message_text}"
+        # Keep each detail line visually consistent and list-like.
+        formatted_lines = [f"- {line}" for line in detail_lines]
+
+        intro_block = (
+            "React to this message to assign yourself roles and gain channel access.\n\n"
+            "**Role mapping**\n"
+            f"{normalized_emoji} = {role.mention}\n"
+            f"Remove your reaction to lose {role.mention}.\n\n"
+            "**Details**\n"
         )
+
+        max_description_length = 4096
+        embeds: list[discord.Embed] = []
+        current_lines: list[str] = []
+
+        for line in formatted_lines:
+            candidate_lines = current_lines + [line]
+            candidate_body = "\n".join(candidate_lines)
+            current_description = intro_block + candidate_body if not embeds else candidate_body
+
+            if len(current_description) <= max_description_length:
+                current_lines = candidate_lines
+                continue
+
+            # Flush current lines into an embed before starting the next chunk.
+            if current_lines:
+                body = "\n".join(current_lines)
+                description = intro_block + body if not embeds else body
+                embed = discord.Embed(
+                    title="Reaction Roles" if not embeds else "Reaction Roles (Continued)",
+                    description=description,
+                    color=discord.Color.blurple(),
+                )
+                embeds.append(embed)
+                current_lines = [line]
+            else:
+                # If one line is unexpectedly too long, trim safely to avoid API failure.
+                truncated = line[: max_description_length - 3] + "..."
+                embed = discord.Embed(
+                    title="Reaction Roles" if not embeds else "Reaction Roles (Continued)",
+                    description=intro_block + truncated if not embeds else truncated,
+                    color=discord.Color.blurple(),
+                )
+                embeds.append(embed)
+                current_lines = []
+
+        if current_lines or not embeds:
+            body = "\n".join(current_lines)
+            description = intro_block + body if not embeds else body
+            embed = discord.Embed(
+                title="Reaction Roles" if not embeds else "Reaction Roles (Continued)",
+                description=description,
+                color=discord.Color.blurple(),
+            )
+            embeds.append(embed)
+
+        return embeds
 
     async def _resolve_member(self, payload: discord.RawReactionActionEvent) -> discord.Member | None:
         """Get member for raw events, including uncached scenarios after restart."""
@@ -278,7 +336,30 @@ class ReactionRoleCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
-        """Toggle role when a user adds the configured reaction, then remove their reaction."""
+        if payload.guild_id is None:
+            return
+
+        member = await self._resolve_member(payload)
+        if member is None or member.bot:
+            return
+
+        normalized = self._normalize_emoji(str(payload.emoji))
+        entry = self._find_entry(guild_id=payload.guild_id, message_id=payload.message_id, emoji=normalized)
+        if entry is None:
+            return
+
+        role = member.guild.get_role(entry["role_id"])
+        if role is None:
+            return
+
+        try:
+            await member.add_roles(role, reason="Reaction role added")
+        except (discord.Forbidden, discord.HTTPException):
+            logger.exception("Failed to add reaction role guild=%s user=%s", payload.guild_id, payload.user_id)
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent) -> None:
+        """Remove role when a user removes the configured reaction."""
 
         if payload.guild_id is None:
             return
@@ -297,31 +378,9 @@ class ReactionRoleCog(commands.Cog):
             return
 
         try:
-            if role in member.roles:
-                await member.remove_roles(role, reason="Reaction role toggled off")
-            else:
-                await member.add_roles(role, reason="Reaction role toggled on")
+            await member.remove_roles(role, reason="Reaction role removed")
         except (discord.Forbidden, discord.HTTPException):
-            logger.exception("Failed to toggle reaction role guild=%s user=%s", payload.guild_id, payload.user_id)
-            return
-
-        guild = self.bot.get_guild(entry["guild_id"])
-        if guild is None:
-            return
-
-        channel = guild.get_channel(entry["channel_id"])
-        if channel is None or not isinstance(channel, discord.abc.Messageable):
-            return
-
-        try:
-            message = await channel.fetch_message(entry["message_id"])
-            await message.remove_reaction(payload.emoji, member)
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            pass
-
-    @commands.Cog.listener()
-    async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent) -> None:
-        return
+            logger.exception("Failed to remove reaction role guild=%s user=%s", payload.guild_id, payload.user_id)
 
     @commands.group(name="reactionrole", invoke_without_command=True)
     @commands.guild_only()
@@ -412,17 +471,22 @@ class ReactionRoleCog(commands.Cog):
         try:
             # Let administrators provide the full message body; this becomes the
             # visible reaction-role prompt users react to.
-            prompt = self._build_reaction_role_message(
+            embeds = self._build_reaction_role_embeds(
                 emoji=emoji,
                 role=role,
                 message_text=message_text,
             )
-            # allowed_mentions ensures the role mention is actually rendered as a
-            # mention (instead of inert text) and remains clear/eye-catching.
+            # Post the first embed and attach the reaction-role mapping to that
+            # message. When content exceeds embed limits, send continuation embeds.
             message = await channel.send(
-                prompt,
+                embed=embeds[0],
                 allowed_mentions=discord.AllowedMentions(roles=True),
             )
+            for extra_embed in embeds[1:]:
+                await channel.send(
+                    embed=extra_embed,
+                    allowed_mentions=discord.AllowedMentions(roles=True),
+                )
         except discord.Forbidden:
             await ctx.send(f"I do not have permission to send messages in {channel.mention}.")
             return

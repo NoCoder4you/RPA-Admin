@@ -64,17 +64,6 @@ class ReactionRoleCogTests(unittest.TestCase):
         self.assertEqual(len(same_message), 2)
         self.assertEqual({entry["emoji"] for entry in same_message}, {"✅", "🎉"})
 
-    def test_other_entries_for_message_excludes_selected_emoji(self) -> None:
-        self.cog.reaction_roles = [
-            {"guild_id": 1, "channel_id": 10, "message_id": 99, "emoji": "✅", "role_id": 100},
-            {"guild_id": 1, "channel_id": 10, "message_id": 99, "emoji": "🎉", "role_id": 101},
-        ]
-
-        remaining = self.cog._other_entries_for_message(guild_id=1, message_id=99, keep_emoji="🎉")
-
-        self.assertEqual(len(remaining), 1)
-        self.assertEqual(remaining[0]["emoji"], "✅")
-
     def test_save_and_load_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             file_path = Path(tmp) / "ReactionRoles.json"
@@ -146,7 +135,7 @@ class ReactionRoleCogTests(unittest.TestCase):
 
         self.assertEqual(len(embeds), 1)
 
-    def test_toggle_member_role_removes_when_member_already_has_role(self) -> None:
+    def test_apply_reaction_role_add_noops_when_member_already_has_role(self) -> None:
         member = SimpleNamespace(
             roles=[SimpleNamespace(id=22)],
             add_roles=AsyncMock(),
@@ -154,13 +143,13 @@ class ReactionRoleCogTests(unittest.TestCase):
         )
         role = SimpleNamespace(id=22)
 
-        action = asyncio.run(self.cog._toggle_member_role(member=member, role=role))
+        action = asyncio.run(self.cog._apply_reaction_role_add(member=member, role=role))
 
-        self.assertEqual(action, "removed")
-        member.remove_roles.assert_awaited_once()
+        self.assertEqual(action, "already_present")
         member.add_roles.assert_not_awaited()
+        member.remove_roles.assert_not_awaited()
 
-    def test_toggle_member_role_adds_when_member_does_not_have_role(self) -> None:
+    def test_apply_reaction_role_add_adds_when_member_does_not_have_role(self) -> None:
         member = SimpleNamespace(
             roles=[SimpleNamespace(id=33)],
             add_roles=AsyncMock(),
@@ -168,7 +157,7 @@ class ReactionRoleCogTests(unittest.TestCase):
         )
         role = SimpleNamespace(id=22)
 
-        action = asyncio.run(self.cog._toggle_member_role(member=member, role=role))
+        action = asyncio.run(self.cog._apply_reaction_role_add(member=member, role=role))
 
         self.assertEqual(action, "added")
         member.add_roles.assert_awaited_once()

@@ -13,6 +13,8 @@ from common_paths import json_file
 
 logger = logging.getLogger(__name__)
 CUSTOM_EMOJI_PATTERN = re.compile(r"^([A-Za-z0-9_]+):(\d+)$")
+REACTION_ROLE_EMBED_TITLE = "Reaction Roles"
+REACTION_ROLE_EMBED_FOOTER = "React to toggle your roles."
 
 
 class ReactionRoleCog(commands.Cog):
@@ -127,7 +129,12 @@ class ReactionRoleCog(commands.Cog):
             + "\n".join(mapping_lines)
             + "\n"
         )
-        embed = discord.Embed(description=description, color=discord.Color.blurple())
+        embed = discord.Embed(
+            title=REACTION_ROLE_EMBED_TITLE,
+            description=description,
+            color=discord.Color.blurple(),
+        )
+        embed.set_footer(text=REACTION_ROLE_EMBED_FOOTER)
 
         try:
             await message.edit(embed=embed, allowed_mentions=discord.AllowedMentions(roles=True))
@@ -311,12 +318,14 @@ class ReactionRoleCog(commands.Cog):
 
         normalized_emoji = self._normalize_emoji(emoji)
         embed = discord.Embed(
+            title=REACTION_ROLE_EMBED_TITLE,
             description=(
                 "React to this message to assign yourself roles and gain channel access.\n\n"
                 f"{normalized_emoji} = {role.mention}\n"
             ),
             color=discord.Color.blurple(),
         )
+        embed.set_footer(text=REACTION_ROLE_EMBED_FOOTER)
         return [embed]
 
     async def _resolve_member(self, payload: discord.RawReactionActionEvent) -> discord.Member | None:
@@ -334,6 +343,17 @@ class ReactionRoleCog(commands.Cog):
             return await guild.fetch_member(payload.user_id)
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             return None
+
+    async def _toggle_member_role(self, *, member: discord.Member, role: discord.Role) -> str:
+        """Toggle a role for a member and return the performed action."""
+
+        has_role = any(existing_role.id == role.id for existing_role in member.roles)
+        if has_role:
+            await member.remove_roles(role, reason="Reaction role toggled off")
+            return "removed"
+
+        await member.add_roles(role, reason="Reaction role toggled on")
+        return "added"
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
@@ -359,9 +379,10 @@ class ReactionRoleCog(commands.Cog):
             return
 
         try:
-            await member.add_roles(role, reason="Reaction role added")
+
+            await self._toggle_member_role(member=member, role=role)
         except (discord.Forbidden, discord.HTTPException):
-            logger.exception("Failed to add reaction role guild=%s user=%s", payload.guild_id, payload.user_id)
+            logger.exception("Failed to toggle reaction role guild=%s user=%s", payload.guild_id, payload.user_id)
 
     @commands.Cog.listener()
     async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent) -> None:

@@ -251,10 +251,10 @@ class ReactionRoleCog(commands.Cog):
 
         # Keep each detail line visually consistent and list-like.
         formatted_lines = [f"- {line}" for line in detail_lines]
-        intro_block = [
+        intro_block = (
             "React to this message to assign yourself roles and gain channel access.\n\n"
             f"{normalized_emoji} = {role.mention}\n"
-        ]
+            )
 
         max_description_length = 4096
         embeds: list[discord.Embed] = []

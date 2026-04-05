@@ -1,4 +1,4 @@
-"""Message-listener cog that removes predefined profanity and logs moderation actions."""
+"""Message-listener cog that flags predefined profanity and lets moderators choose action."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from habbo_verification_core import ServerConfigStore
 
 
 class ProfanityCog(commands.Cog):
-    """Delete messages that contain configured profanity or obvious written variations."""
+    """Flag messages that contain configured profanity or obvious written variations."""
 
     # Store blocked words in JSON so moderators can update the list without editing code.
     DEFAULT_WORDS_PATH: Final[Path] = json_file("profanity_words.json")
@@ -165,24 +165,16 @@ class ProfanityCog(commands.Cog):
             return False
         return True
 
-    async def _send_log_notice(self, message: discord.Message, *, blocked_word: str, dm_sent: bool) -> None:
-        """Send an audit-style embed to the configured profanity log channel, if available."""
-
-        if message.guild is None:
-            return
-
-        log_channel_id = self.server_config_store.get_profanity_log_channel_id()
-        if log_channel_id is None:
-            return
-
-        log_channel = message.guild.get_channel(log_channel_id)
-        if log_channel is None:
-            return
+    def _build_flagged_embed(self, message: discord.Message, *, blocked_word: str) -> discord.Embed:
+        """Build the moderation prompt shown before any deletion action is taken."""
 
         embed = discord.Embed(
-            title="Profanity Filter Triggered",
-            description="A message was deleted by the profanity filter.",
-            color=discord.Color.orange(),
+            title="Profanity Filter Flagged Message",
+            description=(
+                "A message matched the profanity filter. Choose **Ignore** to leave it as-is, "
+                "or **Proceed** to delete it and notify the author."
+            ),
+            color=discord.Color.gold(),
         )
         embed.add_field(name="Member", value=f"{message.author.mention} (`{message.author.id}`)", inline=False)
         embed.add_field(name="Server", value=f"{message.guild.name} (`{message.guild.id}`)", inline=False)
@@ -193,23 +185,166 @@ class ProfanityCog(commands.Cog):
         )
         embed.add_field(name="Blocked Word", value=f"`{blocked_word}`", inline=False)
         embed.add_field(
-            name="Deleted Content",
+            name="Message Content",
+            value=self._truncate_field_value(message.content or "*(no text content)*"),
+            inline=False,
+        )
+        return embed
+
+    async def _send_action_result(
+        self,
+        *,
+        target_channel: discord.abc.Messageable,
+        moderator: discord.abc.User | discord.Member | None,
+        action: str,
+        message: discord.Message,
+        blocked_word: str,
+        dm_sent: bool | None = None,
+    ) -> None:
+        """Post a follow-up audit entry after moderators choose ignore/proceed."""
+
+        embed = discord.Embed(
+            title="Profanity Filter Action",
+            description=f"Moderator action selected: **{action}**.",
+            color=discord.Color.orange() if action == "Proceed" else discord.Color.green(),
+        )
+        embed.add_field(name="Member", value=f"{message.author.mention} (`{message.author.id}`)", inline=False)
+        embed.add_field(name="Channel", value=getattr(message.channel, "mention", "Unknown"), inline=False)
+        embed.add_field(name="Blocked Word", value=f"`{blocked_word}`", inline=False)
+        embed.add_field(
+            name="Message Content",
             value=self._truncate_field_value(message.content or "*(no text content)*"),
             inline=False,
         )
         embed.add_field(
-            name="User Notice",
-            value=(
-                "Direct message delivered successfully."
-                if dm_sent
-                else "I could not DM the user, likely because their privacy settings blocked the bot."
-            ),
+            name="Moderator",
+            value=f"{moderator.mention} (`{moderator.id}`)" if moderator else "Unknown",
             inline=False,
         )
-        await log_channel.send(embed=embed)
+        if dm_sent is not None:
+            embed.add_field(
+                name="User Notice",
+                value=(
+                    "Direct message delivered successfully."
+                    if dm_sent
+                    else "I could not DM the user, likely because their privacy settings blocked the bot."
+                ),
+                inline=False,
+            )
+        await target_channel.send(embed=embed)
+
+    async def _resolve_log_channel(self, message: discord.Message) -> discord.abc.Messageable | None:
+        """Return the configured profanity log channel for this guild, when available."""
+
+        if message.guild is None:
+            return None
+        log_channel_id = self.server_config_store.get_profanity_log_channel_id()
+        if log_channel_id is None:
+            return None
+        return message.guild.get_channel(log_channel_id)
+
+    async def _handle_ignore_action(
+        self,
+        *,
+        interaction: discord.Interaction,
+        flagged_message: discord.Message,
+        blocked_word: str,
+        log_channel: discord.abc.Messageable,
+    ) -> None:
+        """Leave the original chat message untouched and record the moderator decision."""
+
+        await interaction.response.edit_message(view=None)
+        await self._send_action_result(
+            target_channel=log_channel,
+            moderator=interaction.user,
+            action="Ignore",
+            message=flagged_message,
+            blocked_word=blocked_word,
+        )
+
+    async def _handle_proceed_action(
+        self,
+        *,
+        interaction: discord.Interaction,
+        flagged_message: discord.Message,
+        blocked_word: str,
+        log_channel: discord.abc.Messageable,
+    ) -> None:
+        """Delete the original message and DM the user, matching prior behavior."""
+
+        try:
+            await flagged_message.delete()
+        except (discord.Forbidden, discord.HTTPException):
+            await interaction.response.send_message(
+                "I could not delete that message due to missing permissions or an API error.",
+                ephemeral=True,
+            )
+            return
+
+        dm_sent = await self._send_user_notice(flagged_message, blocked_word=blocked_word)
+        await interaction.response.edit_message(view=None)
+        await self._send_action_result(
+            target_channel=log_channel,
+            moderator=interaction.user,
+            action="Proceed",
+            message=flagged_message,
+            blocked_word=blocked_word,
+            dm_sent=dm_sent,
+        )
+
+    def _build_flag_review_view(
+        self,
+        *,
+        flagged_message: discord.Message,
+        blocked_word: str,
+        log_channel: discord.abc.Messageable,
+    ) -> discord.ui.View:
+        """Create the Ignore/Proceed action buttons attached to each profanity flag."""
+
+        view = discord.ui.View(timeout=3600)
+
+        # Store action state on the view object so only one moderator action is processed.
+        view.action_taken = False  # type: ignore[attr-defined]
+
+        async def _deny_if_already_handled(interaction: discord.Interaction) -> bool:
+            if not getattr(view, "action_taken", False):
+                return False
+            await interaction.response.send_message("This flag has already been handled.", ephemeral=True)
+            return True
+
+        ignore_button = discord.ui.Button(label="Ignore", style=discord.ButtonStyle.secondary)
+        proceed_button = discord.ui.Button(label="Proceed", style=discord.ButtonStyle.danger)
+
+        async def _ignore_callback(interaction: discord.Interaction) -> None:
+            if await _deny_if_already_handled(interaction):
+                return
+            view.action_taken = True  # type: ignore[attr-defined]
+            await self._handle_ignore_action(
+                interaction=interaction,
+                flagged_message=flagged_message,
+                blocked_word=blocked_word,
+                log_channel=log_channel,
+            )
+
+        async def _proceed_callback(interaction: discord.Interaction) -> None:
+            if await _deny_if_already_handled(interaction):
+                return
+            view.action_taken = True  # type: ignore[attr-defined]
+            await self._handle_proceed_action(
+                interaction=interaction,
+                flagged_message=flagged_message,
+                blocked_word=blocked_word,
+                log_channel=log_channel,
+            )
+
+        ignore_button.callback = _ignore_callback
+        proceed_button.callback = _proceed_callback
+        view.add_item(ignore_button)
+        view.add_item(proceed_button)
+        return view
 
     async def _handle_message_for_profanity(self, message: discord.Message) -> None:
-        """Delete a profane guild message, then notify the user and moderators."""
+        """Flag a profane guild message and request moderator action via buttons."""
 
         # Ignore bots/webhooks so the filter only targets member-authored chat.
         if message.author.bot or message.webhook_id is not None:
@@ -223,14 +358,17 @@ class ProfanityCog(commands.Cog):
         if blocked_word is None:
             return
 
-        try:
-            await message.delete()
-        except (discord.Forbidden, discord.HTTPException):
-            # If the bot cannot delete the message, avoid sending misleading notices.
+        log_channel = await self._resolve_log_channel(message)
+        if log_channel is None:
             return
 
-        dm_sent = await self._send_user_notice(message, blocked_word=blocked_word)
-        await self._send_log_notice(message, blocked_word=blocked_word, dm_sent=dm_sent)
+        flagged_embed = self._build_flagged_embed(message, blocked_word=blocked_word)
+        review_view = self._build_flag_review_view(
+            flagged_message=message,
+            blocked_word=blocked_word,
+            log_channel=log_channel,
+        )
+        await log_channel.send(embed=flagged_embed, view=review_view)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:

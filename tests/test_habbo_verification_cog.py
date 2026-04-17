@@ -203,6 +203,85 @@ class HabboVerificationCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Nickname updated to verified Habbo username.", fields["Verification Updates"])
 
 
+class HabboForceVerifyCommandTests(unittest.IsolatedAsyncioTestCase):
+    """Validate administrator text-command force verification behavior."""
+
+    async def test_forceverify_success_uses_same_verification_pipeline(self) -> None:
+        """Successful force verification should persist mapping and run role/nickname/restriction/audit updates."""
+
+        cog = HabboVerificationCog(bot=MagicMock())
+        cog.verified_store = SimpleNamespace(
+            get_habbo_username=lambda _discord_id: None,
+            save=MagicMock(),
+        )
+        cog._assign_roles_from_habbo_groups = AsyncMock(return_value=("No role changes were required.", [], []))
+        cog._ensure_verified_role = AsyncMock(return_value=("Verified role added.", ["Verified"]))
+        cog._sync_member_nickname = AsyncMock(return_value="Nickname updated to verified Habbo username.")
+        cog._enforce_restrictions_after_verification = AsyncMock(return_value="No restriction matched.")
+        cog._send_audit_log = AsyncMock()
+        cog.manager = SimpleNamespace(
+            get_or_create=lambda _user_id, _username: SimpleNamespace(code="ABCD1234", expires_at=datetime.now(timezone.utc)),
+            clear=MagicMock(),
+        )
+
+        member = SimpleNamespace(id=456, mention="<@456>")
+        ctx = SimpleNamespace(guild=SimpleNamespace(), send=AsyncMock())
+
+        from COGS import ServerVerifyRPA as verify_module
+        original_fetch = verify_module.fetch_habbo_profile
+        original_motto_contains = verify_module.motto_contains_code
+        verify_module.fetch_habbo_profile = lambda _username: {"name": "Siren", "figureString": "hr-1-1", "motto": "ABCD1234"}
+        verify_module.motto_contains_code = lambda _profile, _code: True
+        try:
+            await cog.forceverify.callback(cog, ctx, member, "Siren")
+        finally:
+            verify_module.fetch_habbo_profile = original_fetch
+            verify_module.motto_contains_code = original_motto_contains
+
+        cog.verified_store.save.assert_called_once_with(discord_id="456", habbo_username="Siren")
+        cog._assign_roles_from_habbo_groups.assert_awaited_once()
+        cog._ensure_verified_role.assert_awaited_once()
+        cog._sync_member_nickname.assert_awaited_once()
+        cog._enforce_restrictions_after_verification.assert_awaited_once()
+        cog._send_audit_log.assert_awaited_once()
+        ctx.send.assert_awaited_once()
+        sent_embed = ctx.send.await_args.kwargs["embed"]
+        self.assertEqual(sent_embed.title, "Verification Successful")
+        fields = {field.name: field.value for field in sent_embed.fields}
+        self.assertIn("Verification Updates", fields)
+        self.assertIn("Verified role added.", fields["Verification Updates"])
+
+    async def test_forceverify_returns_failure_embed_when_motto_code_missing(self) -> None:
+        """Force verification should provide the active code when the motto still lacks it."""
+
+        cog = HabboVerificationCog(bot=MagicMock())
+        cog.verified_store = SimpleNamespace(get_habbo_username=lambda _discord_id: None, save=MagicMock())
+        cog.manager = SimpleNamespace(
+            get_or_create=lambda _user_id, _username: SimpleNamespace(code="ABCD1234", expires_at=datetime.now(timezone.utc)),
+            clear=MagicMock(),
+        )
+        member = SimpleNamespace(id=456, mention="<@456>")
+        ctx = SimpleNamespace(guild=SimpleNamespace(), send=AsyncMock())
+
+        from COGS import ServerVerifyRPA as verify_module
+        original_fetch = verify_module.fetch_habbo_profile
+        original_motto_contains = verify_module.motto_contains_code
+        verify_module.fetch_habbo_profile = lambda _username: {"name": "Siren", "motto": "hello"}
+        verify_module.motto_contains_code = lambda _profile, _code: False
+        try:
+            await cog.forceverify.callback(cog, ctx, member, "Siren")
+        finally:
+            verify_module.fetch_habbo_profile = original_fetch
+            verify_module.motto_contains_code = original_motto_contains
+
+        cog.verified_store.save.assert_not_called()
+        ctx.send.assert_awaited_once()
+        sent_embed = ctx.send.await_args.kwargs["embed"]
+        self.assertEqual(sent_embed.title, "Verification Failed")
+        fields = {field.name: field.value for field in sent_embed.fields}
+        self.assertEqual(fields["Verification Code"], "`ABCD1234`")
+
+
 
 class HabboVerificationCogAuditLogTests(unittest.IsolatedAsyncioTestCase):
     """Validate the staff-facing verification audit embed output."""

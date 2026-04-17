@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from urllib.parse import quote
 
 import discord
@@ -254,6 +255,105 @@ class HabboVerificationCog(commands.Cog):
             ),
             ephemeral=True,
         )
+
+    @commands.command(
+        name="forceverify",
+        help="Administrator-only text command to verify a member using the same Habbo motto code process as /verify.",
+    )
+    @commands.has_permissions(administrator=True)
+    @commands.guild_only()
+    async def forceverify(self, ctx: commands.Context, member: discord.Member, username: str) -> None:
+        """Allow administrators to force-verify another member without requiring a motto challenge."""
+
+        # Build a minimal interaction-like object so existing helper methods can be reused exactly
+        # as they are (role sync, verified role assignment, nickname sync, restriction checks, audit log).
+        interaction_like = SimpleNamespace(guild=ctx.guild, user=member)
+        discord_id = str(member.id)
+
+        # Force-verify still validates the Habbo username by fetching the profile up front so we only
+        # save real accounts into the JSON mapping and can immediately use profile data for role sync.
+        try:
+            profile = fetch_habbo_profile(username)
+        except HabboApiError as exc:
+            await ctx.send(
+                embed=discord.Embed(
+                    title="Habbo API Error",
+                    description=(
+                        "I could not fetch that Habbo profile right now, so force verification was not applied."
+                    ),
+                    color=discord.Color.orange(),
+                ).add_field(name="Error", value=str(exc), inline=False),
+            )
+            return
+
+        verified_habbo_name = str(profile.get("name", username))
+        # Bypass the motto challenge entirely and persist the Discord<->Habbo mapping immediately.
+        self.verified_store.save(
+            discord_id=discord_id,
+            habbo_username=verified_habbo_name,
+        )
+
+        role_status, added_role_names, removed_role_names = await self._assign_roles_from_habbo_groups(
+            interaction_like,
+            profile,
+        )
+        verified_role_status, verified_role_names = await self._ensure_verified_role(interaction_like)
+        nickname_status = await self._sync_member_nickname(interaction_like, verified_habbo_name)
+        if verified_role_status != "No Verified role change was required.":
+            role_status = f"{role_status} | Verified Role: {verified_role_status}"
+            added_role_names = [*added_role_names, *verified_role_names]
+        restriction_status = await self._enforce_restrictions_after_verification(
+            interaction=interaction_like,
+            habbo_username=verified_habbo_name,
+        )
+        await self._send_audit_log(
+            interaction=interaction_like,
+            action="habbo_verification_success",
+            details={
+                "discord_user_id": discord_id,
+                "discord_user": str(member),
+                "habbo_username": verified_habbo_name,
+                "saved_mapping": "yes (forceverify)",
+                "role_sync_status": role_status,
+                "restriction_status": restriction_status,
+                "nickname_status": nickname_status,
+                "roles_added": ", ".join(added_role_names) if added_role_names else "none",
+                "roles_removed": ", ".join(removed_role_names) if removed_role_names else "none",
+                "figure_string": str(profile.get("figureString", "")),
+            },
+        )
+
+        success_embed = discord.Embed(
+            title="Force Verification Successful",
+            description=(
+                f"{member.mention} was force-verified by an administrator without a motto challenge."
+            ),
+            color=discord.Color.green(),
+        )
+        success_embed.add_field(
+            name="Verification Updates",
+            value=(
+                f"Habbo Username: {verified_habbo_name}\n"
+                f"Role Sync: {role_status}\n"
+                f"Nickname: {nickname_status}\n"
+                f"Restriction Check: {restriction_status}"
+            ),
+            inline=False,
+        )
+        thumbnail_url = self._build_avatar_thumbnail_url(profile)
+        if thumbnail_url:
+            success_embed.set_thumbnail(url=thumbnail_url)
+
+        await ctx.send(embed=success_embed)
+
+    @forceverify.error
+    async def forceverify_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
+        """Return an explicit permission message for non-admin attempts."""
+
+        if isinstance(error, commands.MissingPermissions):
+            await ctx.send("You need the **Administrator** permission to use `!forceverify`.")
+            return
+        raise error
 
     async def _enforce_restrictions_after_verification(
         self,

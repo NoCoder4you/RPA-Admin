@@ -206,8 +206,8 @@ class HabboVerificationCommandTests(unittest.IsolatedAsyncioTestCase):
 class HabboForceVerifyCommandTests(unittest.IsolatedAsyncioTestCase):
     """Validate administrator text-command force verification behavior."""
 
-    async def test_forceverify_success_uses_same_verification_pipeline(self) -> None:
-        """Successful force verification should persist mapping and run role/nickname/restriction/audit updates."""
+    async def test_forceverify_success_bypasses_motto_and_runs_verification_pipeline(self) -> None:
+        """Force verification should save immediately (without motto checks) and run all post-verify updates."""
 
         cog = HabboVerificationCog(bot=MagicMock())
         cog.verified_store = SimpleNamespace(
@@ -229,14 +229,11 @@ class HabboForceVerifyCommandTests(unittest.IsolatedAsyncioTestCase):
 
         from COGS import ServerVerifyRPA as verify_module
         original_fetch = verify_module.fetch_habbo_profile
-        original_motto_contains = verify_module.motto_contains_code
         verify_module.fetch_habbo_profile = lambda _username: {"name": "Siren", "figureString": "hr-1-1", "motto": "ABCD1234"}
-        verify_module.motto_contains_code = lambda _profile, _code: True
         try:
             await cog.forceverify.callback(cog, ctx, member, "Siren")
         finally:
             verify_module.fetch_habbo_profile = original_fetch
-            verify_module.motto_contains_code = original_motto_contains
 
         cog.verified_store.save.assert_called_once_with(discord_id="456", habbo_username="Siren")
         cog._assign_roles_from_habbo_groups.assert_awaited_once()
@@ -246,40 +243,33 @@ class HabboForceVerifyCommandTests(unittest.IsolatedAsyncioTestCase):
         cog._send_audit_log.assert_awaited_once()
         ctx.send.assert_awaited_once()
         sent_embed = ctx.send.await_args.kwargs["embed"]
-        self.assertEqual(sent_embed.title, "Verification Successful")
+        self.assertEqual(sent_embed.title, "Force Verification Successful")
         fields = {field.name: field.value for field in sent_embed.fields}
         self.assertIn("Verification Updates", fields)
         self.assertIn("Verified role added.", fields["Verification Updates"])
 
-    async def test_forceverify_returns_failure_embed_when_motto_code_missing(self) -> None:
-        """Force verification should provide the active code when the motto still lacks it."""
+    async def test_forceverify_returns_error_embed_when_habbo_profile_fetch_fails(self) -> None:
+        """Force verification should fail fast when the Habbo profile cannot be fetched."""
 
         cog = HabboVerificationCog(bot=MagicMock())
         cog.verified_store = SimpleNamespace(get_habbo_username=lambda _discord_id: None, save=MagicMock())
-        cog.manager = SimpleNamespace(
-            get_or_create=lambda _user_id, _username: SimpleNamespace(code="ABCD1234", expires_at=datetime.now(timezone.utc)),
-            clear=MagicMock(),
-        )
         member = SimpleNamespace(id=456, mention="<@456>")
         ctx = SimpleNamespace(guild=SimpleNamespace(), send=AsyncMock())
 
         from COGS import ServerVerifyRPA as verify_module
         original_fetch = verify_module.fetch_habbo_profile
-        original_motto_contains = verify_module.motto_contains_code
-        verify_module.fetch_habbo_profile = lambda _username: {"name": "Siren", "motto": "hello"}
-        verify_module.motto_contains_code = lambda _profile, _code: False
+        verify_module.fetch_habbo_profile = MagicMock(side_effect=verify_module.HabboApiError("down"))
         try:
             await cog.forceverify.callback(cog, ctx, member, "Siren")
         finally:
             verify_module.fetch_habbo_profile = original_fetch
-            verify_module.motto_contains_code = original_motto_contains
 
         cog.verified_store.save.assert_not_called()
         ctx.send.assert_awaited_once()
         sent_embed = ctx.send.await_args.kwargs["embed"]
-        self.assertEqual(sent_embed.title, "Verification Failed")
+        self.assertEqual(sent_embed.title, "Habbo API Error")
         fields = {field.name: field.value for field in sent_embed.fields}
-        self.assertEqual(fields["Verification Code"], "`ABCD1234`")
+        self.assertEqual(fields["Error"], "down")
 
 
 

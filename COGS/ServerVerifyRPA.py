@@ -263,149 +263,88 @@ class HabboVerificationCog(commands.Cog):
     @commands.has_permissions(administrator=True)
     @commands.guild_only()
     async def forceverify(self, ctx: commands.Context, member: discord.Member, username: str) -> None:
-        """Allow administrators to run the verification flow for another member from a text command."""
+        """Allow administrators to force-verify another member without requiring a motto challenge."""
 
-        # Reuse verification helper methods by creating a minimal interaction-like object that carries
-        # the guild and target member. This keeps role, nickname, and restriction processing identical
-        # to the slash-command flow without duplicating business logic.
+        # Build a minimal interaction-like object so existing helper methods can be reused exactly
+        # as they are (role sync, verified role assignment, nickname sync, restriction checks, audit log).
         interaction_like = SimpleNamespace(guild=ctx.guild, user=member)
         discord_id = str(member.id)
 
-        stored_habbo_name = self.verified_store.get_habbo_username(discord_id)
-        if stored_habbo_name:
-            try:
-                stored_profile = fetch_habbo_profile(stored_habbo_name)
-            except HabboApiError as exc:
-                await ctx.send(
-                    embed=self._build_embed(
-                        title="Already Verified",
-                        description=(
-                            f"{member.mention} is already verified, but I could not refresh their stored Habbo profile "
-                            "for role sync right now."
-                        ),
-                        challenge_code="N/A",
-                        expires_at=datetime.now(timezone.utc),
-                        color=discord.Color.orange(),
-                        extra_field=("Error", str(exc)),
-                    ),
-                )
-                return
-
-            role_status, added_role_names, _removed_role_names = await self._assign_roles_from_habbo_groups(
-                interaction_like,
-                stored_profile,
-            )
-            verified_role_status, verified_role_names = await self._ensure_verified_role(interaction_like)
-            if verified_role_status != "No Verified role change was required.":
-                role_status = f"{role_status} | Verified Role: {verified_role_status}"
-                added_role_names = [*added_role_names, *verified_role_names]
-
-            await ctx.send(
-                embed=self._build_embed(
-                    title="Already Verified",
-                    description=(
-                        f"{member.mention} is already verified, so no new motto code was required. "
-                        "I synced their mapped roles from the stored Habbo account."
-                    ),
-                    challenge_code="N/A",
-                    expires_at=datetime.now(timezone.utc),
-                    color=discord.Color.blue(),
-                    extra_field=("Role Sync", role_status),
-                    thumbnail_url=self._build_avatar_thumbnail_url(stored_profile),
-                ),
-            )
-            return
-
+        # Force-verify still validates the Habbo username by fetching the profile up front so we only
+        # save real accounts into the JSON mapping and can immediately use profile data for role sync.
         try:
             profile = fetch_habbo_profile(username)
         except HabboApiError as exc:
-            challenge = self.manager.get_or_create(member.id, username)
             await ctx.send(
-                embed=self._build_embed(
+                embed=discord.Embed(
                     title="Habbo API Error",
                     description=(
-                        "I could not fetch that Habbo profile right now. "
-                        "Please try the command again in a moment."
+                        "I could not fetch that Habbo profile right now, so force verification was not applied."
                     ),
-                    challenge_code=challenge.code,
-                    expires_at=challenge.expires_at,
                     color=discord.Color.orange(),
-                    extra_field=("Error", str(exc)),
-                ),
+                ).add_field(name="Error", value=str(exc), inline=False),
             )
             return
 
-        challenge = self.manager.get_or_create(member.id, username)
-        if motto_contains_code(profile, challenge.code):
-            verified_habbo_name = str(profile.get("name", username))
-            self.verified_store.save(
-                discord_id=discord_id,
-                habbo_username=verified_habbo_name,
-            )
-
-            role_status, added_role_names, removed_role_names = await self._assign_roles_from_habbo_groups(
-                interaction_like,
-                profile,
-            )
-            verified_role_status, verified_role_names = await self._ensure_verified_role(interaction_like)
-            nickname_status = await self._sync_member_nickname(interaction_like, verified_habbo_name)
-            if verified_role_status != "No Verified role change was required.":
-                role_status = f"{role_status} | Verified Role: {verified_role_status}"
-                added_role_names = [*added_role_names, *verified_role_names]
-            restriction_status = await self._enforce_restrictions_after_verification(
-                interaction=interaction_like,
-                habbo_username=verified_habbo_name,
-            )
-            await self._send_audit_log(
-                interaction=interaction_like,
-                action="habbo_verification_success",
-                details={
-                    "discord_user_id": discord_id,
-                    "discord_user": str(member),
-                    "habbo_username": verified_habbo_name,
-                    "saved_mapping": "yes",
-                    "role_sync_status": role_status,
-                    "restriction_status": restriction_status,
-                    "nickname_status": nickname_status,
-                    "roles_added": ", ".join(added_role_names) if added_role_names else "none",
-                    "roles_removed": ", ".join(removed_role_names) if removed_role_names else "none",
-                    "figure_string": str(profile.get("figureString", "")),
-                },
-            )
-
-            self.manager.clear(member.id)
-            await ctx.send(
-                embed=self._build_embed(
-                    title="Verification Successful",
-                    description=(
-                        f"{member.mention} has been verified because their Habbo motto contains the verification code."
-                    ),
-                    challenge_code=challenge.code,
-                    expires_at=challenge.expires_at,
-                    color=discord.Color.green(),
-                    extra_field=(
-                        "Verification Updates",
-                        f"Role Sync: {role_status}\nNickname: {nickname_status}\nRestriction Check: {restriction_status}",
-                    ),
-                    thumbnail_url=self._build_avatar_thumbnail_url(profile),
-                ),
-            )
-            return
-
-        await ctx.send(
-            embed=self._build_embed(
-                title="Verification Failed",
-                description=(
-                    f"{member.mention}'s Habbo motto does not include the verification code yet. "
-                    "Keep this code in the motto, save, and run the command again."
-                ),
-                challenge_code=challenge.code,
-                expires_at=challenge.expires_at,
-                color=discord.Color.red(),
-                extra_field=("Current Motto", str(profile.get("motto", "(empty)"))),
-                thumbnail_url=self._build_avatar_thumbnail_url(profile),
-            ),
+        verified_habbo_name = str(profile.get("name", username))
+        # Bypass the motto challenge entirely and persist the Discord<->Habbo mapping immediately.
+        self.verified_store.save(
+            discord_id=discord_id,
+            habbo_username=verified_habbo_name,
         )
+
+        role_status, added_role_names, removed_role_names = await self._assign_roles_from_habbo_groups(
+            interaction_like,
+            profile,
+        )
+        verified_role_status, verified_role_names = await self._ensure_verified_role(interaction_like)
+        nickname_status = await self._sync_member_nickname(interaction_like, verified_habbo_name)
+        if verified_role_status != "No Verified role change was required.":
+            role_status = f"{role_status} | Verified Role: {verified_role_status}"
+            added_role_names = [*added_role_names, *verified_role_names]
+        restriction_status = await self._enforce_restrictions_after_verification(
+            interaction=interaction_like,
+            habbo_username=verified_habbo_name,
+        )
+        await self._send_audit_log(
+            interaction=interaction_like,
+            action="habbo_verification_success",
+            details={
+                "discord_user_id": discord_id,
+                "discord_user": str(member),
+                "habbo_username": verified_habbo_name,
+                "saved_mapping": "yes (forceverify)",
+                "role_sync_status": role_status,
+                "restriction_status": restriction_status,
+                "nickname_status": nickname_status,
+                "roles_added": ", ".join(added_role_names) if added_role_names else "none",
+                "roles_removed": ", ".join(removed_role_names) if removed_role_names else "none",
+                "figure_string": str(profile.get("figureString", "")),
+            },
+        )
+
+        success_embed = discord.Embed(
+            title="Force Verification Successful",
+            description=(
+                f"{member.mention} was force-verified by an administrator without a motto challenge."
+            ),
+            color=discord.Color.green(),
+        )
+        success_embed.add_field(
+            name="Verification Updates",
+            value=(
+                f"Habbo Username: {verified_habbo_name}\n"
+                f"Role Sync: {role_status}\n"
+                f"Nickname: {nickname_status}\n"
+                f"Restriction Check: {restriction_status}"
+            ),
+            inline=False,
+        )
+        thumbnail_url = self._build_avatar_thumbnail_url(profile)
+        if thumbnail_url:
+            success_embed.set_thumbnail(url=thumbnail_url)
+
+        await ctx.send(embed=success_embed)
 
     @forceverify.error
     async def forceverify_error(self, ctx: commands.Context, error: commands.CommandError) -> None:

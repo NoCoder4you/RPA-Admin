@@ -37,9 +37,24 @@ class ProfanityCogTests(unittest.IsolatedAsyncioTestCase):
             cog = ProfanityCog(MagicMock(), blocked_words_path=words_path)
 
             self.assertTrue(cog.contains_profanity("This is f.u.c.k."))
+            # Letter-by-letter spacing should still be flagged after normalization.
+            self.assertTrue(cog.contains_profanity("Why would you type f u c k here?"))
             self.assertTrue(cog.contains_profanity("What the sh1t"))
             self.assertTrue(cog.contains_profanity("You are a biiiiitch"))
             self.assertFalse(cog.contains_profanity("Friendly and professional chat only."))
+
+    def test_contains_profanity_avoids_cross_word_false_positive(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            words_path = Path(temp_dir) / "profanity_words.json"
+            # ``spic`` is intentionally used to reproduce a real false-positive report.
+            words_path.write_text(json.dumps(["spic"]), encoding="utf-8")
+
+            cog = ProfanityCog(MagicMock(), blocked_words_path=words_path)
+
+            # ``has picked`` previously matched ``spic`` after all spaces were removed.
+            self.assertFalse(cog.contains_profanity("Haha you'll only need to be mine too, Kevin has picked one"))
+            # The exact blocked token must still match.
+            self.assertTrue(cog.contains_profanity("The blocked word was spic."))
 
     async def test_on_message_flags_for_review_without_deleting_immediately(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

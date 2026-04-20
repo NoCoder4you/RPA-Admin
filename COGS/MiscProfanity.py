@@ -105,16 +105,19 @@ class ProfanityCog(commands.Cog):
             return None
 
         tokens = normalized.split()
-        compact_text = "".join(tokens)
 
         for blocked_word in sorted(self.blocked_words):
-            # Match whole normalized tokens first to avoid overly broad false positives.
+            # Match exact normalized tokens first to avoid broad substring false positives
+            # (for example, a blocked word like ``spic`` should not match ``has picked``).
             if blocked_word in tokens:
                 return blocked_word
 
-            # Also inspect the separator-free content so forms like "f.u.c.k" are caught.
-            if blocked_word in compact_text:
+            # Also catch letter-by-letter obfuscation (``f u c k`` / ``f.u.c.k``) while
+            # still requiring word-like boundaries before and after the whole pattern.
+            spaced_letters_pattern = r"(?<![a-z0-9])" + r"\s*".join(map(re.escape, blocked_word)) + r"(?![a-z0-9])"
+            if re.search(spaced_letters_pattern, normalized):
                 return blocked_word
+
         return None
 
     def contains_profanity(self, content: str) -> bool:

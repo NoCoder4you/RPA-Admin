@@ -98,11 +98,19 @@ class HabboOnlineTimeCog(commands.Cog):
 
     @staticmethod
     def _extract_online_time_seconds(profile: dict[str, Any]) -> int | None:
-        """Resolve total online-time seconds from the direct API field only."""
+        """Resolve online-time seconds from API fields with a last-access fallback."""
 
         direct_seconds = profile.get("totalOnlineTime")
         if isinstance(direct_seconds, int):
             return max(0, direct_seconds)
+
+        # Fallback requested by staff: when Habbo does not expose total online
+        # seconds, estimate using elapsed time since `lastAccessTime`.
+        last_access_dt = HabboOnlineTimeCog._parse_habbo_timestamp(profile.get("lastAccessTime"))
+        if last_access_dt is not None:
+            now_utc = datetime.now(timezone.utc)
+            elapsed_seconds = int((now_utc - last_access_dt).total_seconds())
+            return max(0, elapsed_seconds)
         return None
 
     @staticmethod

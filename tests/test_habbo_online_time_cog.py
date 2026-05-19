@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -96,6 +97,17 @@ class HabboOnlineTimeCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(embed.fields[3].name, "Current time")
         self.assertTrue(embed.fields[3].value.startswith("<t:"))
         self.assertTrue(embed.fields[3].value.endswith(":R>"))
+
+    async def test_extract_online_time_falls_back_to_last_access(self) -> None:
+        cog = HabboOnlineTimeCog(MagicMock())
+        last_access = (datetime.now(timezone.utc) - timedelta(hours=30)).strftime("%Y-%m-%dT%H:%M:%S.%f%z")
+        profile = {"lastAccessTime": last_access}
+
+        seconds = cog._extract_online_time_seconds(profile)
+
+        self.assertIsNotNone(seconds)
+        # Allow a small tolerance because test execution time is non-zero.
+        self.assertTrue(29 * 3600 <= int(seconds) <= 31 * 3600)
 
 
 if __name__ == "__main__":

@@ -29,12 +29,10 @@ class HabboOnlineTimeCog(commands.Cog):
     def _has_employee_role(member: discord.abc.User | discord.Member) -> bool:
         """Return True when a guild member has the exact `RPA Employee` role."""
 
-        # Prefer duck-typing over concrete class checks so this helper works for
-        # discord.Member objects and lightweight test doubles that expose `.roles`.
         roles = getattr(member, "roles", None)
         if roles is None:
             return False
-        return any(getattr(role, "name", None) == "RPA Employee" for role in roles)
+        return any(getattr(role, "name", None) == "RPA-Employee" for role in roles)
 
     def _lookup_verified_habbo_username(self, discord_user_id: int) -> str | None:
         """Resolve a Discord user id to a Habbo username from the JSON verification file."""
@@ -106,9 +104,7 @@ class HabboOnlineTimeCog(commands.Cog):
         if isinstance(direct_seconds, int):
             return max(0, direct_seconds)
 
-        # Habbo does not consistently expose `totalOnlineTime` for every user.
-        # When absent, we fall back to "time since last access" as the closest
-        # available metric in the official payload.
+
         last_access = profile.get("lastAccessTime")
         if isinstance(last_access, str) and last_access.strip():
             try:

@@ -28,12 +28,10 @@ class HabboOnlineTimeCog(commands.Cog):
     def _has_employee_role(member: discord.abc.User | discord.Member) -> bool:
         """Return True when a guild member has the exact `RPA Employee` role."""
 
-        # Prefer duck-typing over concrete class checks so this helper works for
-        # discord.Member objects and lightweight test doubles that expose `.roles`.
         roles = getattr(member, "roles", None)
         if roles is None:
             return False
-        return any(getattr(role, "name", None) == "RPA Employee" for role in roles)
+        return any(getattr(role, "name", None) == "RPA-Employee" for role in roles)
 
     def _lookup_verified_habbo_username(self, discord_user_id: int) -> str | None:
         """Resolve a Discord user id to a Habbo username from the JSON verification file."""

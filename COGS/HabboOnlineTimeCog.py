@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -95,44 +96,24 @@ class HabboOnlineTimeCog(commands.Cog):
                     raise RuntimeError("Habbo API returned an invalid response body.")
                 return payload
 
-    async def _fetch_habbo_profile_details(self, unique_id: str) -> dict[str, Any]:
-        """Fetch the profile details payload that includes full badge metadata."""
-
-        details_url = f"https://www.habbo.com/api/public/users/{quote(unique_id, safe='')}/profile"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(details_url, timeout=15) as response:
-                if response.status >= 500:
-                    raise RuntimeError("Habbo API is currently unavailable.")
-                if response.status != 200:
-                    raise RuntimeError(f"Habbo profile API returned HTTP {response.status}.")
-                payload = await response.json()
-                if not isinstance(payload, dict):
-                    raise RuntimeError("Habbo profile API returned an invalid response body.")
-                return payload
-
     @staticmethod
-    def _extract_online_time_seconds(profile: dict[str, Any], details: dict[str, Any] | None = None) -> int | None:
-        """Resolve total online time from known Habbo fields or badge descriptions."""
+    def _extract_online_time_seconds(profile: dict[str, Any]) -> int | None:
+        """Resolve online-time seconds from API fields with a safe fallback."""
 
         direct_seconds = profile.get("totalOnlineTime")
         if isinstance(direct_seconds, int):
             return max(0, direct_seconds)
 
-        # Fallback: derive minutes from the Resident/Online Time achievement badge
-        # description (e.g. "For spending 138240 minutes in the Hotel.").
-        badges = details.get("badges", []) if isinstance(details, dict) else []
-        if isinstance(badges, list):
-            for badge in badges:
-                if not isinstance(badge, dict):
-                    continue
-                code = str(badge.get("code", ""))
-                if not code.startswith("ACH_AllTimeHotelPresence"):
-                    continue
-                description = str(badge.get("description", ""))
-                minute_text = "".join(ch if ch.isdigit() else " " for ch in description)
-                numbers = [chunk for chunk in minute_text.split() if chunk.isdigit()]
-                if numbers:
-                    return int(numbers[-1]) * 60
+
+        last_access = profile.get("lastAccessTime")
+        if isinstance(last_access, str) and last_access.strip():
+            try:
+                parsed = datetime.strptime(last_access, "%Y-%m-%dT%H:%M:%S.%f%z")
+                now_utc = datetime.now(timezone.utc)
+                elapsed_seconds = int((now_utc - parsed.astimezone(timezone.utc)).total_seconds())
+                return max(0, elapsed_seconds)
+            except ValueError:
+                return None
         return None
 
     @app_commands.command(name="onlinetime", description="Post Habbo total online time for an RPA employee.")
@@ -186,16 +167,7 @@ class HabboOnlineTimeCog(commands.Cog):
             )
             return
 
-        details_payload: dict[str, Any] | None = None
-        unique_id = str(profile.get("uniqueId", "")).strip()
-        if unique_id:
-            try:
-                details_payload = await self._fetch_habbo_profile_details(unique_id)
-            except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError):
-                # The primary profile call succeeded, so keep going with direct fields.
-                details_payload = None
-
-        total_online_seconds = self._extract_online_time_seconds(profile, details_payload)
+        total_online_seconds = self._extract_online_time_seconds(profile)
         if total_online_seconds is None:
             await interaction.followup.send(
                 "Total online time is unavailable for that Habbo user.",

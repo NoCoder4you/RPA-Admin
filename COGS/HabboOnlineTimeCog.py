@@ -126,8 +126,9 @@ class HabboOnlineTimeCog(commands.Cog):
             return None
 
     @app_commands.command(name="onlinetime", description="Post Habbo total online time for an RPA employee.")
-    @app_commands.describe(habbo_name="Optional Habbo username to look up")
-    async def onlinetime(self, interaction: discord.Interaction, habbo_name: str | None = None) -> None:
+    # Expose the slash option as `habbo` (requested naming) instead of `habbo_name`.
+    @app_commands.describe(habbo="Optional Habbo username to look up")
+    async def onlinetime(self, interaction: discord.Interaction, habbo: str | None = None) -> None:
         """Slash command handler that resolves a Habbo username and posts total online time."""
 
         if interaction.guild is None:
@@ -143,7 +144,7 @@ class HabboOnlineTimeCog(commands.Cog):
 
         await interaction.response.defer(ephemeral=False, thinking=True)
 
-        target_habbo_name = (habbo_name or "").strip()
+        target_habbo_name = (habbo or "").strip()
         if not target_habbo_name:
             try:
                 target_habbo_name = self._lookup_verified_habbo_username(interaction.user.id) or ""

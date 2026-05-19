@@ -28,9 +28,10 @@ class HabboOnlineTimeCog(commands.Cog):
     def _has_employee_role(member: discord.abc.User | discord.Member) -> bool:
         """Return True when a guild member has the exact `RPA Employee` role."""
 
-        if not isinstance(member, discord.Member):
+        roles = getattr(member, "roles", None)
+        if roles is None:
             return False
-        return any(role.name == "RPA-Employee" for role in member.roles)
+        return any(getattr(role, "name", None) == "RPA-Employee" for role in roles)
 
     def _lookup_verified_habbo_username(self, discord_user_id: int) -> str | None:
         """Resolve a Discord user id to a Habbo username from the JSON verification file."""
@@ -94,6 +95,46 @@ class HabboOnlineTimeCog(commands.Cog):
                     raise RuntimeError("Habbo API returned an invalid response body.")
                 return payload
 
+    async def _fetch_habbo_profile_details(self, unique_id: str) -> dict[str, Any]:
+        """Fetch the profile details payload that includes full badge metadata."""
+
+        details_url = f"https://www.habbo.com/api/public/users/{quote(unique_id, safe='')}/profile"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(details_url, timeout=15) as response:
+                if response.status >= 500:
+                    raise RuntimeError("Habbo API is currently unavailable.")
+                if response.status != 200:
+                    raise RuntimeError(f"Habbo profile API returned HTTP {response.status}.")
+                payload = await response.json()
+                if not isinstance(payload, dict):
+                    raise RuntimeError("Habbo profile API returned an invalid response body.")
+                return payload
+
+    @staticmethod
+    def _extract_online_time_seconds(profile: dict[str, Any], details: dict[str, Any] | None = None) -> int | None:
+        """Resolve total online time from known Habbo fields or badge descriptions."""
+
+        direct_seconds = profile.get("totalOnlineTime")
+        if isinstance(direct_seconds, int):
+            return max(0, direct_seconds)
+
+        # Fallback: derive minutes from the Resident/Online Time achievement badge
+        # description (e.g. "For spending 138240 minutes in the Hotel.").
+        badges = details.get("badges", []) if isinstance(details, dict) else []
+        if isinstance(badges, list):
+            for badge in badges:
+                if not isinstance(badge, dict):
+                    continue
+                code = str(badge.get("code", ""))
+                if not code.startswith("ACH_AllTimeHotelPresence"):
+                    continue
+                description = str(badge.get("description", ""))
+                minute_text = "".join(ch if ch.isdigit() else " " for ch in description)
+                numbers = [chunk for chunk in minute_text.split() if chunk.isdigit()]
+                if numbers:
+                    return int(numbers[-1]) * 60
+        return None
+
     @app_commands.command(name="onlinetime", description="Post Habbo total online time for an RPA employee.")
     @app_commands.describe(habbo_name="Optional Habbo username to look up")
     async def onlinetime(self, interaction: discord.Interaction, habbo_name: str | None = None) -> None:
@@ -145,8 +186,17 @@ class HabboOnlineTimeCog(commands.Cog):
             )
             return
 
-        total_online_seconds = profile.get("totalOnlineTime")
-        if not isinstance(total_online_seconds, int):
+        details_payload: dict[str, Any] | None = None
+        unique_id = str(profile.get("uniqueId", "")).strip()
+        if unique_id:
+            try:
+                details_payload = await self._fetch_habbo_profile_details(unique_id)
+            except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError):
+                # The primary profile call succeeded, so keep going with direct fields.
+                details_payload = None
+
+        total_online_seconds = self._extract_online_time_seconds(profile, details_payload)
+        if total_online_seconds is None:
             await interaction.followup.send(
                 "Total online time is unavailable for that Habbo user.",
                 ephemeral=True,

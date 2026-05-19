@@ -30,7 +30,7 @@ class HabboOnlineTimeCog(commands.Cog):
 
         if not isinstance(member, discord.Member):
             return False
-        return any(role.name == "RPA Employee" for role in member.roles)
+        return any(role.name == "RPA-Employee" for role in member.roles)
 
     def _lookup_verified_habbo_username(self, discord_user_id: int) -> str | None:
         """Resolve a Discord user id to a Habbo username from the JSON verification file."""

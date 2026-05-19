@@ -7,9 +7,10 @@ import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote
+from urllib.request import Request, urlopen
 
-import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -29,6 +30,8 @@ class HabboOnlineTimeCog(commands.Cog):
     def _has_employee_role(member: discord.abc.User | discord.Member) -> bool:
         """Return True when a guild member has the exact `RPA Employee` role."""
 
+        # Prefer duck-typing over concrete class checks so this helper works for
+        # discord.Member objects and lightweight test doubles that expose `.roles`.
         roles = getattr(member, "roles", None)
         if roles is None:
             return False
@@ -81,20 +84,25 @@ class HabboOnlineTimeCog(commands.Cog):
 
         encoded_name = quote(habbo_name, safe="")
         profile_url = f"https://www.habbo.com/api/public/users?name={encoded_name}"
+        request = Request(profile_url, headers={"User-Agent": "RPA-Admin/1.0"})
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(profile_url, timeout=15) as response:
-                if response.status == 404:
-                    raise LookupError("Habbo user not found.")
-                if response.status >= 500:
-                    raise RuntimeError("Habbo API is currently unavailable.")
-                if response.status != 200:
-                    raise RuntimeError(f"Habbo API returned HTTP {response.status}.")
-
-                payload = await response.json()
+        def _read_json() -> dict[str, Any]:
+            with urlopen(request, timeout=15) as response:
+                payload = json.loads(response.read().decode("utf-8"))
                 if not isinstance(payload, dict):
                     raise RuntimeError("Habbo API returned an invalid response body.")
                 return payload
+
+        try:
+            return await asyncio.to_thread(_read_json)
+        except HTTPError as exc:
+            if exc.code == 404:
+                raise LookupError("Habbo user not found.") from exc
+            if exc.code >= 500:
+                raise RuntimeError("Habbo API is currently unavailable.") from exc
+            raise RuntimeError(f"Habbo API returned HTTP {exc.code}.") from exc
+        except (URLError, TimeoutError) as exc:
+            raise RuntimeError("Habbo API request failed.") from exc
 
     @staticmethod
     def _extract_online_time_seconds(profile: dict[str, Any]) -> int | None:
@@ -103,7 +111,6 @@ class HabboOnlineTimeCog(commands.Cog):
         direct_seconds = profile.get("totalOnlineTime")
         if isinstance(direct_seconds, int):
             return max(0, direct_seconds)
-
 
         last_access = profile.get("lastAccessTime")
         if isinstance(last_access, str) and last_access.strip():
@@ -160,7 +167,7 @@ class HabboOnlineTimeCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError):
+        except RuntimeError:
             await interaction.followup.send(
                 "The Habbo API is unavailable right now. Please try again shortly.",
                 ephemeral=True,

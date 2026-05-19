@@ -35,7 +35,7 @@ class HabboOnlineTimeCog(commands.Cog):
         roles = getattr(member, "roles", None)
         if roles is None:
             return False
-        return any(getattr(role, "name", None) == "RPA Employee" for role in roles)
+        return any(getattr(role, "name", None) == "RPA-Employee" for role in roles)
 
     def _lookup_verified_habbo_username(self, discord_user_id: int) -> str | None:
         """Resolve a Discord user id to a Habbo username from the JSON verification file."""
@@ -80,12 +80,7 @@ class HabboOnlineTimeCog(commands.Cog):
         return ", ".join(parts)
 
     async def _fetch_habbo_profile(self, habbo_name: str) -> dict[str, Any]:
-        """Fetch Habbo profile JSON from the official Habbo API.
-
-        We intentionally use Python's stdlib urllib instead of aiohttp to keep
-        dependencies minimal. The blocking HTTP call runs in a thread via
-        ``asyncio.to_thread`` so the Discord event loop remains responsive.
-        """
+        """Fetch Habbo profile JSON from the official Habbo API."""
 
         encoded_name = quote(habbo_name, safe="")
         profile_url = f"https://www.habbo.com/api/public/users?name={encoded_name}"
@@ -117,9 +112,6 @@ class HabboOnlineTimeCog(commands.Cog):
         if isinstance(direct_seconds, int):
             return max(0, direct_seconds)
 
-        # Habbo does not consistently expose `totalOnlineTime` for every user.
-        # When absent, we fall back to "time since last access" as the closest
-        # available metric in the official payload.
         last_access = profile.get("lastAccessTime")
         if isinstance(last_access, str) and last_access.strip():
             try:

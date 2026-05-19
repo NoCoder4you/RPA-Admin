@@ -35,7 +35,7 @@ class HabboOnlineTimeCog(commands.Cog):
         roles = getattr(member, "roles", None)
         if roles is None:
             return False
-        return any(getattr(role, "name", None) == "RPA Employee" for role in roles)
+        return any(getattr(role, "name", None) == "RPA-Employee" for role in roles)
 
     def _lookup_verified_habbo_username(self, discord_user_id: int) -> str | None:
         """Resolve a Discord user id to a Habbo username from the JSON verification file."""

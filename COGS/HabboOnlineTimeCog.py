@@ -57,30 +57,22 @@ class HabboOnlineTimeCog(commands.Cog):
 
     @staticmethod
     def _format_duration(total_seconds: int) -> str:
-        """Convert a raw total number of seconds into a clean, human-readable value."""
+        """Convert raw seconds into an `X hours, Y minutes` style string."""
 
         if total_seconds < 0:
             total_seconds = 0
 
-        days, remainder = divmod(total_seconds, 86400)
-        hours, remainder = divmod(remainder, 3600)
-        minutes, _seconds = divmod(remainder, 60)
-
-        parts: list[str] = []
-        if days:
-            parts.append(f"{days} day" + ("s" if days != 1 else ""))
-        if hours:
-            parts.append(f"{hours} hour" + ("s" if hours != 1 else ""))
-        if minutes and not days:
-            # Include minutes only when the duration is less than a day to keep output concise.
-            parts.append(f"{minutes} minute" + ("s" if minutes != 1 else ""))
-
-        if not parts:
-            return "0 hours"
-        return ", ".join(parts)
+        total_minutes = total_seconds // 60
+        hours, minutes = divmod(total_minutes, 60)
+        return f"{hours} hour" + ("s" if hours != 1 else "") + f", {minutes} minute" + ("s" if minutes != 1 else "")
 
     async def _fetch_habbo_profile(self, habbo_name: str) -> dict[str, Any]:
-        """Fetch Habbo profile JSON from the official Habbo API."""
+        """Fetch Habbo profile JSON from the official Habbo API.
+
+        We intentionally use Python's stdlib urllib instead of aiohttp to keep
+        dependencies minimal. The blocking HTTP call runs in a thread via
+        ``asyncio.to_thread`` so the Discord event loop remains responsive.
+        """
 
         encoded_name = quote(habbo_name, safe="")
         profile_url = f"https://www.habbo.com/api/public/users?name={encoded_name}"
@@ -106,22 +98,24 @@ class HabboOnlineTimeCog(commands.Cog):
 
     @staticmethod
     def _extract_online_time_seconds(profile: dict[str, Any]) -> int | None:
-        """Resolve online-time seconds from API fields with a safe fallback."""
+        """Resolve total online-time seconds from the direct API field only."""
 
         direct_seconds = profile.get("totalOnlineTime")
         if isinstance(direct_seconds, int):
             return max(0, direct_seconds)
-
-        last_access = profile.get("lastAccessTime")
-        if isinstance(last_access, str) and last_access.strip():
-            try:
-                parsed = datetime.strptime(last_access, "%Y-%m-%dT%H:%M:%S.%f%z")
-                now_utc = datetime.now(timezone.utc)
-                elapsed_seconds = int((now_utc - parsed.astimezone(timezone.utc)).total_seconds())
-                return max(0, elapsed_seconds)
-            except ValueError:
-                return None
         return None
+
+    @staticmethod
+    def _parse_habbo_timestamp(value: str | None) -> datetime | None:
+        """Parse Habbo timestamp text into a timezone-aware UTC datetime."""
+
+        if not isinstance(value, str) or not value.strip():
+            return None
+        try:
+            parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%f%z")
+            return parsed.astimezone(timezone.utc)
+        except ValueError:
+            return None
 
     @app_commands.command(name="onlinetime", description="Post Habbo total online time for an RPA employee.")
     @app_commands.describe(habbo_name="Optional Habbo username to look up")
@@ -185,6 +179,14 @@ class HabboOnlineTimeCog(commands.Cog):
         resolved_name = str(profile.get("name", target_habbo_name))
         readable_time = self._format_duration(total_online_seconds)
         figure_string = str(profile.get("figureString", ""))
+        now_utc = datetime.now(timezone.utc)
+        last_access_dt = self._parse_habbo_timestamp(profile.get("lastAccessTime"))
+        last_access_display = (
+            f"<t:{int(last_access_dt.timestamp())}:R>"
+            if last_access_dt is not None
+            else "Unavailable"
+        )
+        current_time_display = f"<t:{int(now_utc.timestamp())}:R>"
         thumbnail_url = (
             f"https://www.habbo.com/habbo-imaging/avatarimage?figure={quote(figure_string, safe='')}&size=l&direction=2&head_direction=3&gesture=sml"
             if figure_string
@@ -194,6 +196,9 @@ class HabboOnlineTimeCog(commands.Cog):
         embed = discord.Embed(color=discord.Color.blurple())
         embed.add_field(name="Habbo Username", value=resolved_name, inline=True)
         embed.add_field(name="Total time online", value=readable_time, inline=True)
+        # Show relative-time context directly in Discord using timestamp syntax.
+        embed.add_field(name="Last access time", value=last_access_display, inline=False)
+        embed.add_field(name="Current time", value=current_time_display, inline=False)
         if thumbnail_url:
             embed.set_thumbnail(url=thumbnail_url)
         embed.set_footer(text=f"Requested by {interaction.user}")

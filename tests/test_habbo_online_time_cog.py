@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -68,6 +67,7 @@ class HabboOnlineTimeCogTests(unittest.IsolatedAsyncioTestCase):
                 "name": "Siren",
                 "totalOnlineTime": 183600,
                 "figureString": "hr-100-1.hd-180-1",
+                "lastAccessTime": "2026-05-17T19:16:13.000+0000",
             }
         )
 
@@ -89,18 +89,13 @@ class HabboOnlineTimeCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(embed.fields[0].name, "Habbo Username")
         self.assertEqual(embed.fields[0].value, "Siren")
         self.assertEqual(embed.fields[1].name, "Total time online")
-        self.assertEqual(embed.fields[1].value, "2 days, 3 hours")
-
-    async def test_extract_online_time_falls_back_to_last_access(self) -> None:
-        cog = HabboOnlineTimeCog(MagicMock())
-        last_access = (datetime.now(timezone.utc) - timedelta(hours=30)).strftime("%Y-%m-%dT%H:%M:%S.%f%z")
-        profile = {"lastAccessTime": last_access}
-
-        seconds = cog._extract_online_time_seconds(profile)
-
-        self.assertIsNotNone(seconds)
-        # Allow a small timing tolerance because `now()` is evaluated during the test.
-        self.assertTrue(29 * 3600 <= int(seconds) <= 31 * 3600)
+        self.assertEqual(embed.fields[1].value, "51 hours, 0 minutes")
+        self.assertEqual(embed.fields[2].name, "Last access time")
+        self.assertTrue(embed.fields[2].value.startswith("<t:"))
+        self.assertTrue(embed.fields[2].value.endswith(":R>"))
+        self.assertEqual(embed.fields[3].name, "Current time")
+        self.assertTrue(embed.fields[3].value.startswith("<t:"))
+        self.assertTrue(embed.fields[3].value.endswith(":R>"))
 
 
 if __name__ == "__main__":

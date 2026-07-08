@@ -201,8 +201,7 @@ class PayVoidCog(commands.Cog):
             embed.add_field(name="Payban Until", value=PayVoidCog._format_expiry(decision.payban_until), inline=False)
         return embed
 
-    @app_commands.command(name="payvoid", description="Record a weekly pay void; three weekly pay voids records a timed payban.")
-    @app_commands.guilds(discord.Object(id=RPA_SERVER_ID))
+        """Record one pay void using the `/void USERNAME` flow; no extra user permissions required."""
     @app_commands.describe(member="The member receiving a pay void", reason="Why this pay void is being recorded")
     @app_commands.checks.has_permissions(manage_roles=True)
     async def payvoid(self, interaction: discord.Interaction, member: discord.Member, reason: str) -> None:

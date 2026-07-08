@@ -93,6 +93,14 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
         with patch("COGS.PayVoidCog.PayVoidCog._weekly_reset_checker"):
             return PayVoidCog(bot, store=store)
 
+
+    def test_void_command_has_no_permission_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            cog = self._cog(PayDisciplineStore(temp_path / "payvoids.json", temp_path / "paybans.json"))
+
+            self.assertEqual(cog.void.checks, [])
+
     async def test_payvoid_rejects_other_servers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)

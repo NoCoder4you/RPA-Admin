@@ -125,7 +125,7 @@ class PayDisciplineStore:
         return record
 
     def record_void(
-        self, username: str, moderator_id: int, now: datetime, deducted_point: bool
+        self, username: str, moderator_id: int, now: datetime, actiontaken: bool
     ) -> PaybanDecision:
         """Record one Habbo username void and create a payban after the third weekly void."""
 
@@ -133,13 +133,13 @@ class PayDisciplineStore:
         username = username.strip()
         void_record = self._void_record(username)
         voids = void_record["voids"]
-        # Voids intentionally store only who/when and whether a point was deducted;
+        # Voids intentionally store only who/when and whether action was taken;
         # the command does not ask users for a reason.
         voids.append(
             {
                 "created_at": self._iso(now),
                 "moderator_id": moderator_id,
-                "deducted_point": deducted_point,
+                "actiontaken": actiontaken,
             }
         )
         void_count = len(voids)
@@ -247,7 +247,7 @@ class PayVoidCog(commands.Cog):
         return embed
 
     @staticmethod
-    def _build_payvoid_embed(username: str, decision: PaybanDecision, deducted_point: bool) -> discord.Embed:
+    def _build_payvoid_embed(username: str, decision: PaybanDecision, actiontaken: bool) -> discord.Embed:
         """Create the public pay discipline embed requested for Habbo voids and bans."""
 
         is_banned = decision.payban_until is not None
@@ -257,7 +257,7 @@ class PayVoidCog(commands.Cog):
         )
         embed.add_field(name="Username", value=username, inline=False)
         embed.add_field(name="Number of Voids", value=str(decision.void_count), inline=False)
-        embed.add_field(name="Action Taken", value="Yes" if deducted_point else "No", inline=False)
+        embed.add_field(name="Action Taken", value="Yes" if actiontaken else "No", inline=False)
         embed.add_field(name="Payban Counter", value=PayVoidCog._format_payban_counter(decision), inline=False)
         if is_banned:
             embed.add_field(name="Payban Until", value=PayVoidCog._format_expiry(decision.payban_until), inline=False)
@@ -266,10 +266,10 @@ class PayVoidCog(commands.Cog):
     @pay.command(name="void", description="Record a weekly pay void for a Habbo username.")
     @app_commands.describe(
         username="The Habbo username receiving a pay void",
-        deducted_point="Whether a point has already been deducted for this void",
+        actiontaken="Whether action has already been taken for this void",
     )
     async def void(
-        self, interaction: discord.Interaction, username: str, deducted_point: Literal["Yes", "No"]
+        self, interaction: discord.Interaction, username: str, actiontaken: Literal["Yes", "No"]
     ) -> None:
         """Record one pay void using a Habbo username; no Discord membership required."""
 
@@ -285,12 +285,12 @@ class PayVoidCog(commands.Cog):
 
         # The input is a Habbo username, not a Discord member mention, so record
         # the typed text directly and never require the user to be in this server.
-        point_was_deducted = deducted_point == "Yes"
-        decision = self.store.record_void(habbo_username, interaction.user.id, self._now(), point_was_deducted)
+        action_was_taken = actiontaken == "Yes"
+        decision = self.store.record_void(habbo_username, interaction.user.id, self._now(), action_was_taken)
         content = f"<@&{PAYBAN_MENTION_ROLE_ID}>" if decision.payban_until is not None else None
         await interaction.response.send_message(
             content=content,
-            embed=self._build_payvoid_embed(habbo_username, decision, point_was_deducted),
+            embed=self._build_payvoid_embed(habbo_username, decision, action_was_taken),
             allowed_mentions=discord.AllowedMentions(roles=True),
         )
 

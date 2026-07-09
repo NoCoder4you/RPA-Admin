@@ -55,7 +55,7 @@ class PayDisciplineStoreTests(unittest.TestCase):
             self.assertEqual(third.payban_until, now + timedelta(days=3))
             self.assertIn("habbouser", store.voids.data["members"])
             self.assertEqual(store.voids.data["members"]["habbouser"]["username"], "HabboUser")
-            self.assertTrue(store.voids.data["members"]["habbouser"]["voids"][0]["deducted_point"])
+            self.assertTrue(store.voids.data["members"]["habbouser"]["voids"][0]["actiontaken"])
             self.assertNotIn("reason", store.voids.data["members"]["habbouser"]["voids"][0])
             self.assertNotIn("reason", store.bans.data["members"]["habbouser"])
             self.assertEqual(store.bans.data["members"]["habbouser"]["offences"], 1)
@@ -166,7 +166,7 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(send_kwargs["embed"].fields[3].name, "Payban Counter")
             self.assertEqual(send_kwargs["embed"].fields[3].value, "1/3")
             self.assertIn("habboonly", store.voids.data["members"])
-            self.assertTrue(store.voids.data["members"]["habboonly"]["voids"][0]["deducted_point"])
+            self.assertTrue(store.voids.data["members"]["habboonly"]["voids"][0]["actiontaken"])
 
     async def test_void_posts_embed_and_does_not_add_roles(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

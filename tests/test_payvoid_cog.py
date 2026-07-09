@@ -16,6 +16,7 @@ try:
     from COGS.PayVoidCog import (
         PAYBAN_MENTION_ROLE_ID,
         PAYVOID_THRESHOLD,
+        THIRD_PAYBAN_ALERT_ROLE_ID,
         PayDisciplineStore,
         PayVoidCog,
         RPA_SERVER_ID,
@@ -28,6 +29,7 @@ except ModuleNotFoundError:
     RPA_SERVER_ID = None
     PAYVOID_THRESHOLD = None
     PAYBAN_MENTION_ROLE_ID = None
+    THIRD_PAYBAN_ALERT_ROLE_ID = None
 
 
 @unittest.skipIf(PayVoidCog is None, "discord.py is not installed in the test environment")
@@ -74,7 +76,7 @@ class PayDisciplineStoreTests(unittest.TestCase):
             self.assertEqual(decisions[2].payban_until, now + timedelta(days=2, hours=74))
             self.assertEqual(decisions[3].payban_until, now + timedelta(days=3, hours=74))
 
-    def test_reset_week_clears_voids_and_bans_but_records_reset_monday(self) -> None:
+    def test_reset_week_clears_voids_but_preserves_payban_history(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             store = PayDisciplineStore(temp_path / "payvoids.json", temp_path / "paybans.json")
@@ -85,7 +87,8 @@ class PayDisciplineStoreTests(unittest.TestCase):
             store.reset_week(reset_monday)
 
             self.assertEqual(store.voids.data["members"], {})
-            self.assertEqual(store.bans.data["members"], {})
+            self.assertIn("habbouser", store.bans.data["members"])
+            self.assertEqual(store.bans.data["members"]["habbouser"]["offences"], 0)
             self.assertTrue(store.has_reset_for(reset_monday))
 
 
@@ -156,7 +159,7 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(send_kwargs["embed"].fields[2].name, "Action Taken")
             self.assertEqual(send_kwargs["embed"].fields[2].value, "Yes")
             self.assertEqual(send_kwargs["embed"].fields[3].name, "Payban Counter")
-            self.assertEqual(send_kwargs["embed"].fields[3].value, "0")
+            self.assertEqual(send_kwargs["embed"].fields[3].value, "1/3")
             self.assertIn("habboonly", store.voids.data["members"])
             self.assertTrue(store.voids.data["members"]["habboonly"]["voids"][0]["deducted_point"])
 
@@ -183,7 +186,7 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(send_kwargs["embed"].fields[2].name, "Action Taken")
             self.assertEqual(send_kwargs["embed"].fields[2].value, "No")
             self.assertEqual(send_kwargs["embed"].fields[3].name, "Payban Counter")
-            self.assertEqual(send_kwargs["embed"].fields[3].value, "0")
+            self.assertEqual(send_kwargs["embed"].fields[3].value, "1/3")
 
     async def test_void_third_void_mentions_payban_role_without_assigning_role(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -209,7 +212,38 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(send_kwargs["embed"].fields[2].name, "Action Taken")
             self.assertEqual(send_kwargs["embed"].fields[2].value, "No")
             self.assertEqual(send_kwargs["embed"].fields[3].name, "Payban Counter")
-            self.assertEqual(send_kwargs["embed"].fields[3].value, "1")
+            self.assertEqual(send_kwargs["embed"].fields[3].value, "3/3 (BAN)")
+
+    async def test_third_payban_sends_escalation_alert_embed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            store = PayDisciplineStore(temp_path / "payvoids.json", temp_path / "paybans.json")
+            cog = self._cog(store)
+            cog._now = MagicMock(return_value=datetime(2026, 7, 7, 12, tzinfo=timezone.utc))
+            alert_channel = SimpleNamespace(send=AsyncMock())
+            cog.bot.get_channel.return_value = alert_channel
+            interaction = SimpleNamespace(
+                guild=SimpleNamespace(id=RPA_SERVER_ID, members=[]),
+                user=SimpleNamespace(id=1),
+                response=SimpleNamespace(send_message=AsyncMock()),
+            )
+
+            # Two historical paybans are kept in paybans.json indefinitely; the
+            # next ban should be treated as the user's third lifetime payban.
+            store.bans.data["members"] = {
+                "voidable user": {"username": "Voidable User", "offences": 2}
+            }
+
+            await cog.void.callback(cog, interaction, "Voidable User", "No")
+            await cog.void.callback(cog, interaction, "Voidable User", "No")
+            await cog.void.callback(cog, interaction, "Voidable User", "No")
+
+            alert_channel.send.assert_awaited_once()
+            alert_kwargs = alert_channel.send.await_args.kwargs
+            self.assertEqual(alert_kwargs["content"], f"<@&{THIRD_PAYBAN_ALERT_ROLE_ID}>")
+            self.assertEqual(alert_kwargs["embed"].title, "Third Payban Alert")
+            self.assertEqual(alert_kwargs["embed"].fields[0].value, "Voidable User")
+            self.assertIn("3rd time", alert_kwargs["embed"].fields[1].value)
 
     async def test_weekly_reset_posts_reset_message(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -224,7 +258,7 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(store.voids.data["members"], {})
             self.assertEqual(store.bans.data["members"], {})
-            channel.send.assert_awaited_once_with("Pay voids and paybans have been reset for the week.")
+            channel.send.assert_awaited_once_with("Pay voids have been reset for the week.")
 
     async def test_weekly_reset_catches_up_after_monday_midnight_window(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -242,7 +276,7 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(store.voids.data["members"], {})
             self.assertTrue(store.has_reset_for(datetime(2026, 7, 13, 0, tzinfo=ZoneInfo("America/New_York"))))
-            channel.send.assert_awaited_once_with("Pay voids and paybans have been reset for the week.")
+            channel.send.assert_awaited_once_with("Pay voids have been reset for the week.")
 
     async def test_weekly_reset_does_not_repeat_after_current_week_was_reset(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

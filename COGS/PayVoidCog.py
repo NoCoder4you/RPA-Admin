@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 import discord
@@ -127,15 +127,24 @@ class PayDisciplineStore:
             record["offences"] = 0
         return record
 
-    def record_void(self, username: str, moderator_id: int, now: datetime) -> PaybanDecision:
+    def record_void(
+        self, username: str, moderator_id: int, now: datetime, deducted_point: bool
+    ) -> PaybanDecision:
         """Record one Habbo username void and create a payban after the third weekly void."""
 
         now = now.astimezone(timezone.utc)
         username = username.strip()
         void_record = self._void_record(username)
         voids = void_record["voids"]
-        # Voids intentionally store only who/when; the command does not ask users for a reason.
-        voids.append({"created_at": self._iso(now), "moderator_id": moderator_id})
+        # Voids intentionally store only who/when and whether a point was deducted;
+        # the command does not ask users for a reason.
+        voids.append(
+            {
+                "created_at": self._iso(now),
+                "moderator_id": moderator_id,
+                "deducted_point": deducted_point,
+            }
+        )
         void_count = len(voids)
 
         payban_until = None
@@ -193,16 +202,20 @@ class PayVoidCog(commands.Cog):
         return f"<t:{unix}:F> (<t:{unix}:R>)"
 
     @staticmethod
-    def _reset_monday_for(now: datetime) -> datetime | None:
-        """Return this week's Monday midnight EST when the reset is currently due."""
+    def _current_week_reset_monday(now: datetime) -> datetime:
+        """Return the Monday midnight EST reset that owns the current week.
+
+        The reset loop can be delayed by downtime or scheduler drift, so this
+        intentionally returns the current week's reset boundary for any time
+        after Monday 00:00 EST instead of only during that exact minute.
+        """
 
         now_est = now.astimezone(EASTERN_TZ)
-        if now_est.weekday() != 0 or now_est.hour != 0 or now_est.minute != 0:
-            return None
-        return now_est.replace(second=0, microsecond=0)
+        monday = now_est - timedelta(days=now_est.weekday())
+        return monday.replace(hour=0, minute=0, second=0, microsecond=0)
 
     @staticmethod
-    def _build_payvoid_embed(username: str, decision: PaybanDecision) -> discord.Embed:
+    def _build_payvoid_embed(username: str, decision: PaybanDecision, deducted_point: bool) -> discord.Embed:
         """Create the public pay discipline embed requested for Habbo voids and bans."""
 
         is_banned = decision.payban_until is not None
@@ -212,14 +225,20 @@ class PayVoidCog(commands.Cog):
         )
         embed.add_field(name="Username", value=username, inline=False)
         embed.add_field(name="Number of Voids", value=str(decision.void_count), inline=False)
+        embed.add_field(name="Deducted Point", value="Yes" if deducted_point else "No", inline=False)
         if is_banned:
             embed.add_field(name="Payban Offence", value=str(decision.payban_offence_count), inline=False)
             embed.add_field(name="Payban Until", value=PayVoidCog._format_expiry(decision.payban_until), inline=False)
         return embed
 
     @app_commands.command(name="void", description="Record a weekly pay void for a Habbo username.")
-    @app_commands.describe(username="The Habbo username receiving a pay void")
-    async def void(self, interaction: discord.Interaction, username: str) -> None:
+    @app_commands.describe(
+        username="The Habbo username receiving a pay void",
+        deducted_point="Whether a point has already been deducted for this void",
+    )
+    async def void(
+        self, interaction: discord.Interaction, username: str, deducted_point: Literal["Yes", "No"]
+    ) -> None:
         """Record one pay void using a Habbo username; no Discord membership required."""
 
         # Keep the command globally syncable while still enforcing the requested server-only behavior.
@@ -234,20 +253,21 @@ class PayVoidCog(commands.Cog):
 
         # The input is a Habbo username, not a Discord member mention, so record
         # the typed text directly and never require the user to be in this server.
-        decision = self.store.record_void(habbo_username, interaction.user.id, self._now())
+        point_was_deducted = deducted_point == "Yes"
+        decision = self.store.record_void(habbo_username, interaction.user.id, self._now(), point_was_deducted)
         content = f"<@&{PAYBAN_MENTION_ROLE_ID}>" if decision.payban_until is not None else None
         await interaction.response.send_message(
             content=content,
-            embed=self._build_payvoid_embed(habbo_username, decision),
+            embed=self._build_payvoid_embed(habbo_username, decision, point_was_deducted),
             allowed_mentions=discord.AllowedMentions(roles=True),
         )
 
-    @tasks.loop(minutes=5)
+    @tasks.loop(minutes=1)
     async def _weekly_reset_checker(self) -> None:
         """Clear all pay void and payban data at Monday midnight EST and announce it."""
 
-        reset_monday = self._reset_monday_for(self._now())
-        if reset_monday is None or self.store.has_reset_for(reset_monday):
+        reset_monday = self._current_week_reset_monday(self._now())
+        if self.store.has_reset_for(reset_monday):
             return
 
         self.store.reset_week(reset_monday)

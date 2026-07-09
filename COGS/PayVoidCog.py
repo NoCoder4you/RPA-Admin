@@ -210,13 +210,24 @@ class PayVoidCog(commands.Cog):
         return f"<t:{unix}:F> (<t:{unix}:R>)"
 
     @staticmethod
-    def _current_week_reset_monday(now: datetime) -> datetime:
-        """Return the Monday midnight EST reset that owns the current week.
+    def _format_footer_time(value: datetime) -> str:
+        """Render the void footer time consistently in UTC for audit readability."""
 
-        The reset loop can be delayed by downtime or scheduler drift, so this
-        intentionally returns the current week's reset boundary for any time
-        after Monday 00:00 EST instead of only during that exact minute.
-        """
+        return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    @staticmethod
+    def _recorded_by_name(user: discord.abc.User) -> str:
+        """Return the best available display name for the moderator recording a void."""
+
+        return (
+            getattr(user, "display_name", None)
+            or getattr(user, "global_name", None)
+            or getattr(user, "name", None)
+            or str(user)
+        )
+
+    @staticmethod
+    def _current_week_reset_monday(now: datetime) -> datetime:
 
         now_est = now.astimezone(EASTERN_TZ)
         monday = now_est - timedelta(days=now_est.weekday())
@@ -238,6 +249,13 @@ class PayVoidCog(commands.Cog):
         return f"{progress}/{PAYVOID_THRESHOLD}"
 
     @staticmethod
+    def _format_paybans_counter(decision: PaybanDecision) -> str:
+        """Render lifetime payban progress toward the third-payban alert as 0/3 through 3/3."""
+
+        capped_offences = min(decision.payban_offence_count, PAYVOID_THRESHOLD)
+        return f"{capped_offences}/{PAYVOID_THRESHOLD}"
+
+    @staticmethod
     def _build_third_payban_alert_embed(username: str) -> discord.Embed:
         """Create the escalation alert used when a Habbo username reaches a third payban."""
 
@@ -247,7 +265,9 @@ class PayVoidCog(commands.Cog):
         return embed
 
     @staticmethod
-    def _build_payvoid_embed(username: str, decision: PaybanDecision, actiontaken: bool) -> discord.Embed:
+    def _build_payvoid_embed(
+        username: str, decision: PaybanDecision, actiontaken: bool, recorded_by: str, recorded_at: datetime
+    ) -> discord.Embed:
         """Create the public pay discipline embed requested for Habbo voids and bans."""
 
         is_banned = decision.payban_until is not None
@@ -258,9 +278,12 @@ class PayVoidCog(commands.Cog):
         embed.add_field(name="Username", value=username, inline=False)
         embed.add_field(name="Voids", value=PayVoidCog._format_void_counter(decision), inline=False)
         embed.add_field(name="Action Taken", value="Yes" if actiontaken else "No", inline=False)
-        embed.add_field(name="Payban Counter", value=str(decision.payban_offence_count), inline=False)
+        # Show lifetime paybans separately from weekly void progress; every
+        # 3/3 void cycle increments this payban progress by one.
+        embed.add_field(name="Paybans", value=PayVoidCog._format_paybans_counter(decision), inline=False)
         if is_banned:
             embed.add_field(name="Payban Until", value=PayVoidCog._format_expiry(decision.payban_until), inline=False)
+        embed.set_footer(text=f"Void Recorded By {recorded_by} • {PayVoidCog._format_footer_time(recorded_at)}")
         return embed
 
     @pay.command(name="void", description="Record a weekly pay void for a Habbo username.")
@@ -286,11 +309,14 @@ class PayVoidCog(commands.Cog):
         # The input is a Habbo username, not a Discord member mention, so record
         # the typed text directly and never require the user to be in this server.
         action_was_taken = actiontaken == "Yes"
-        decision = self.store.record_void(habbo_username, interaction.user.id, self._now(), action_was_taken)
+        recorded_at = self._now()
+        decision = self.store.record_void(habbo_username, interaction.user.id, recorded_at, action_was_taken)
         content = f"<@&{PAYBAN_MENTION_ROLE_ID}>" if decision.payban_until is not None else None
         await interaction.response.send_message(
             content=content,
-            embed=self._build_payvoid_embed(habbo_username, decision, action_was_taken),
+            embed=self._build_payvoid_embed(
+                habbo_username, decision, action_was_taken, self._recorded_by_name(interaction.user), recorded_at
+            ),
             allowed_mentions=discord.AllowedMentions(roles=True),
         )
 

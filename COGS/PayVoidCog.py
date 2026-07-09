@@ -99,12 +99,6 @@ class PayDisciplineStore:
 
     @staticmethod
     def username_key(username: str) -> str:
-        """Return a stable JSON key for a typed Habbo username.
-
-        Habbo names are typed as plain text and do not need to be Discord
-        server members, so the discipline stores are keyed by a normalized
-        username instead of a Discord member ID.
-        """
 
         return username.strip().casefold()
 
@@ -169,8 +163,6 @@ class PayDisciplineStore:
         """Clear weekly voids while preserving indefinite payban history."""
 
         self.voids.reset()
-        # Payban records intentionally survive weekly resets so the escalation
-        # count remains an indefinite history instead of restarting each Monday.
         self.bans.data.setdefault("meta", {})["last_reset_monday"] = reset_monday.date().isoformat()
         self.bans.save()
 
@@ -242,7 +234,7 @@ class PayVoidCog(commands.Cog):
 
         progress = decision.void_count % PAYVOID_THRESHOLD
         if progress == 0:
-            return f"{PAYVOID_THRESHOLD}/{PAYVOID_THRESHOLD} (BAN)"
+            return f"{PAYVOID_THRESHOLD}/{PAYVOID_THRESHOLD}"
         return f"{progress}/{PAYVOID_THRESHOLD}"
 
     @staticmethod
@@ -266,8 +258,6 @@ class PayVoidCog(commands.Cog):
         embed.add_field(name="Username", value=username, inline=False)
         embed.add_field(name="Number of Voids", value=str(decision.void_count), inline=False)
         embed.add_field(name="Action Taken", value="Yes" if actiontaken else "No", inline=False)
-        # Always show the weekly 3-void counter so staff can see how close the
-        # Habbo user is to the next payban.
         embed.add_field(name="Payban Counter", value=PayVoidCog._format_payban_counter(decision), inline=False)
         if is_banned:
             embed.add_field(name="Payban Until", value=PayVoidCog._format_expiry(decision.payban_until), inline=False)

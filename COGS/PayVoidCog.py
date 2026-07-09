@@ -202,13 +202,17 @@ class PayVoidCog(commands.Cog):
         return f"<t:{unix}:F> (<t:{unix}:R>)"
 
     @staticmethod
-    def _reset_monday_for(now: datetime) -> datetime | None:
-        """Return this week's Monday midnight EST when the reset is currently due."""
+    def _current_week_reset_monday(now: datetime) -> datetime:
+        """Return the Monday midnight EST reset that owns the current week.
+
+        The reset loop can be delayed by downtime or scheduler drift, so this
+        intentionally returns the current week's reset boundary for any time
+        after Monday 00:00 EST instead of only during that exact minute.
+        """
 
         now_est = now.astimezone(EASTERN_TZ)
-        if now_est.weekday() != 0 or now_est.hour != 0 or now_est.minute != 0:
-            return None
-        return now_est.replace(second=0, microsecond=0)
+        monday = now_est - timedelta(days=now_est.weekday())
+        return monday.replace(hour=0, minute=0, second=0, microsecond=0)
 
     @staticmethod
     def _build_payvoid_embed(username: str, decision: PaybanDecision, deducted_point: bool) -> discord.Embed:
@@ -262,8 +266,8 @@ class PayVoidCog(commands.Cog):
     async def _weekly_reset_checker(self) -> None:
         """Clear all pay void and payban data at Monday midnight EST and announce it."""
 
-        reset_monday = self._reset_monday_for(self._now())
-        if reset_monday is None or self.store.has_reset_for(reset_monday):
+        reset_monday = self._current_week_reset_monday(self._now())
+        if self.store.has_reset_for(reset_monday):
             return
 
         self.store.reset_week(reset_monday)

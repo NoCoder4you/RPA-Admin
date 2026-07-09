@@ -253,7 +253,7 @@ class PayVoidCog(commands.Cog):
             allowed_mentions=discord.AllowedMentions(roles=True),
         )
 
-    @tasks.loop(minutes=1)
+    @tasks.loop(minutes=5)
     async def _weekly_reset_checker(self) -> None:
         """Clear all pay void and payban data at Monday midnight EST and announce it."""
 

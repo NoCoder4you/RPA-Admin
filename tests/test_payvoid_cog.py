@@ -16,6 +16,7 @@ try:
     from COGS.PayVoidCog import (
         PAYBAN_MENTION_ROLE_ID,
         PAYVOID_THRESHOLD,
+        PAY_RESET_ALLOWED_ROLE_ID,
         THIRD_PAYBAN_ALERT_ROLE_ID,
         PayDisciplineStore,
         PayVoidCog,
@@ -29,6 +30,7 @@ except ModuleNotFoundError:
     RPA_SERVER_ID = None
     PAYVOID_THRESHOLD = None
     PAYBAN_MENTION_ROLE_ID = None
+    PAY_RESET_ALLOWED_ROLE_ID = None
     THIRD_PAYBAN_ALERT_ROLE_ID = None
 
 
@@ -111,19 +113,22 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await bot.close()
 
-    def test_void_command_is_globally_syncable(self) -> None:
+    def test_pay_command_group_is_globally_syncable(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             cog = self._cog(PayDisciplineStore(temp_path / "payvoids.json", temp_path / "paybans.json"))
 
-            self.assertIsNone(cog.void._guild_ids)
+            self.assertEqual(cog.pay.name, "pay")
+            self.assertIsNone(cog.pay._guild_ids)
+            self.assertEqual({command.name for command in cog.pay.commands}, {"void", "reset"})
 
-    def test_void_command_has_no_permission_checks(self) -> None:
+    def test_pay_subcommands_have_no_app_permission_checks(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             cog = self._cog(PayDisciplineStore(temp_path / "payvoids.json", temp_path / "paybans.json"))
 
             self.assertEqual(cog.void.checks, [])
+            self.assertEqual(cog.reset.checks, [])
 
     async def test_void_rejects_other_servers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -244,6 +249,55 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(alert_kwargs["embed"].title, "Third Payban Alert")
             self.assertEqual(alert_kwargs["embed"].fields[0].value, "Voidable User")
             self.assertIn("3rd time", alert_kwargs["embed"].fields[1].value)
+
+
+    async def test_reset_rejects_users_without_reset_role(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            store = PayDisciplineStore(temp_path / "payvoids.json", temp_path / "paybans.json")
+            store.bans.data["members"] = {"habboonly": {"username": "HabboOnly", "offences": 2}}
+            cog = self._cog(store)
+            interaction = SimpleNamespace(
+                guild=SimpleNamespace(id=RPA_SERVER_ID),
+                user=SimpleNamespace(id=1, roles=[]),
+                response=SimpleNamespace(send_message=AsyncMock()),
+            )
+
+            await cog.reset.callback(cog, interaction, "HabboOnly")
+
+            self.assertEqual(store.bans.data["members"]["habboonly"]["offences"], 2)
+            interaction.response.send_message.assert_awaited_once_with(
+                "You do not have permission to reset payban counters.", ephemeral=True
+            )
+
+    async def test_reset_clears_payban_counter_for_allowed_role(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            store = PayDisciplineStore(temp_path / "payvoids.json", temp_path / "paybans.json")
+            store.bans.data["members"] = {
+                "habboonly": {
+                    "username": "HabboOnly",
+                    "offences": 3,
+                    "active_until": "2026-07-08T12:00:00+00:00",
+                    "updated_at": "2026-07-07T12:00:00+00:00",
+                }
+            }
+            cog = self._cog(store)
+            interaction = SimpleNamespace(
+                guild=SimpleNamespace(id=RPA_SERVER_ID),
+                user=SimpleNamespace(id=1, roles=[SimpleNamespace(id=PAY_RESET_ALLOWED_ROLE_ID)]),
+                response=SimpleNamespace(send_message=AsyncMock()),
+            )
+
+            await cog.reset.callback(cog, interaction, "HabboOnly")
+
+            ban_record = store.bans.data["members"]["habboonly"]
+            self.assertEqual(ban_record["offences"], 0)
+            self.assertNotIn("active_until", ban_record)
+            self.assertNotIn("updated_at", ban_record)
+            interaction.response.send_message.assert_awaited_once_with(
+                "Payban counter for `HabboOnly` has been reset.", ephemeral=True
+            )
 
     async def test_weekly_reset_posts_reset_message(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

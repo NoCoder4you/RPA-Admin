@@ -19,6 +19,7 @@ PAY_RESET_CHANNEL_ID = 1483460272487141447
 PAYBAN_MENTION_ROLE_ID = 1480466902500511875
 THIRD_PAYBAN_ALERT_CHANNEL_ID = 1480462138823807117
 THIRD_PAYBAN_ALERT_ROLE_ID = 1480442366333685913
+PAY_RESET_ALLOWED_ROLE_ID = 1480442366333685913
 PAYVOID_THRESHOLD = 3
 PAYBAN_DURATIONS = (timedelta(hours=24), timedelta(hours=48), timedelta(hours=72))
 EASTERN_TZ = ZoneInfo("America/New_York")
@@ -170,9 +171,22 @@ class PayDisciplineStore:
 
         return self.bans.data.get("meta", {}).get("last_reset_monday") == reset_monday.date().isoformat()
 
+    def reset_payban_counter(self, username: str) -> None:
+        """Reset one Habbo username's lifetime payban offence counter to zero."""
+
+        ban_record = self._ban_record(username.strip())
+        ban_record["offences"] = 0
+        # Clear active ban timing fields because staff are explicitly resetting
+        # this user's payban counter.
+        ban_record.pop("active_until", None)
+        ban_record.pop("updated_at", None)
+        self.bans.save()
+
 
 class PayVoidCog(commands.Cog):
     """Track weekly pay voids and record paybans without changing member roles."""
+
+    pay = app_commands.Group(name="pay", description="Pay void and payban commands.")
 
     def __init__(self, bot: commands.Bot, *, store: PayDisciplineStore | None = None) -> None:
         self.bot = bot
@@ -209,6 +223,12 @@ class PayVoidCog(commands.Cog):
         return monday.replace(hour=0, minute=0, second=0, microsecond=0)
 
     @staticmethod
+    def _has_role(interaction: discord.Interaction, role_id: int) -> bool:
+        """Return whether the invoking Discord user has the required role ID."""
+
+        return any(getattr(role, "id", None) == role_id for role in getattr(interaction.user, "roles", []))
+
+    @staticmethod
     def _format_payban_counter(decision: PaybanDecision) -> str:
         """Render the weekly void progress toward the next payban as 1/3, 2/3, or 3/3 (BAN)."""
 
@@ -243,7 +263,7 @@ class PayVoidCog(commands.Cog):
             embed.add_field(name="Payban Until", value=PayVoidCog._format_expiry(decision.payban_until), inline=False)
         return embed
 
-    @app_commands.command(name="void", description="Record a weekly pay void for a Habbo username.")
+    @pay.command(name="void", description="Record a weekly pay void for a Habbo username.")
     @app_commands.describe(
         username="The Habbo username receiving a pay void",
         deducted_point="Whether a point has already been deducted for this void",
@@ -276,6 +296,29 @@ class PayVoidCog(commands.Cog):
 
         if decision.payban_until is not None and decision.payban_offence_count == 3:
             await self._send_third_payban_alert(habbo_username)
+
+    @pay.command(name="reset", description="Reset a Habbo username's payban counter.")
+    @app_commands.describe(username="The Habbo username whose payban counter should be reset")
+    async def reset(self, interaction: discord.Interaction, username: str) -> None:
+        """Reset a Habbo username's lifetime payban counter; limited to the configured role."""
+
+        if interaction.guild is None or interaction.guild.id != RPA_SERVER_ID:
+            await interaction.response.send_message("This command is only available in the RPA server.", ephemeral=True)
+            return
+
+        if not self._has_role(interaction, PAY_RESET_ALLOWED_ROLE_ID):
+            await interaction.response.send_message("You do not have permission to reset payban counters.", ephemeral=True)
+            return
+
+        habbo_username = username.strip()
+        if not habbo_username:
+            await interaction.response.send_message("Please provide a Habbo username to reset.", ephemeral=True)
+            return
+
+        self.store.reset_payban_counter(habbo_username)
+        await interaction.response.send_message(
+            f"Payban counter for `{habbo_username}` has been reset.", ephemeral=True
+        )
 
     async def _send_third_payban_alert(self, username: str) -> None:
         """Ping the escalation channel when a Habbo username reaches their third payban."""

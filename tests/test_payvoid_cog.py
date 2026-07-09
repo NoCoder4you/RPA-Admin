@@ -153,7 +153,7 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             cog._now = MagicMock(return_value=datetime(2026, 7, 7, 12, tzinfo=timezone.utc))
             interaction = SimpleNamespace(
                 guild=SimpleNamespace(id=RPA_SERVER_ID, members=[]),
-                user=SimpleNamespace(id=1),
+                user=SimpleNamespace(id=1, display_name="Recorder Name"),
                 response=SimpleNamespace(send_message=AsyncMock()),
             )
 
@@ -167,6 +167,10 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(send_kwargs["embed"].fields[2].value, "Yes")
             self.assertEqual(send_kwargs["embed"].fields[3].name, "Paybans")
             self.assertEqual(send_kwargs["embed"].fields[3].value, "0/3")
+            self.assertEqual(
+                send_kwargs["embed"].footer.text,
+                "Void Recorded By Recorder Name • 2026-07-07 12:00 UTC",
+            )
             self.assertIn("habboonly", store.voids.data["members"])
             self.assertTrue(store.voids.data["members"]["habboonly"]["voids"][0]["actiontaken"])
 
@@ -179,7 +183,7 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
 
             interaction = SimpleNamespace(
                 guild=SimpleNamespace(id=RPA_SERVER_ID, members=[]),
-                user=SimpleNamespace(id=1),
+                user=SimpleNamespace(id=1, display_name="Recorder Name"),
                 response=SimpleNamespace(send_message=AsyncMock()),
             )
 

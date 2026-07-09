@@ -40,19 +40,20 @@ class PayDisciplineStoreTests(unittest.TestCase):
             store = PayDisciplineStore(temp_path / "payvoids.json", temp_path / "paybans.json")
             now = datetime(2026, 7, 7, 12, tzinfo=timezone.utc)
 
-            first = store.record_void(10, 1, now)
-            second = store.record_void(10, 1, now + timedelta(days=1))
-            third = store.record_void(10, 1, now + timedelta(days=2))
+            first = store.record_void("HabboUser", 1, now)
+            second = store.record_void("HabboUser", 1, now + timedelta(days=1))
+            third = store.record_void("HabboUser", 1, now + timedelta(days=2))
 
             self.assertEqual(first.void_count, 1)
             self.assertEqual(second.void_count, 2)
             self.assertEqual(third.void_count, PAYVOID_THRESHOLD)
             self.assertEqual(third.payban_offence_count, 1)
             self.assertEqual(third.payban_until, now + timedelta(days=3))
-            self.assertIn("10", store.voids.data["members"])
-            self.assertNotIn("reason", store.voids.data["members"]["10"]["voids"][0])
-            self.assertNotIn("reason", store.bans.data["members"]["10"])
-            self.assertEqual(store.bans.data["members"]["10"]["offences"], 1)
+            self.assertIn("habbouser", store.voids.data["members"])
+            self.assertEqual(store.voids.data["members"]["habbouser"]["username"], "HabboUser")
+            self.assertNotIn("reason", store.voids.data["members"]["habbouser"]["voids"][0])
+            self.assertNotIn("reason", store.bans.data["members"]["habbouser"])
+            self.assertEqual(store.bans.data["members"]["habbouser"]["offences"], 1)
 
     def test_payban_duration_escalates_and_caps_at_72_hours(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -63,9 +64,9 @@ class PayDisciplineStoreTests(unittest.TestCase):
             decisions = []
             for offence in range(4):
                 base = now + timedelta(days=offence)
-                store.record_void(10, 1, base)
-                store.record_void(10, 1, base + timedelta(hours=1))
-                decisions.append(store.record_void(10, 1, base + timedelta(hours=2)))
+                store.record_void("HabboUser", 1, base)
+                store.record_void("HabboUser", 1, base + timedelta(hours=1))
+                decisions.append(store.record_void("HabboUser", 1, base + timedelta(hours=2)))
 
             self.assertEqual(decisions[0].payban_until, now + timedelta(hours=26))
             self.assertEqual(decisions[1].payban_until, now + timedelta(days=1, hours=50))
@@ -77,7 +78,7 @@ class PayDisciplineStoreTests(unittest.TestCase):
             temp_path = Path(temp_dir)
             store = PayDisciplineStore(temp_path / "payvoids.json", temp_path / "paybans.json")
             now = datetime(2026, 7, 7, 12, tzinfo=timezone.utc)
-            store.record_void(10, 1, now)
+            store.record_void("HabboUser", 1, now)
             reset_monday = datetime(2026, 7, 13, 0, tzinfo=ZoneInfo("America/New_York"))
 
             store.reset_week(reset_monday)
@@ -129,31 +130,29 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
                 user=SimpleNamespace(id=1),
                 response=SimpleNamespace(send_message=AsyncMock()),
             )
-            member = SimpleNamespace(id=10, mention="<@10>")
-
             await cog.void.callback(cog, interaction, "Voidable User")
 
             interaction.response.send_message.assert_awaited_once_with(
                 "This command is only available in the RPA server.", ephemeral=True
             )
 
-
-    async def test_void_rejects_unknown_text_username(self) -> None:
+    async def test_void_accepts_habbo_username_that_is_not_a_server_member(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
-            cog = self._cog(PayDisciplineStore(temp_path / "payvoids.json", temp_path / "paybans.json"))
+            store = PayDisciplineStore(temp_path / "payvoids.json", temp_path / "paybans.json")
+            cog = self._cog(store)
+            cog._now = MagicMock(return_value=datetime(2026, 7, 7, 12, tzinfo=timezone.utc))
             interaction = SimpleNamespace(
                 guild=SimpleNamespace(id=RPA_SERVER_ID, members=[]),
                 user=SimpleNamespace(id=1),
                 response=SimpleNamespace(send_message=AsyncMock()),
             )
 
-            await cog.void.callback(cog, interaction, "Missing User")
+            await cog.void.callback(cog, interaction, "HabboOnly")
 
-            interaction.response.send_message.assert_awaited_once_with(
-                "I could not find a server member named `Missing User`. Please use their exact username or display name.",
-                ephemeral=True,
-            )
+            send_kwargs = interaction.response.send_message.await_args.kwargs
+            self.assertEqual(send_kwargs["embed"].fields[0].value, "HabboOnly")
+            self.assertIn("habboonly", store.voids.data["members"])
 
     async def test_void_posts_embed_and_does_not_add_roles(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -162,16 +161,14 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             cog = self._cog(store)
             cog._now = MagicMock(return_value=datetime(2026, 7, 7, 12, tzinfo=timezone.utc))
 
-            member = SimpleNamespace(id=10, mention="<@10>", display_name="Voidable User", add_roles=AsyncMock())
             interaction = SimpleNamespace(
-                guild=SimpleNamespace(id=RPA_SERVER_ID, members=[member]),
+                guild=SimpleNamespace(id=RPA_SERVER_ID, members=[]),
                 user=SimpleNamespace(id=1),
                 response=SimpleNamespace(send_message=AsyncMock()),
             )
 
             await cog.void.callback(cog, interaction, "Voidable User")
 
-            member.add_roles.assert_not_awaited()
             send_kwargs = interaction.response.send_message.await_args.kwargs
             self.assertIsNone(send_kwargs["content"])
             self.assertEqual(send_kwargs["embed"].title, "Pay Void Recorded")
@@ -185,9 +182,8 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             cog = self._cog(store)
             cog._now = MagicMock(return_value=datetime(2026, 7, 7, 12, tzinfo=timezone.utc))
 
-            member = SimpleNamespace(id=10, mention="<@10>", display_name="Voidable User", add_roles=AsyncMock())
             interaction = SimpleNamespace(
-                guild=SimpleNamespace(id=RPA_SERVER_ID, members=[member]),
+                guild=SimpleNamespace(id=RPA_SERVER_ID, members=[]),
                 user=SimpleNamespace(id=1),
                 response=SimpleNamespace(send_message=AsyncMock()),
             )
@@ -196,7 +192,6 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             await cog.void.callback(cog, interaction, "Voidable User")
             await cog.void.callback(cog, interaction, "Voidable User")
 
-            member.add_roles.assert_not_awaited()
             send_kwargs = interaction.response.send_message.await_args.kwargs
             self.assertEqual(send_kwargs["content"], f"<@&{PAYBAN_MENTION_ROLE_ID}>")
             self.assertEqual(send_kwargs["embed"].title, "Payban Issued")

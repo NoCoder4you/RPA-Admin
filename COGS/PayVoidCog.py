@@ -24,7 +24,7 @@ EASTERN_TZ = ZoneInfo("America/New_York")
 
 @dataclass(frozen=True)
 class PaybanDecision:
-    """Result returned after recording one pay void for a member."""
+    """Result returned after recording one pay void for a Habbo username."""
 
     void_count: int
     payban_offence_count: int
@@ -94,38 +94,54 @@ class PayDisciplineStore:
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed.astimezone(timezone.utc)
 
-    def _void_record(self, member_id: int) -> dict[str, Any]:
-        """Return the mutable void record for a member from payvoids.json."""
+    @staticmethod
+    def username_key(username: str) -> str:
+        """Return a stable JSON key for a typed Habbo username.
+
+        Habbo names are typed as plain text and do not need to be Discord
+        server members, so the discipline stores are keyed by a normalized
+        username instead of a Discord member ID.
+        """
+
+        return username.strip().casefold()
+
+    def _void_record(self, username: str) -> dict[str, Any]:
+        """Return the mutable void record for a Habbo username from payvoids.json."""
 
         members = self.voids.data.setdefault("members", {})
-        record = members.setdefault(str(member_id), {})
+        key = self.username_key(username)
+        record = members.setdefault(key, {})
+        record["username"] = username.strip()
         if not isinstance(record.get("voids"), list):
             record["voids"] = []
         return record
 
-    def _ban_record(self, member_id: int) -> dict[str, Any]:
-        """Return the mutable ban record for a member from paybans.json."""
+    def _ban_record(self, username: str) -> dict[str, Any]:
+        """Return the mutable ban record for a Habbo username from paybans.json."""
 
         members = self.bans.data.setdefault("members", {})
-        record = members.setdefault(str(member_id), {})
+        key = self.username_key(username)
+        record = members.setdefault(key, {})
+        record["username"] = username.strip()
         if not isinstance(record.get("offences"), int):
             record["offences"] = 0
         return record
 
-    def record_void(self, member_id: int, moderator_id: int, now: datetime) -> PaybanDecision:
-        """Record one void and create a payban record after the third weekly void."""
+    def record_void(self, username: str, moderator_id: int, now: datetime) -> PaybanDecision:
+        """Record one Habbo username void and create a payban after the third weekly void."""
 
         now = now.astimezone(timezone.utc)
-        void_record = self._void_record(member_id)
+        username = username.strip()
+        void_record = self._void_record(username)
         voids = void_record["voids"]
         # Voids intentionally store only who/when; the command does not ask users for a reason.
         voids.append({"created_at": self._iso(now), "moderator_id": moderator_id})
         void_count = len(voids)
 
         payban_until = None
-        ban_offences = self._ban_record(member_id)["offences"]
+        ban_offences = self._ban_record(username)["offences"]
         if void_count % PAYVOID_THRESHOLD == 0:
-            ban_record = self._ban_record(member_id)
+            ban_record = self._ban_record(username)
             ban_record["offences"] += 1
             ban_offences = ban_record["offences"]
             duration = PAYBAN_DURATIONS[min(ban_offences, len(PAYBAN_DURATIONS)) - 1]
@@ -186,70 +202,43 @@ class PayVoidCog(commands.Cog):
         return now_est.replace(second=0, microsecond=0)
 
     @staticmethod
-    def _resolve_member_from_text(guild: discord.Guild, member_text: str) -> discord.Member | None:
-        """Resolve the `/void USERNAME` text value to a cached guild member.
-
-        Staff asked for a text value rather than a Discord mention, so this tries
-        common exact-name fields before falling back to discord.py's helper.
-        """
-
-        normalized = member_text.strip().casefold()
-        if not normalized:
-            return None
-
-        for member in getattr(guild, "members", []):
-            possible_names = (
-                getattr(member, "display_name", ""),
-                getattr(member, "name", ""),
-                getattr(member, "global_name", ""),
-            )
-            if any(name and name.casefold() == normalized for name in possible_names):
-                return member
-
-        get_member_named = getattr(guild, "get_member_named", None)
-        if get_member_named is None:
-            return None
-        return get_member_named(member_text.strip())
-
-    @staticmethod
-    def _build_payvoid_embed(member: discord.Member, decision: PaybanDecision) -> discord.Embed:
-        """Create the public pay discipline embed requested for voids and bans."""
+    def _build_payvoid_embed(username: str, decision: PaybanDecision) -> discord.Embed:
+        """Create the public pay discipline embed requested for Habbo voids and bans."""
 
         is_banned = decision.payban_until is not None
         embed = discord.Embed(
             title="Payban Issued" if is_banned else "Pay Void Recorded",
             color=discord.Color.red() if is_banned else discord.Color.gold(),
         )
-        embed.add_field(name="Username", value=getattr(member, "display_name", str(member)), inline=False)
+        embed.add_field(name="Username", value=username, inline=False)
         embed.add_field(name="Number of Voids", value=str(decision.void_count), inline=False)
         if is_banned:
             embed.add_field(name="Payban Offence", value=str(decision.payban_offence_count), inline=False)
             embed.add_field(name="Payban Until", value=PayVoidCog._format_expiry(decision.payban_until), inline=False)
         return embed
 
-    @app_commands.command(name="void", description="Record a weekly pay void for a member.")
-    @app_commands.describe(username="The exact username or display name receiving a pay void")
+    @app_commands.command(name="void", description="Record a weekly pay void for a Habbo username.")
+    @app_commands.describe(username="The Habbo username receiving a pay void")
     async def void(self, interaction: discord.Interaction, username: str) -> None:
-        """Record one pay void using a text username; no extra user permissions required."""
+        """Record one pay void using a Habbo username; no Discord membership required."""
 
         # Keep the command globally syncable while still enforcing the requested server-only behavior.
         if interaction.guild is None or interaction.guild.id != RPA_SERVER_ID:
             await interaction.response.send_message("This command is only available in the RPA server.", ephemeral=True)
             return
 
-        member = self._resolve_member_from_text(interaction.guild, username)
-        if member is None:
-            await interaction.response.send_message(
-                f"I could not find a server member named `{username}`. Please use their exact username or display name.",
-                ephemeral=True,
-            )
+        habbo_username = username.strip()
+        if not habbo_username:
+            await interaction.response.send_message("Please provide a Habbo username to void.", ephemeral=True)
             return
 
-        decision = self.store.record_void(member.id, interaction.user.id, self._now())
+        # The input is a Habbo username, not a Discord member mention, so record
+        # the typed text directly and never require the user to be in this server.
+        decision = self.store.record_void(habbo_username, interaction.user.id, self._now())
         content = f"<@&{PAYBAN_MENTION_ROLE_ID}>" if decision.payban_until is not None else None
         await interaction.response.send_message(
             content=content,
-            embed=self._build_payvoid_embed(member, decision),
+            embed=self._build_payvoid_embed(habbo_username, decision),
             allowed_mentions=discord.AllowedMentions(roles=True),
         )
 

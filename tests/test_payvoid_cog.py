@@ -131,10 +131,28 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             )
             member = SimpleNamespace(id=10, mention="<@10>")
 
-            await cog.void.callback(cog, interaction, member)
+            await cog.void.callback(cog, interaction, "Voidable User")
 
             interaction.response.send_message.assert_awaited_once_with(
                 "This command is only available in the RPA server.", ephemeral=True
+            )
+
+
+    async def test_void_rejects_unknown_text_username(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            cog = self._cog(PayDisciplineStore(temp_path / "payvoids.json", temp_path / "paybans.json"))
+            interaction = SimpleNamespace(
+                guild=SimpleNamespace(id=RPA_SERVER_ID, members=[]),
+                user=SimpleNamespace(id=1),
+                response=SimpleNamespace(send_message=AsyncMock()),
+            )
+
+            await cog.void.callback(cog, interaction, "Missing User")
+
+            interaction.response.send_message.assert_awaited_once_with(
+                "I could not find a server member named `Missing User`. Please use their exact username or display name.",
+                ephemeral=True,
             )
 
     async def test_void_posts_embed_and_does_not_add_roles(self) -> None:
@@ -146,12 +164,12 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
 
             member = SimpleNamespace(id=10, mention="<@10>", display_name="Voidable User", add_roles=AsyncMock())
             interaction = SimpleNamespace(
-                guild=SimpleNamespace(id=RPA_SERVER_ID),
+                guild=SimpleNamespace(id=RPA_SERVER_ID, members=[member]),
                 user=SimpleNamespace(id=1),
                 response=SimpleNamespace(send_message=AsyncMock()),
             )
 
-            await cog.void.callback(cog, interaction, member)
+            await cog.void.callback(cog, interaction, "Voidable User")
 
             member.add_roles.assert_not_awaited()
             send_kwargs = interaction.response.send_message.await_args.kwargs
@@ -169,14 +187,14 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
 
             member = SimpleNamespace(id=10, mention="<@10>", display_name="Voidable User", add_roles=AsyncMock())
             interaction = SimpleNamespace(
-                guild=SimpleNamespace(id=RPA_SERVER_ID),
+                guild=SimpleNamespace(id=RPA_SERVER_ID, members=[member]),
                 user=SimpleNamespace(id=1),
                 response=SimpleNamespace(send_message=AsyncMock()),
             )
 
-            await cog.void.callback(cog, interaction, member)
-            await cog.void.callback(cog, interaction, member)
-            await cog.void.callback(cog, interaction, member)
+            await cog.void.callback(cog, interaction, "Voidable User")
+            await cog.void.callback(cog, interaction, "Voidable User")
+            await cog.void.callback(cog, interaction, "Voidable User")
 
             member.add_roles.assert_not_awaited()
             send_kwargs = interaction.response.send_message.await_args.kwargs

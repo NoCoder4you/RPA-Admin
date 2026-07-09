@@ -186,6 +186,32 @@ class PayVoidCog(commands.Cog):
         return now_est.replace(second=0, microsecond=0)
 
     @staticmethod
+    def _resolve_member_from_text(guild: discord.Guild, member_text: str) -> discord.Member | None:
+        """Resolve the `/void USERNAME` text value to a cached guild member.
+
+        Staff asked for a text value rather than a Discord mention, so this tries
+        common exact-name fields before falling back to discord.py's helper.
+        """
+
+        normalized = member_text.strip().casefold()
+        if not normalized:
+            return None
+
+        for member in getattr(guild, "members", []):
+            possible_names = (
+                getattr(member, "display_name", ""),
+                getattr(member, "name", ""),
+                getattr(member, "global_name", ""),
+            )
+            if any(name and name.casefold() == normalized for name in possible_names):
+                return member
+
+        get_member_named = getattr(guild, "get_member_named", None)
+        if get_member_named is None:
+            return None
+        return get_member_named(member_text.strip())
+
+    @staticmethod
     def _build_payvoid_embed(member: discord.Member, decision: PaybanDecision) -> discord.Embed:
         """Create the public pay discipline embed requested for voids and bans."""
 
@@ -202,13 +228,21 @@ class PayVoidCog(commands.Cog):
         return embed
 
     @app_commands.command(name="void", description="Record a weekly pay void for a member.")
-    @app_commands.describe(member="The member receiving a pay void")
-    async def void(self, interaction: discord.Interaction, member: discord.Member) -> None:
-        """Record one pay void using the `/void USERNAME` flow; no extra user permissions required."""
+    @app_commands.describe(username="The exact username or display name receiving a pay void")
+    async def void(self, interaction: discord.Interaction, username: str) -> None:
+        """Record one pay void using a text username; no extra user permissions required."""
 
         # Keep the command globally syncable while still enforcing the requested server-only behavior.
         if interaction.guild is None or interaction.guild.id != RPA_SERVER_ID:
             await interaction.response.send_message("This command is only available in the RPA server.", ephemeral=True)
+            return
+
+        member = self._resolve_member_from_text(interaction.guild, username)
+        if member is None:
+            await interaction.response.send_message(
+                f"I could not find a server member named `{username}`. Please use their exact username or display name.",
+                ephemeral=True,
+            )
             return
 
         decision = self.store.record_void(member.id, interaction.user.id, self._now())
@@ -219,7 +253,7 @@ class PayVoidCog(commands.Cog):
             allowed_mentions=discord.AllowedMentions(roles=True),
         )
 
-    @tasks.loop(minutes=1)
+    @tasks.loop(minutes=5)
     async def _weekly_reset_checker(self) -> None:
         """Clear all pay void and payban data at Monday midnight EST and announce it."""
 

@@ -112,13 +112,14 @@ class PayDisciplineStore:
             record["offences"] = 0
         return record
 
-    def record_void(self, member_id: int, moderator_id: int, reason: str, now: datetime) -> PaybanDecision:
+    def record_void(self, member_id: int, moderator_id: int, now: datetime) -> PaybanDecision:
         """Record one void and create a payban record after the third weekly void."""
 
         now = now.astimezone(timezone.utc)
         void_record = self._void_record(member_id)
         voids = void_record["voids"]
-        voids.append({"created_at": self._iso(now), "moderator_id": moderator_id, "reason": reason})
+        # Voids intentionally store only who/when; the command does not ask users for a reason.
+        voids.append({"created_at": self._iso(now), "moderator_id": moderator_id})
         void_count = len(voids)
 
         payban_until = None
@@ -131,7 +132,6 @@ class PayDisciplineStore:
             payban_until = now + duration
             ban_record["active_until"] = self._iso(payban_until)
             ban_record["updated_at"] = self._iso(now)
-            ban_record["reason"] = "3 pay voids in the current week"
 
         self.voids.save()
         self.bans.save()
@@ -201,17 +201,17 @@ class PayVoidCog(commands.Cog):
             embed.add_field(name="Payban Until", value=PayVoidCog._format_expiry(decision.payban_until), inline=False)
         return embed
 
+    @app_commands.command(name="void", description="Record a weekly pay void for a member.")
+    @app_commands.describe(member="The member receiving a pay void")
+    async def void(self, interaction: discord.Interaction, member: discord.Member) -> None:
         """Record one pay void using the `/void USERNAME` flow; no extra user permissions required."""
-    @app_commands.describe(member="The member receiving a pay void", reason="Why this pay void is being recorded")
-    @app_commands.checks.has_permissions(manage_roles=True)
-    async def payvoid(self, interaction: discord.Interaction, member: discord.Member, reason: str) -> None:
-        """Record one pay void and post an embed; never add roles to the member."""
 
+        # Keep the command globally syncable while still enforcing the requested server-only behavior.
         if interaction.guild is None or interaction.guild.id != RPA_SERVER_ID:
             await interaction.response.send_message("This command is only available in the RPA server.", ephemeral=True)
             return
 
-        decision = self.store.record_void(member.id, interaction.user.id, reason, self._now())
+        decision = self.store.record_void(member.id, interaction.user.id, self._now())
         content = f"<@&{PAYBAN_MENTION_ROLE_ID}>" if decision.payban_until is not None else None
         await interaction.response.send_message(
             content=content,

@@ -1,4 +1,4 @@
-"""Unit tests for the `/payvoid` discipline cog."""
+"""Unit tests for the `/void` discipline cog."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 try:
     import discord
+    from discord.ext import commands
     from COGS.PayVoidCog import (
         PAYBAN_MENTION_ROLE_ID,
         PAYVOID_THRESHOLD,
@@ -21,6 +22,7 @@ try:
     )
 except ModuleNotFoundError:
     discord = None
+    commands = None
     PayVoidCog = None
     PayDisciplineStore = None
     RPA_SERVER_ID = None
@@ -38,9 +40,9 @@ class PayDisciplineStoreTests(unittest.TestCase):
             store = PayDisciplineStore(temp_path / "payvoids.json", temp_path / "paybans.json")
             now = datetime(2026, 7, 7, 12, tzinfo=timezone.utc)
 
-            first = store.record_void(10, 1, "missed pay", now)
-            second = store.record_void(10, 1, "missed pay again", now + timedelta(days=1))
-            third = store.record_void(10, 1, "third missed pay", now + timedelta(days=2))
+            first = store.record_void(10, 1, now)
+            second = store.record_void(10, 1, now + timedelta(days=1))
+            third = store.record_void(10, 1, now + timedelta(days=2))
 
             self.assertEqual(first.void_count, 1)
             self.assertEqual(second.void_count, 2)
@@ -48,6 +50,8 @@ class PayDisciplineStoreTests(unittest.TestCase):
             self.assertEqual(third.payban_offence_count, 1)
             self.assertEqual(third.payban_until, now + timedelta(days=3))
             self.assertIn("10", store.voids.data["members"])
+            self.assertNotIn("reason", store.voids.data["members"]["10"]["voids"][0])
+            self.assertNotIn("reason", store.bans.data["members"]["10"])
             self.assertEqual(store.bans.data["members"]["10"]["offences"], 1)
 
     def test_payban_duration_escalates_and_caps_at_72_hours(self) -> None:
@@ -59,9 +63,9 @@ class PayDisciplineStoreTests(unittest.TestCase):
             decisions = []
             for offence in range(4):
                 base = now + timedelta(days=offence)
-                store.record_void(10, 1, "one", base)
-                store.record_void(10, 1, "two", base + timedelta(hours=1))
-                decisions.append(store.record_void(10, 1, "three", base + timedelta(hours=2)))
+                store.record_void(10, 1, base)
+                store.record_void(10, 1, base + timedelta(hours=1))
+                decisions.append(store.record_void(10, 1, base + timedelta(hours=2)))
 
             self.assertEqual(decisions[0].payban_until, now + timedelta(hours=26))
             self.assertEqual(decisions[1].payban_until, now + timedelta(days=1, hours=50))
@@ -73,7 +77,7 @@ class PayDisciplineStoreTests(unittest.TestCase):
             temp_path = Path(temp_dir)
             store = PayDisciplineStore(temp_path / "payvoids.json", temp_path / "paybans.json")
             now = datetime(2026, 7, 7, 12, tzinfo=timezone.utc)
-            store.record_void(10, 1, "one", now)
+            store.record_void(10, 1, now)
             reset_monday = datetime(2026, 7, 13, 0, tzinfo=ZoneInfo("America/New_York"))
 
             store.reset_week(reset_monday)
@@ -94,6 +98,21 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             return PayVoidCog(bot, store=store)
 
 
+    async def test_extension_loads_payvoid_cog(self) -> None:
+        bot = commands.Bot(command_prefix="!", intents=discord.Intents.default())
+        try:
+            await bot.load_extension("COGS.PayVoidCog")
+            self.assertIn("PayVoidCog", bot.cogs)
+        finally:
+            await bot.close()
+
+    def test_void_command_is_globally_syncable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            cog = self._cog(PayDisciplineStore(temp_path / "payvoids.json", temp_path / "paybans.json"))
+
+            self.assertIsNone(cog.void._guild_ids)
+
     def test_void_command_has_no_permission_checks(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -101,7 +120,7 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(cog.void.checks, [])
 
-    async def test_payvoid_rejects_other_servers(self) -> None:
+    async def test_void_rejects_other_servers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             cog = self._cog(PayDisciplineStore(temp_path / "payvoids.json", temp_path / "paybans.json"))
@@ -112,13 +131,13 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             )
             member = SimpleNamespace(id=10, mention="<@10>")
 
-            await cog.payvoid.callback(cog, interaction, member, "reason")
+            await cog.void.callback(cog, interaction, member)
 
             interaction.response.send_message.assert_awaited_once_with(
                 "This command is only available in the RPA server.", ephemeral=True
             )
 
-    async def test_payvoid_posts_embed_and_does_not_add_roles(self) -> None:
+    async def test_void_posts_embed_and_does_not_add_roles(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             store = PayDisciplineStore(temp_path / "payvoids.json", temp_path / "paybans.json")
@@ -132,7 +151,7 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
                 response=SimpleNamespace(send_message=AsyncMock()),
             )
 
-            await cog.payvoid.callback(cog, interaction, member, "first")
+            await cog.void.callback(cog, interaction, member)
 
             member.add_roles.assert_not_awaited()
             send_kwargs = interaction.response.send_message.await_args.kwargs
@@ -141,7 +160,7 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(send_kwargs["embed"].fields[0].value, "Voidable User")
             self.assertEqual(send_kwargs["embed"].fields[1].value, "1")
 
-    async def test_payvoid_third_void_mentions_payban_role_without_assigning_role(self) -> None:
+    async def test_void_third_void_mentions_payban_role_without_assigning_role(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             store = PayDisciplineStore(temp_path / "payvoids.json", temp_path / "paybans.json")
@@ -155,9 +174,9 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
                 response=SimpleNamespace(send_message=AsyncMock()),
             )
 
-            await cog.payvoid.callback(cog, interaction, member, "first")
-            await cog.payvoid.callback(cog, interaction, member, "second")
-            await cog.payvoid.callback(cog, interaction, member, "third")
+            await cog.void.callback(cog, interaction, member)
+            await cog.void.callback(cog, interaction, member)
+            await cog.void.callback(cog, interaction, member)
 
             member.add_roles.assert_not_awaited()
             send_kwargs = interaction.response.send_message.await_args.kwargs

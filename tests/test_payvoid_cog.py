@@ -161,10 +161,12 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
 
             send_kwargs = interaction.response.send_message.await_args.kwargs
             self.assertEqual(send_kwargs["embed"].fields[0].value, "HabboOnly")
+            self.assertEqual(send_kwargs["embed"].fields[1].name, "Voids")
+            self.assertEqual(send_kwargs["embed"].fields[1].value, "1/3")
             self.assertEqual(send_kwargs["embed"].fields[2].name, "Action Taken")
             self.assertEqual(send_kwargs["embed"].fields[2].value, "Yes")
             self.assertEqual(send_kwargs["embed"].fields[3].name, "Payban Counter")
-            self.assertEqual(send_kwargs["embed"].fields[3].value, "1/3")
+            self.assertEqual(send_kwargs["embed"].fields[3].value, "0")
             self.assertIn("habboonly", store.voids.data["members"])
             self.assertTrue(store.voids.data["members"]["habboonly"]["voids"][0]["actiontaken"])
 
@@ -187,11 +189,12 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(send_kwargs["content"])
             self.assertEqual(send_kwargs["embed"].title, "Pay Void Recorded")
             self.assertEqual(send_kwargs["embed"].fields[0].value, "Voidable User")
-            self.assertEqual(send_kwargs["embed"].fields[1].value, "1")
+            self.assertEqual(send_kwargs["embed"].fields[1].name, "Voids")
+            self.assertEqual(send_kwargs["embed"].fields[1].value, "1/3")
             self.assertEqual(send_kwargs["embed"].fields[2].name, "Action Taken")
             self.assertEqual(send_kwargs["embed"].fields[2].value, "No")
             self.assertEqual(send_kwargs["embed"].fields[3].name, "Payban Counter")
-            self.assertEqual(send_kwargs["embed"].fields[3].value, "1/3")
+            self.assertEqual(send_kwargs["embed"].fields[3].value, "0")
 
     async def test_void_third_void_mentions_payban_role_without_assigning_role(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -213,11 +216,37 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             send_kwargs = interaction.response.send_message.await_args.kwargs
             self.assertEqual(send_kwargs["content"], f"<@&{PAYBAN_MENTION_ROLE_ID}>")
             self.assertEqual(send_kwargs["embed"].title, "Payban Issued")
-            self.assertEqual(send_kwargs["embed"].fields[1].value, "3")
+            self.assertEqual(send_kwargs["embed"].fields[1].name, "Voids")
+            self.assertEqual(send_kwargs["embed"].fields[1].value, "3/3")
             self.assertEqual(send_kwargs["embed"].fields[2].name, "Action Taken")
             self.assertEqual(send_kwargs["embed"].fields[2].value, "No")
             self.assertEqual(send_kwargs["embed"].fields[3].name, "Payban Counter")
-            self.assertEqual(send_kwargs["embed"].fields[3].value, "3/3 (BAN)")
+            self.assertEqual(send_kwargs["embed"].fields[3].value, "1")
+
+
+    async def test_void_counter_rolls_back_to_one_after_ban(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            store = PayDisciplineStore(temp_path / "payvoids.json", temp_path / "paybans.json")
+            cog = self._cog(store)
+            cog._now = MagicMock(return_value=datetime(2026, 7, 7, 12, tzinfo=timezone.utc))
+            interaction = SimpleNamespace(
+                guild=SimpleNamespace(id=RPA_SERVER_ID, members=[]),
+                user=SimpleNamespace(id=1),
+                response=SimpleNamespace(send_message=AsyncMock()),
+            )
+
+            await cog.void.callback(cog, interaction, "Voidable User", "No")
+            await cog.void.callback(cog, interaction, "Voidable User", "No")
+            await cog.void.callback(cog, interaction, "Voidable User", "No")
+            await cog.void.callback(cog, interaction, "Voidable User", "No")
+
+            send_kwargs = interaction.response.send_message.await_args.kwargs
+            self.assertIsNone(send_kwargs["content"])
+            self.assertEqual(send_kwargs["embed"].fields[1].name, "Voids")
+            self.assertEqual(send_kwargs["embed"].fields[1].value, "1/3")
+            self.assertEqual(send_kwargs["embed"].fields[3].name, "Payban Counter")
+            self.assertEqual(send_kwargs["embed"].fields[3].value, "1")
 
     async def test_third_payban_sends_escalation_alert_embed(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

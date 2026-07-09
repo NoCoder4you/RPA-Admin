@@ -229,8 +229,8 @@ class PayVoidCog(commands.Cog):
         return any(getattr(role, "id", None) == role_id for role in getattr(interaction.user, "roles", []))
 
     @staticmethod
-    def _format_payban_counter(decision: PaybanDecision) -> str:
-        """Render the weekly void progress toward the next payban as 1/3, 2/3, or 3/3 (BAN)."""
+    def _format_void_counter(decision: PaybanDecision) -> str:
+        """Render weekly void progress as 1/3, 2/3, or 3/3 before the counter rolls over."""
 
         progress = decision.void_count % PAYVOID_THRESHOLD
         if progress == 0:
@@ -256,9 +256,9 @@ class PayVoidCog(commands.Cog):
             color=discord.Color.red() if is_banned else discord.Color.gold(),
         )
         embed.add_field(name="Username", value=username, inline=False)
-        embed.add_field(name="Number of Voids", value=str(decision.void_count), inline=False)
+        embed.add_field(name="Voids", value=PayVoidCog._format_void_counter(decision), inline=False)
         embed.add_field(name="Action Taken", value="Yes" if actiontaken else "No", inline=False)
-        embed.add_field(name="Payban Counter", value=PayVoidCog._format_payban_counter(decision), inline=False)
+        embed.add_field(name="Payban Counter", value=str(decision.payban_offence_count), inline=False)
         if is_banned:
             embed.add_field(name="Payban Until", value=PayVoidCog._format_expiry(decision.payban_until), inline=False)
         return embed

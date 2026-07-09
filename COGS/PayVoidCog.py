@@ -17,6 +17,8 @@ PAYBAN_STORE_PATH = JSON_DIR / "paybans.json"
 RPA_SERVER_ID = 1480440930828816489
 PAY_RESET_CHANNEL_ID = 1483460272487141447
 PAYBAN_MENTION_ROLE_ID = 1480466902500511875
+THIRD_PAYBAN_ALERT_CHANNEL_ID = 1480462138823807117
+THIRD_PAYBAN_ALERT_ROLE_ID = 1480442366333685913
 PAYVOID_THRESHOLD = 3
 PAYBAN_DURATIONS = (timedelta(hours=24), timedelta(hours=48), timedelta(hours=72))
 EASTERN_TZ = ZoneInfo("America/New_York")
@@ -96,12 +98,6 @@ class PayDisciplineStore:
 
     @staticmethod
     def username_key(username: str) -> str:
-        """Return a stable JSON key for a typed Habbo username.
-
-        Habbo names are typed as plain text and do not need to be Discord
-        server members, so the discipline stores are keyed by a normalized
-        username instead of a Discord member ID.
-        """
 
         return username.strip().casefold()
 
@@ -163,11 +159,9 @@ class PayDisciplineStore:
         return PaybanDecision(void_count, ban_offences, payban_until)
 
     def reset_week(self, reset_monday: datetime) -> None:
-        """Clear all weekly voids and paybans for the Monday midnight EST reset."""
+        """Clear weekly voids while preserving indefinite payban history."""
 
         self.voids.reset()
-        self.bans.reset()
-        # Keep reset bookkeeping outside the member list while still in the payban file.
         self.bans.data.setdefault("meta", {})["last_reset_monday"] = reset_monday.date().isoformat()
         self.bans.save()
 
@@ -215,6 +209,24 @@ class PayVoidCog(commands.Cog):
         return monday.replace(hour=0, minute=0, second=0, microsecond=0)
 
     @staticmethod
+    def _format_payban_counter(decision: PaybanDecision) -> str:
+        """Render the weekly void progress toward the next payban as 1/3, 2/3, or 3/3 (BAN)."""
+
+        progress = decision.void_count % PAYVOID_THRESHOLD
+        if progress == 0:
+            return f"{PAYVOID_THRESHOLD}/{PAYVOID_THRESHOLD}"
+        return f"{progress}/{PAYVOID_THRESHOLD}"
+
+    @staticmethod
+    def _build_third_payban_alert_embed(username: str) -> discord.Embed:
+        """Create the escalation alert used when a Habbo username reaches a third payban."""
+
+        embed = discord.Embed(title="Third Payban Alert", color=discord.Color.red())
+        embed.add_field(name="Username", value=username, inline=False)
+        embed.add_field(name="Alert", value=f"This is the 3rd time {username} has been paybanned.", inline=False)
+        return embed
+
+    @staticmethod
     def _build_payvoid_embed(username: str, decision: PaybanDecision, deducted_point: bool) -> discord.Embed:
         """Create the public pay discipline embed requested for Habbo voids and bans."""
 
@@ -225,9 +237,9 @@ class PayVoidCog(commands.Cog):
         )
         embed.add_field(name="Username", value=username, inline=False)
         embed.add_field(name="Number of Voids", value=str(decision.void_count), inline=False)
-        embed.add_field(name="Deducted Point", value="Yes" if deducted_point else "No", inline=False)
+        embed.add_field(name="Action Taken", value="Yes" if deducted_point else "No", inline=False)
+        embed.add_field(name="Payban Counter", value=PayVoidCog._format_payban_counter(decision), inline=False)
         if is_banned:
-            embed.add_field(name="Payban Offence", value=str(decision.payban_offence_count), inline=False)
             embed.add_field(name="Payban Until", value=PayVoidCog._format_expiry(decision.payban_until), inline=False)
         return embed
 
@@ -262,9 +274,25 @@ class PayVoidCog(commands.Cog):
             allowed_mentions=discord.AllowedMentions(roles=True),
         )
 
+        if decision.payban_until is not None and decision.payban_offence_count == 3:
+            await self._send_third_payban_alert(habbo_username)
+
+    async def _send_third_payban_alert(self, username: str) -> None:
+        """Ping the escalation channel when a Habbo username reaches their third payban."""
+
+        channel = self.bot.get_channel(THIRD_PAYBAN_ALERT_CHANNEL_ID)
+        if channel is None:
+            return
+
+        await channel.send(
+            content=f"<@&{THIRD_PAYBAN_ALERT_ROLE_ID}>",
+            embed=self._build_third_payban_alert_embed(username),
+            allowed_mentions=discord.AllowedMentions(roles=True),
+        )
+
     @tasks.loop(minutes=1)
     async def _weekly_reset_checker(self) -> None:
-        """Clear all pay void and payban data at Monday midnight EST and announce it."""
+        """Clear weekly pay void data at Monday midnight EST and announce it."""
 
         reset_monday = self._current_week_reset_monday(self._now())
         if self.store.has_reset_for(reset_monday):
@@ -274,7 +302,7 @@ class PayVoidCog(commands.Cog):
         channel = self.bot.get_channel(PAY_RESET_CHANNEL_ID)
         if channel is None:
             return
-        await channel.send("Pay voids and paybans have been reset for the week.")
+        await channel.send("Pay voids have been reset for the week.")
 
     @_weekly_reset_checker.before_loop
     async def _before_weekly_reset_checker(self) -> None:

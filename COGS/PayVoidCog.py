@@ -229,8 +229,9 @@ class PayVoidCog(commands.Cog):
 
     @staticmethod
     def _format_footer_time(value: datetime) -> str:
+        """Render the void footer time as an Eastern time audit string."""
 
-        return f"<t:{int(value.timestamp())}:R>"
+        return value.astimezone(EASTERN_TZ).strftime("%Y-%m-%d %H:%M EST")
 
     @staticmethod
     def _recorded_by_name(user: discord.abc.User) -> str:
@@ -330,7 +331,7 @@ class PayVoidCog(commands.Cog):
 
         # Keep the command globally syncable while still enforcing the requested server-only behavior.
         if interaction.guild is None or interaction.guild.id != RPA_SERVER_ID:
-            await interaction.response.send_message("This command is only available in the RPA server.", ephemeral=True)
+            await interaction.response.send_message("This command is only available in the RPA Finance Server.", ephemeral=True)
             return
 
         habbo_username = username.strip()

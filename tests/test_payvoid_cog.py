@@ -170,7 +170,7 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(send_kwargs["embed"].fields[3].value, "0/3")
             self.assertEqual(
                 send_kwargs["embed"].footer.text,
-                "Void Recorded By Recorder Name • <t:1783425600:R>",
+                "Void Recorded By Recorder Name • 2026-07-07 08:00 EST",
             )
             self.assertIn("habboonly", store.voids.data["members"])
             self.assertTrue(store.voids.data["members"]["habboonly"]["voids"][0]["actiontaken"])

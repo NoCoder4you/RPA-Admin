@@ -170,7 +170,7 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(send_kwargs["embed"].fields[3].value, "0/3")
             self.assertEqual(
                 send_kwargs["embed"].footer.text,
-                "Void Recorded By Recorder Name • 2026-07-07 12:00 UTC",
+                "Void Recorded By Recorder Name • <t:1783425600:R>",
             )
             self.assertIn("habboonly", store.voids.data["members"])
             self.assertTrue(store.voids.data["members"]["habboonly"]["voids"][0]["actiontaken"])
@@ -294,11 +294,11 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(alert_kwargs["embed"].fields[0].name, "Username")
             self.assertEqual(alert_kwargs["embed"].fields[0].value, "Voidable User")
             self.assertEqual(alert_kwargs["embed"].fields[1].name, "Pay Ban 1")
-            self.assertEqual(alert_kwargs["embed"].fields[1].value, "2026-07-01 09:30 UTC")
+            self.assertEqual(alert_kwargs["embed"].fields[1].value, "<t:1782898200:R>")
             self.assertEqual(alert_kwargs["embed"].fields[2].name, "Pay Ban 2")
-            self.assertEqual(alert_kwargs["embed"].fields[2].value, "2026-07-03 10:45 UTC")
+            self.assertEqual(alert_kwargs["embed"].fields[2].value, "<t:1783075500:R>")
             self.assertEqual(alert_kwargs["embed"].fields[3].name, "Pay Ban 3")
-            self.assertEqual(alert_kwargs["embed"].fields[3].value, "2026-07-07 12:00 UTC")
+            self.assertEqual(alert_kwargs["embed"].fields[3].value, "<t:1783425600:R>")
 
 
     async def test_reset_rejects_users_without_reset_role(self) -> None:

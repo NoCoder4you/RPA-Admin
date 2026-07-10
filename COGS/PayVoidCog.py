@@ -239,9 +239,9 @@ class PayVoidCog(commands.Cog):
 
     @staticmethod
     def _format_footer_time(value: datetime) -> str:
-        """Render the void footer time consistently in UTC for audit readability."""
+        """Render the void footer time as a Discord relative timestamp."""
 
-        return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        return f"<t:{int(value.timestamp())}:R>"
 
     @staticmethod
     def _recorded_by_name(user: discord.abc.User) -> str:
@@ -291,11 +291,11 @@ class PayVoidCog(commands.Cog):
 
     @staticmethod
     def _format_alert_payban_time(value: datetime | None) -> str:
-        """Format a third-payban alert timestamp, falling back for legacy missing dates."""
+        """Format a third-payban alert timestamp as relative Discord time."""
 
         if value is None:
             return "Unknown"
-        return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        return f"<t:{int(value.timestamp())}:R>"
 
     @staticmethod
     def _build_third_payban_alert_embed(username: str, payban_times: list[datetime | None]) -> discord.Embed:

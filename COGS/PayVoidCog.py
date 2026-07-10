@@ -99,12 +99,6 @@ class PayDisciplineStore:
 
     @staticmethod
     def username_key(username: str) -> str:
-        """Return a stable JSON key for a typed Habbo username.
-
-        Habbo names are typed as plain text and do not need to be Discord
-        server members, so the discipline stores are keyed by a normalized
-        username instead of a Discord member ID.
-        """
 
         return username.strip().casefold()
 
@@ -160,8 +154,6 @@ class PayDisciplineStore:
             ban_offences = ban_record["offences"]
             duration = PAYBAN_DURATIONS[min(ban_offences, len(PAYBAN_DURATIONS)) - 1]
             payban_until = now + duration
-            # Keep a permanent timestamp for each issued payban so escalation
-            # alerts can show exactly when the first three bans happened.
             ban_record["paybans"].append({"created_at": self._iso(now)})
             ban_record["active_until"] = self._iso(payban_until)
             ban_record["updated_at"] = self._iso(now)
@@ -174,8 +166,6 @@ class PayDisciplineStore:
         """Clear weekly voids while preserving indefinite payban history."""
 
         self.voids.reset()
-        # Payban records intentionally survive weekly resets so the escalation
-        # count remains an indefinite history instead of restarting each Monday.
         self.bans.data.setdefault("meta", {})["last_reset_monday"] = reset_monday.date().isoformat()
         self.bans.save()
 
@@ -256,12 +246,7 @@ class PayVoidCog(commands.Cog):
 
     @staticmethod
     def _current_week_reset_monday(now: datetime) -> datetime:
-        """Return the Monday midnight EST reset that owns the current week.
 
-        The reset loop can be delayed by downtime or scheduler drift, so this
-        intentionally returns the current week's reset boundary for any time
-        after Monday 00:00 EST instead of only during that exact minute.
-        """
 
         now_est = now.astimezone(EASTERN_TZ)
         monday = now_est - timedelta(days=now_est.weekday())
@@ -346,7 +331,7 @@ class PayVoidCog(commands.Cog):
 
         # Keep the command globally syncable while still enforcing the requested server-only behavior.
         if interaction.guild is None or interaction.guild.id != RPA_SERVER_ID:
-            await interaction.response.send_message("This command is only available in the RPA server.", ephemeral=True)
+            await interaction.response.send_message("This command is only available in the RPA Finance Server.", ephemeral=True)
             return
 
         habbo_username = username.strip()

@@ -59,6 +59,7 @@ class PayDisciplineStoreTests(unittest.TestCase):
             self.assertNotIn("reason", store.voids.data["members"]["habbouser"]["voids"][0])
             self.assertNotIn("reason", store.bans.data["members"]["habbouser"])
             self.assertEqual(store.bans.data["members"]["habbouser"]["offences"], 1)
+            self.assertEqual(len(store.bans.data["members"]["habbouser"]["paybans"]), 1)
 
     def test_payban_duration_escalates_and_caps_at_72_hours(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -169,7 +170,7 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(send_kwargs["embed"].fields[3].value, "0/3")
             self.assertEqual(
                 send_kwargs["embed"].footer.text,
-                "Void Recorded By Recorder Name • 2026-07-07 12:00 UTC",
+                "Void Recorded By Recorder Name • <t:1783425600:R>",
             )
             self.assertIn("habboonly", store.voids.data["members"])
             self.assertTrue(store.voids.data["members"]["habboonly"]["voids"][0]["actiontaken"])
@@ -269,7 +270,14 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             # Two historical paybans are kept in paybans.json indefinitely; the
             # next ban should be treated as the user's third lifetime payban.
             store.bans.data["members"] = {
-                "voidable user": {"username": "Voidable User", "offences": 2}
+                "voidable user": {
+                    "username": "Voidable User",
+                    "offences": 2,
+                    "paybans": [
+                        {"created_at": "2026-07-01T09:30:00+00:00"},
+                        {"created_at": "2026-07-03T10:45:00+00:00"},
+                    ],
+                }
             }
 
             await cog.void.callback(cog, interaction, "Voidable User", "No")
@@ -283,8 +291,14 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             alert_kwargs = alert_channel.send.await_args.kwargs
             self.assertEqual(alert_kwargs["content"], f"<@&{THIRD_PAYBAN_ALERT_ROLE_ID}>")
             self.assertEqual(alert_kwargs["embed"].title, "Third Payban Alert")
+            self.assertEqual(alert_kwargs["embed"].fields[0].name, "Username")
             self.assertEqual(alert_kwargs["embed"].fields[0].value, "Voidable User")
-            self.assertIn("3rd time", alert_kwargs["embed"].fields[1].value)
+            self.assertEqual(alert_kwargs["embed"].fields[1].name, "Pay Ban 1")
+            self.assertEqual(alert_kwargs["embed"].fields[1].value, "<t:1782898200:R>")
+            self.assertEqual(alert_kwargs["embed"].fields[2].name, "Pay Ban 2")
+            self.assertEqual(alert_kwargs["embed"].fields[2].value, "<t:1783075500:R>")
+            self.assertEqual(alert_kwargs["embed"].fields[3].name, "Pay Ban 3")
+            self.assertEqual(alert_kwargs["embed"].fields[3].value, "<t:1783425600:R>")
 
 
     async def test_reset_rejects_users_without_reset_role(self) -> None:
@@ -331,6 +345,7 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(ban_record["offences"], 0)
             self.assertNotIn("active_until", ban_record)
             self.assertNotIn("updated_at", ban_record)
+            self.assertEqual(ban_record["paybans"], [])
             interaction.response.send_message.assert_awaited_once_with(
                 "Payban counter for `HabboOnly` has been reset.", ephemeral=True
             )

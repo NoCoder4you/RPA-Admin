@@ -122,6 +122,8 @@ class PayDisciplineStore:
         record["username"] = username.strip()
         if not isinstance(record.get("offences"), int):
             record["offences"] = 0
+        if not isinstance(record.get("paybans"), list):
+            record["paybans"] = []
         return record
 
     def record_void(
@@ -152,6 +154,7 @@ class PayDisciplineStore:
             ban_offences = ban_record["offences"]
             duration = PAYBAN_DURATIONS[min(ban_offences, len(PAYBAN_DURATIONS)) - 1]
             payban_until = now + duration
+            ban_record["paybans"].append({"created_at": self._iso(now)})
             ban_record["active_until"] = self._iso(payban_until)
             ban_record["updated_at"] = self._iso(now)
 
@@ -176,11 +179,26 @@ class PayDisciplineStore:
 
         ban_record = self._ban_record(username.strip())
         ban_record["offences"] = 0
+        ban_record["paybans"] = []
         # Clear active ban timing fields because staff are explicitly resetting
         # this user's payban counter.
         ban_record.pop("active_until", None)
         ban_record.pop("updated_at", None)
         self.bans.save()
+
+    def payban_times(self, username: str) -> list[datetime | None]:
+        """Return stored payban issue times for a Habbo username, preserving unknown legacy entries."""
+
+        record = self._ban_record(username.strip())
+        times: list[datetime | None] = []
+        for payban in record.get("paybans", []):
+            if isinstance(payban, dict):
+                times.append(self._parse_timestamp(payban.get("created_at")))
+        # Older records may only have an offence count, so preserve field count
+        # with unknown dates instead of hiding historical bans.
+        while len(times) < record.get("offences", 0):
+            times.append(None)
+        return times
 
 
 class PayVoidCog(commands.Cog):
@@ -211,9 +229,8 @@ class PayVoidCog(commands.Cog):
 
     @staticmethod
     def _format_footer_time(value: datetime) -> str:
-        """Render the void footer time consistently in UTC for audit readability."""
 
-        return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        return f"<t:{int(value.timestamp())}:R>"
 
     @staticmethod
     def _recorded_by_name(user: discord.abc.User) -> str:
@@ -228,6 +245,7 @@ class PayVoidCog(commands.Cog):
 
     @staticmethod
     def _current_week_reset_monday(now: datetime) -> datetime:
+
 
         now_est = now.astimezone(EASTERN_TZ)
         monday = now_est - timedelta(days=now_est.weekday())
@@ -256,12 +274,26 @@ class PayVoidCog(commands.Cog):
         return f"{capped_offences}/{PAYVOID_THRESHOLD}"
 
     @staticmethod
-    def _build_third_payban_alert_embed(username: str) -> discord.Embed:
+    def _format_alert_payban_time(value: datetime | None) -> str:
+        """Format a third-payban alert timestamp as relative Discord time."""
+
+        if value is None:
+            return "Unknown"
+        return f"<t:{int(value.timestamp())}:R>"
+
+    @staticmethod
+    def _build_third_payban_alert_embed(username: str, payban_times: list[datetime | None]) -> discord.Embed:
         """Create the escalation alert used when a Habbo username reaches a third payban."""
 
         embed = discord.Embed(title="Third Payban Alert", color=discord.Color.red())
         embed.add_field(name="Username", value=username, inline=False)
-        embed.add_field(name="Alert", value=f"This is the 3rd time {username} has been paybanned.", inline=False)
+        for index in range(PAYVOID_THRESHOLD):
+            payban_time = payban_times[index] if index < len(payban_times) else None
+            embed.add_field(
+                name=f"Pay Ban {index + 1}",
+                value=PayVoidCog._format_alert_payban_time(payban_time),
+                inline=False,
+            )
         return embed
 
     @staticmethod
@@ -355,7 +387,7 @@ class PayVoidCog(commands.Cog):
 
         await channel.send(
             content=f"<@&{THIRD_PAYBAN_ALERT_ROLE_ID}>",
-            embed=self._build_third_payban_alert_embed(username),
+            embed=self._build_third_payban_alert_embed(username, self.store.payban_times(username)),
             allowed_mentions=discord.AllowedMentions(roles=True),
         )
 

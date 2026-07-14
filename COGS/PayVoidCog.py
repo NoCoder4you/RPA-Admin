@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -424,6 +425,12 @@ class PayVoidCog(commands.Cog):
             await ctx.send("This command is only available in the RPA server.")
             return
 
+        # Remove the staff command message so only the reset announcement remains
+        # visible in the channel. Permission/API failures should not block the
+        # actual reset or its configured channel announcements.
+        with suppress(discord.Forbidden, discord.HTTPException, discord.NotFound, AttributeError):
+            await ctx.message.delete()
+
         reset_performed = await self._reset_weekly_voids_and_announce()
         if reset_performed:
             await ctx.send("Pay voids have been manually reset for the week.")
@@ -444,15 +451,12 @@ class PayVoidCog(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def _weekly_reset_checker(self) -> None:
-        """Clear weekly pay void data at Monday midnight Eastern time, with catch-up fallback."""
+        """Clear weekly pay void data at Monday midnight Eastern time, with automatic catch-up."""
 
-        now_est = self._now().astimezone(EASTERN_TZ)
-        # The one-minute loop normally hits exactly at Monday 00:00 Eastern.
-        # Checking for any Monday after midnight lets the bot recover if it was
-        # offline or the task loop drifted during the exact midnight minute.
-        if now_est.weekday() != 0:
-            return
-
+        # The loop runs every minute, so a healthy bot resets right when the
+        # current Eastern week begins: Monday 00:00. If the bot is offline,
+        # restarted, or Discord.py delays the task, the same idempotent helper
+        # automatically catches up on the next loop tick without staff action.
         await self._reset_weekly_voids_and_announce()
 
     @_weekly_reset_checker.before_loop

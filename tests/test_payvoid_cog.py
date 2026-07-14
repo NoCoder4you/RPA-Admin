@@ -17,6 +17,8 @@ try:
         PAYBAN_MENTION_ROLE_ID,
         PAYVOID_THRESHOLD,
         PAY_RESET_ALLOWED_ROLE_ID,
+        PAY_RESET_AUDIT_CHANNEL_ID,
+        PAY_RESET_CHANNEL_ID,
         THIRD_PAYBAN_ALERT_ROLE_ID,
         PayDisciplineStore,
         PayVoidCog,
@@ -31,6 +33,8 @@ except ModuleNotFoundError:
     PAYVOID_THRESHOLD = None
     PAYBAN_MENTION_ROLE_ID = None
     PAY_RESET_ALLOWED_ROLE_ID = None
+    PAY_RESET_AUDIT_CHANNEL_ID = None
+    PAY_RESET_CHANNEL_ID = None
     THIRD_PAYBAN_ALERT_ROLE_ID = None
 
 
@@ -364,6 +368,25 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(store.voids.data["members"], {})
             self.assertEqual(store.bans.data["members"], {})
             channel.send.assert_awaited_once_with("Pay voids have been reset for the week.")
+
+
+    async def test_weekly_reset_posts_audit_channel_message(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            store = PayDisciplineStore(temp_path / "payvoids.json", temp_path / "paybans.json")
+            cog = self._cog(store)
+            cog._now = MagicMock(return_value=datetime(2026, 7, 13, 4, 0, tzinfo=timezone.utc))
+            reset_channel = SimpleNamespace(send=AsyncMock())
+            audit_channel = SimpleNamespace(send=AsyncMock())
+            cog.bot.get_channel.side_effect = lambda channel_id: {
+                PAY_RESET_CHANNEL_ID: reset_channel,
+                PAY_RESET_AUDIT_CHANNEL_ID: audit_channel,
+            }.get(channel_id)
+
+            await cog._weekly_reset_checker.coro(cog)
+
+            reset_channel.send.assert_awaited_once_with("Pay voids have been reset for the week.")
+            audit_channel.send.assert_awaited_once_with("Pay voids have been reset for the week.")
 
     async def test_weekly_reset_catches_up_after_monday_midnight_window(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -16,6 +16,7 @@ PAYVOID_STORE_PATH = JSON_DIR / "payvoids.json"
 PAYBAN_STORE_PATH = JSON_DIR / "paybans.json"
 RPA_SERVER_ID = 1480440930828816489
 PAY_RESET_CHANNEL_ID = 1483460272487141447
+PAY_RESET_AUDIT_CHANNEL_ID = 1480462138823807117
 PAYBAN_MENTION_ROLE_ID = 1480466902500511875
 THIRD_PAYBAN_ALERT_CHANNEL_ID = 1480462138823807117
 THIRD_PAYBAN_ALERT_ROLE_ID = 1480442366333685913
@@ -400,9 +401,17 @@ class PayVoidCog(commands.Cog):
             return False
 
         self.store.reset_week(reset_monday)
-        channel = self.bot.get_channel(PAY_RESET_CHANNEL_ID)
-        if channel is not None:
-            await channel.send("Pay voids have been reset for the week.")
+        reset_message = "Pay voids have been reset for the week."
+        reset_channel = self.bot.get_channel(PAY_RESET_CHANNEL_ID)
+        if reset_channel is not None:
+            await reset_channel.send(reset_message)
+
+        # Also notify the finance alert channel so staff have an audit trail in
+        # the same place they monitor pay discipline escalations. Avoid sending
+        # a duplicate if both configuration constants ever point to one channel.
+        audit_channel = self.bot.get_channel(PAY_RESET_AUDIT_CHANNEL_ID)
+        if audit_channel is not None and audit_channel is not reset_channel:
+            await audit_channel.send(reset_message)
         return True
 
     @commands.command(name="resetvoids", help="Manually reset weekly pay voids for the current Monday cycle.")

@@ -392,19 +392,59 @@ class PayVoidCog(commands.Cog):
             allowed_mentions=discord.AllowedMentions(roles=True),
         )
 
-    @tasks.loop(minutes=1)
-    async def _weekly_reset_checker(self) -> None:
-        """Clear weekly pay void data at Monday midnight EST and announce it."""
+    async def _reset_weekly_voids_and_announce(self) -> bool:
+        """Reset this week's voids once and announce when the reset channel is available."""
 
         reset_monday = self._current_week_reset_monday(self._now())
         if self.store.has_reset_for(reset_monday):
-            return
+            return False
 
         self.store.reset_week(reset_monday)
         channel = self.bot.get_channel(PAY_RESET_CHANNEL_ID)
-        if channel is None:
+        if channel is not None:
+            await channel.send("Pay voids have been reset for the week.")
+        return True
+
+    @commands.command(name="resetvoids", help="Manually reset weekly pay voids for the current Monday cycle.")
+    @commands.has_role(PAY_RESET_ALLOWED_ROLE_ID)
+    @commands.guild_only()
+    async def resetvoids(self, ctx: commands.Context) -> None:
+        """Manual text-command fallback for staff to reset weekly pay voids on demand."""
+
+        if ctx.guild is None or ctx.guild.id != RPA_SERVER_ID:
+            await ctx.send("This command is only available in the RPA server.")
             return
-        await channel.send("Pay voids have been reset for the week.")
+
+        reset_performed = await self._reset_weekly_voids_and_announce()
+        if reset_performed:
+            await ctx.send("Pay voids have been manually reset for the week.")
+        else:
+            await ctx.send("Pay voids were already reset for this week.")
+
+    @resetvoids.error
+    async def resetvoids_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
+        """Return clear text-command errors for the manual weekly void reset fallback."""
+
+        if isinstance(error, commands.MissingRole):
+            await ctx.send("You do not have permission to reset weekly pay voids.")
+            return
+        if isinstance(error, commands.NoPrivateMessage):
+            await ctx.send("This command can only be used in a server.")
+            return
+        raise error
+
+    @tasks.loop(minutes=1)
+    async def _weekly_reset_checker(self) -> None:
+        """Clear weekly pay void data at Monday midnight Eastern time, with catch-up fallback."""
+
+        now_est = self._now().astimezone(EASTERN_TZ)
+        # The one-minute loop normally hits exactly at Monday 00:00 Eastern.
+        # Checking for any Monday after midnight lets the bot recover if it was
+        # offline or the task loop drifted during the exact midnight minute.
+        if now_est.weekday() != 0:
+            return
+
+        await self._reset_weekly_voids_and_announce()
 
     @_weekly_reset_checker.before_loop
     async def _before_weekly_reset_checker(self) -> None:

@@ -383,6 +383,39 @@ class PayVoidCogTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(store.has_reset_for(datetime(2026, 7, 13, 0, tzinfo=ZoneInfo("America/New_York"))))
             channel.send.assert_awaited_once_with("Pay voids have been reset for the week.")
 
+
+    async def test_weekly_reset_waits_until_monday_even_without_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            store = PayDisciplineStore(temp_path / "payvoids.json", temp_path / "paybans.json")
+            store.record_void("HabboUser", 1, datetime(2026, 7, 14, 12, 0, tzinfo=timezone.utc), True)
+            cog = self._cog(store)
+            cog._now = MagicMock(return_value=datetime(2026, 7, 14, 12, 0, tzinfo=timezone.utc))
+            channel = SimpleNamespace(send=AsyncMock())
+            cog.bot.get_channel.return_value = channel
+
+            await cog._weekly_reset_checker.coro(cog)
+
+            self.assertIn("habbouser", store.voids.data["members"])
+            channel.send.assert_not_awaited()
+
+    async def test_manual_resetvoids_text_command_resets_current_week(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            store = PayDisciplineStore(temp_path / "payvoids.json", temp_path / "paybans.json")
+            store.record_void("HabboUser", 1, datetime(2026, 7, 14, 12, 0, tzinfo=timezone.utc), True)
+            cog = self._cog(store)
+            cog._now = MagicMock(return_value=datetime(2026, 7, 14, 12, 0, tzinfo=timezone.utc))
+            channel = SimpleNamespace(send=AsyncMock())
+            cog.bot.get_channel.return_value = channel
+            ctx = SimpleNamespace(guild=SimpleNamespace(id=RPA_SERVER_ID), send=AsyncMock())
+
+            await cog.resetvoids.callback(cog, ctx)
+
+            self.assertEqual(store.voids.data["members"], {})
+            channel.send.assert_awaited_once_with("Pay voids have been reset for the week.")
+            ctx.send.assert_awaited_once_with("Pay voids have been manually reset for the week.")
+
     async def test_weekly_reset_does_not_repeat_after_current_week_was_reset(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)

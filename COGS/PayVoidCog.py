@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,6 +17,7 @@ PAYVOID_STORE_PATH = JSON_DIR / "payvoids.json"
 PAYBAN_STORE_PATH = JSON_DIR / "paybans.json"
 RPA_SERVER_ID = 1480440930828816489
 PAY_RESET_CHANNEL_ID = 1483460272487141447
+PAY_RESET_AUDIT_CHANNEL_ID = 1480462138823807117
 PAYBAN_MENTION_ROLE_ID = 1480466902500511875
 THIRD_PAYBAN_ALERT_CHANNEL_ID = 1480462138823807117
 THIRD_PAYBAN_ALERT_ROLE_ID = 1480442366333685913
@@ -392,19 +394,70 @@ class PayVoidCog(commands.Cog):
             allowed_mentions=discord.AllowedMentions(roles=True),
         )
 
-    @tasks.loop(minutes=1)
-    async def _weekly_reset_checker(self) -> None:
-        """Clear weekly pay void data at Monday midnight EST and announce it."""
+    async def _reset_weekly_voids_and_announce(self) -> bool:
+        """Reset this week's voids once and announce when the reset channel is available."""
 
         reset_monday = self._current_week_reset_monday(self._now())
         if self.store.has_reset_for(reset_monday):
-            return
+            return False
 
         self.store.reset_week(reset_monday)
-        channel = self.bot.get_channel(PAY_RESET_CHANNEL_ID)
-        if channel is None:
+        reset_message = "Pay voids have been reset for the week."
+        reset_channel = self.bot.get_channel(PAY_RESET_CHANNEL_ID)
+        if reset_channel is not None:
+            await reset_channel.send(reset_message)
+
+        # Also notify the finance alert channel so staff have an audit trail in
+        # the same place they monitor pay discipline escalations. Avoid sending
+        # a duplicate if both configuration constants ever point to one channel.
+        audit_channel = self.bot.get_channel(PAY_RESET_AUDIT_CHANNEL_ID)
+        if audit_channel is not None and audit_channel is not reset_channel:
+            await audit_channel.send(reset_message)
+        return True
+
+    @commands.command(name="resetvoids", help="Manually reset weekly pay voids for the current Monday cycle.")
+    @commands.has_role(PAY_RESET_ALLOWED_ROLE_ID)
+    @commands.guild_only()
+    async def resetvoids(self, ctx: commands.Context) -> None:
+        """Manual text-command fallback for staff to reset weekly pay voids on demand."""
+
+        if ctx.guild is None or ctx.guild.id != RPA_SERVER_ID:
+            await ctx.send("This command is only available in the RPA server.")
             return
-        await channel.send("Pay voids have been reset for the week.")
+
+        # Remove the staff command message so only the reset announcement remains
+        # visible in the channel. Permission/API failures should not block the
+        # actual reset or its configured channel announcements.
+        with suppress(discord.Forbidden, discord.HTTPException, discord.NotFound, AttributeError):
+            await ctx.message.delete()
+
+        reset_performed = await self._reset_weekly_voids_and_announce()
+        if reset_performed:
+            await ctx.send("Pay voids have been manually reset for the week.")
+        else:
+            await ctx.send("Pay voids were already reset for this week.")
+
+    @resetvoids.error
+    async def resetvoids_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
+        """Return clear text-command errors for the manual weekly void reset fallback."""
+
+        if isinstance(error, commands.MissingRole):
+            await ctx.send("You do not have permission to reset weekly pay voids.")
+            return
+        if isinstance(error, commands.NoPrivateMessage):
+            await ctx.send("This command can only be used in a server.")
+            return
+        raise error
+
+    @tasks.loop(minutes=1)
+    async def _weekly_reset_checker(self) -> None:
+        """Clear weekly pay void data at Monday midnight Eastern time, with automatic catch-up."""
+
+        # The loop runs every minute, so a healthy bot resets right when the
+        # current Eastern week begins: Monday 00:00. If the bot is offline,
+        # restarted, or Discord.py delays the task, the same idempotent helper
+        # automatically catches up on the next loop tick without staff action.
+        await self._reset_weekly_voids_and_announce()
 
     @_weekly_reset_checker.before_loop
     async def _before_weekly_reset_checker(self) -> None:

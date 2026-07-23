@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -9,7 +10,7 @@ from unittest.mock import AsyncMock
 
 try:
     from COGS.ServerAutoRolesRPA import HabboApiError, HabboRoleUpdaterCog
-except ModuleNotFoundError as import_error:  # pragma: no cover - environment-dependent test skip
+except (ModuleNotFoundError, ImportError) as import_error:  # pragma: no cover - environment-dependent test skip
     HabboRoleUpdaterCog = None
     HabboApiError = RuntimeError
 
@@ -555,6 +556,79 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(summary, {"total_entries": 2, "updated": 0, "skipped": 2, "errors": 0})
         sleep_mock.assert_awaited_once_with(1.0)
+
+
+class AutoRoleUpdaterRateLimitTests(unittest.IsolatedAsyncioTestCase):
+    """Cover conservative pacing and Habbo HTTP 429 cooldown behavior."""
+
+    def test_updater_uses_ten_minute_cycle_and_shared_ip_pacing(self) -> None:
+        from COGS.ServerAutoRolesRPA import AutoRoleUpdater
+
+        self.assertEqual(AutoRoleUpdater.UPDATE_INTERVAL_MINUTES, 10)
+        self.assertEqual(AutoRoleUpdater.MAX_HABBO_REQUESTS_PER_INTERVAL, 300)
+        self.assertEqual(AutoRoleUpdater.MIN_HABBO_REQUESTS_PER_INTERVAL, 60)
+        self.assertEqual(AutoRoleUpdater.update_roles_task.minutes, 10.0)
+
+    async def test_request_limiter_waits_for_two_second_spacing(self) -> None:
+        """Concurrent API paths should share the same request-start spacing."""
+
+        from COGS.ServerAutoRolesRPA import AutoRoleUpdater
+
+        cog = AutoRoleUpdater.__new__(AutoRoleUpdater)
+        cog._habbo_request_lock = asyncio.Lock()
+        cog._last_habbo_request_started_at = 100.0
+        cog._habbo_request_target = 300
+        loop = SimpleNamespace(time=unittest.mock.MagicMock(side_effect=[101.0, 102.0]))
+
+        with (
+            unittest.mock.patch("COGS.ServerAutoRolesRPA.asyncio.get_running_loop", return_value=loop),
+            unittest.mock.patch("COGS.ServerAutoRolesRPA.asyncio.sleep", new_callable=AsyncMock) as sleep_mock,
+        ):
+            await cog._wait_for_habbo_request_slot()
+
+        sleep_mock.assert_awaited_once_with(1.0)
+        self.assertEqual(cog._last_habbo_request_started_at, 102.0)
+
+    def test_rate_limit_halves_request_target(self) -> None:
+        """HTTP 429 should immediately make subsequent requests more conservative."""
+
+        from COGS.ServerAutoRolesRPA import AutoRoleUpdater
+
+        cog = AutoRoleUpdater.__new__(AutoRoleUpdater)
+        cog._habbo_rate_limited_until = None
+        cog._habbo_request_target = 300
+        cog._successful_habbo_requests = 75
+        cog._start_rate_limit_cooldown(SimpleNamespace(headers={"Retry-After": "120"}))
+
+        self.assertEqual(cog._habbo_request_target, 150)
+        self.assertEqual(cog._successful_habbo_requests, 0)
+        self.assertEqual(cog._habbo_request_interval_seconds(), 4.0)
+
+    def test_successful_requests_gradually_restore_target(self) -> None:
+        """A stable API should recover in small steps without exceeding 300 requests."""
+
+        from COGS.ServerAutoRolesRPA import AutoRoleUpdater
+
+        cog = AutoRoleUpdater.__new__(AutoRoleUpdater)
+        cog._habbo_request_target = 150
+        cog._successful_habbo_requests = 99
+
+        cog._record_habbo_request_success()
+
+        self.assertEqual(cog._habbo_request_target, 180)
+        self.assertEqual(cog._successful_habbo_requests, 0)
+
+    def test_rate_limit_uses_retry_after_header(self) -> None:
+        from COGS.ServerAutoRolesRPA import AutoRoleUpdater
+
+        cog = AutoRoleUpdater.__new__(AutoRoleUpdater)
+        cog._habbo_rate_limited_until = None
+        before = datetime.now(timezone.utc)
+        cog._start_rate_limit_cooldown(SimpleNamespace(headers={"Retry-After": "120"}))
+
+        remaining = (cog._habbo_rate_limited_until - before).total_seconds()
+        self.assertGreaterEqual(remaining, 119)
+        self.assertLessEqual(remaining, 121)
 
 
 if __name__ == "__main__":

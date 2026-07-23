@@ -33,9 +33,24 @@ The cog starts a background task as soon as it is loaded.
 
 - **Interval:** every 10 minutes.
 - **Scope:** all saved verified users.
+- **Adaptive request pacing:** starts at a ceiling of 300 requests per 10 minutes, halves that target after HTTP 429, and adds 30 requests back after every 100 successful responses.
+- **Safety boundaries:** never exceeds 300 or falls below 60 requests per 10 minutes.
+- **Rate-limit behavior:** stops the current batch on HTTP 429 and honors Habbo's `Retry-After` duration, falling back to a 30-minute cooldown.
 - **Startup behavior:** waits until the Discord bot cache is ready before the first run.
 
 If the cog unloads, the loop is cleanly cancelled so the bot does not leave a dangling task behind.
+
+### Ten-minute capacity calculation
+
+The request limiter initially spaces **every Habbo request** at least two seconds apart: `600 seconds / 300 requests = 2 seconds per request`. This gives the cog a theoretical ceiling of **300 Habbo request starts per 10 minutes** across both the background updater and overlapping join-time syncs.
+
+The pace adapts using a conservative decrease and gradual recovery strategy. A Habbo HTTP 429 immediately halves the current target (for example, 300 becomes 150 and the spacing becomes four seconds). Repeated 429 responses can lower it to the floor of 60 requests per 10 minutes. After every 100 successful HTTP 200 responses, the target rises by 30 until it reaches the 300-request ceiling again. A new 429 resets the success counter, so intermittent failures cannot cause a premature increase.
+
+Each fully processed member currently needs up to **three Habbo requests**: one profile lookup, one groups lookup, and one additional profile lookup for the employee-motto safeguard. Consequently, 300 requests can fully check at most **100 members per 10 minutes** (`300 / 3 = 100`) when every lookup succeeds. Failed or partial profiles may use fewer requests, while API latency and Discord role writes can reduce completed throughput.
+
+This is a local pacing ceiling, not a guarantee that Habbo will accept 300 requests from the shared public IP. Requests made by another bot are outside this cog's limiter and add to the IP's combined traffic. Any HTTP 429 still stops the current batch and activates the documented cooldown.
+
+Discord does not impose a fixed "users per 10 minutes" figure for this workflow. Cached member and role lookups make no Discord HTTP request. A no-change member causes no Discord write, while a changed member causes one write for each role added or removed and one audit-message write. `discord.py` handles Discord's route-specific rate-limit responses, so Discord throughput depends on how many members actually need role changes.
 
 ## Manual slash command
 

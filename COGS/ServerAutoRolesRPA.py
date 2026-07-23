@@ -16,10 +16,12 @@ JSON_DIR = BASE_DIR / "JSON"
 class AutoRoleUpdater(commands.Cog):
     """Synchronize roles while conservatively sharing Habbo API capacity."""
 
-    # The host may run another Habbo bot behind the same public IP. Keep the
-    # requested 10-minute cadence while pausing between members to avoid bursts.
+    # Limit this cog to 300 Habbo request starts per 10 minutes. Pacing the
+    # requests themselves (rather than members) also covers the profile, group,
+    # motto, and join-time API paths consistently.
     UPDATE_INTERVAL_MINUTES = 10
-    REQUEST_DELAY_SECONDS = 5.0
+    MAX_HABBO_REQUESTS_PER_INTERVAL = 300
+    HABBO_REQUEST_INTERVAL_SECONDS = (UPDATE_INTERVAL_MINUTES * 60) / MAX_HABBO_REQUESTS_PER_INTERVAL
     RATE_LIMIT_COOLDOWN_MINUTES = 30
 
     def __init__(self, bot):
@@ -39,6 +41,8 @@ class AutoRoleUpdater(commands.Cog):
         self.rpa_employee_role_id = 1479388404260012092
 
         self._habbo_rate_limited_until = None
+        self._habbo_request_lock = asyncio.Lock()
+        self._last_habbo_request_started_at = None
         self.update_roles_task.start()
 
     def cog_unload(self):
@@ -91,7 +95,23 @@ class AutoRoleUpdater(commands.Cog):
             seconds = self.RATE_LIMIT_COOLDOWN_MINUTES * 60
         self._habbo_rate_limited_until = datetime.now(timezone.utc) + timedelta(seconds=seconds)
 
+    async def _wait_for_habbo_request_slot(self):
+        """Serialize Habbo request starts at the configured 300-per-10-minute pace."""
+
+        # Join-time syncs and the background loop can overlap, so they must share
+        # one lock and timestamp instead of each independently consuming the limit.
+        async with self._habbo_request_lock:
+            loop = asyncio.get_running_loop()
+            now = loop.time()
+            if self._last_habbo_request_started_at is not None:
+                elapsed = now - self._last_habbo_request_started_at
+                delay = self.HABBO_REQUEST_INTERVAL_SECONDS - elapsed
+                if delay > 0:
+                    await asyncio.sleep(delay)
+            self._last_habbo_request_started_at = loop.time()
+
     async def fetch_habbo_user(self, session: aiohttp.ClientSession, habbo_name: str):
+        await self._wait_for_habbo_request_slot()
         url = f"https://www.habbo.com/api/public/users?name={habbo_name}"
         async with session.get(url) as response:
             if response.status == 429:
@@ -102,6 +122,7 @@ class AutoRoleUpdater(commands.Cog):
             return await response.json()
 
     async def fetch_habbo_groups(self, session: aiohttp.ClientSession, habbo_id: str):
+        await self._wait_for_habbo_request_slot()
         url = f"https://www.habbo.com/api/public/users/{habbo_id}/groups"
         async with session.get(url) as response:
             if response.status == 429:

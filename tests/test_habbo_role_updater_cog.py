@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -557,15 +558,35 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
         sleep_mock.assert_awaited_once_with(1.0)
 
 
-class AutoRoleUpdaterRateLimitTests(unittest.TestCase):
+class AutoRoleUpdaterRateLimitTests(unittest.IsolatedAsyncioTestCase):
     """Cover conservative pacing and Habbo HTTP 429 cooldown behavior."""
 
     def test_updater_uses_ten_minute_cycle_and_shared_ip_pacing(self) -> None:
         from COGS.ServerAutoRolesRPA import AutoRoleUpdater
 
         self.assertEqual(AutoRoleUpdater.UPDATE_INTERVAL_MINUTES, 10)
-        self.assertEqual(AutoRoleUpdater.REQUEST_DELAY_SECONDS, 5.0)
+        self.assertEqual(AutoRoleUpdater.MAX_HABBO_REQUESTS_PER_INTERVAL, 300)
+        self.assertEqual(AutoRoleUpdater.HABBO_REQUEST_INTERVAL_SECONDS, 2.0)
         self.assertEqual(AutoRoleUpdater.update_roles_task.minutes, 10.0)
+
+    async def test_request_limiter_waits_for_two_second_spacing(self) -> None:
+        """Concurrent API paths should share the same request-start spacing."""
+
+        from COGS.ServerAutoRolesRPA import AutoRoleUpdater
+
+        cog = AutoRoleUpdater.__new__(AutoRoleUpdater)
+        cog._habbo_request_lock = asyncio.Lock()
+        cog._last_habbo_request_started_at = 100.0
+        loop = SimpleNamespace(time=unittest.mock.MagicMock(side_effect=[101.0, 102.0]))
+
+        with (
+            unittest.mock.patch("COGS.ServerAutoRolesRPA.asyncio.get_running_loop", return_value=loop),
+            unittest.mock.patch("COGS.ServerAutoRolesRPA.asyncio.sleep", new_callable=AsyncMock) as sleep_mock,
+        ):
+            await cog._wait_for_habbo_request_slot()
+
+        sleep_mock.assert_awaited_once_with(1.0)
+        self.assertEqual(cog._last_habbo_request_started_at, 102.0)
 
     def test_rate_limit_uses_retry_after_header(self) -> None:
         from COGS.ServerAutoRolesRPA import AutoRoleUpdater

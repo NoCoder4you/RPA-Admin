@@ -16,9 +16,9 @@ JSON_DIR = BASE_DIR / "JSON"
 class AutoRoleUpdater(commands.Cog):
     """Synchronize roles while conservatively sharing Habbo API capacity."""
 
-    # The host may run another Habbo bot behind the same public IP. A longer cycle
-    # and per-member pause avoid sending large bursts from this updater.
-    UPDATE_INTERVAL_MINUTES = 30
+    # The host may run another Habbo bot behind the same public IP. Keep the
+    # requested 10-minute cadence while pausing between members to avoid bursts.
+    UPDATE_INTERVAL_MINUTES = 10
     REQUEST_DELAY_SECONDS = 5.0
     RATE_LIMIT_COOLDOWN_MINUTES = 30
 

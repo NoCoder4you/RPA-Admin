@@ -560,12 +560,12 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
 class AutoRoleUpdaterRateLimitTests(unittest.TestCase):
     """Cover conservative pacing and Habbo HTTP 429 cooldown behavior."""
 
-    def test_updater_uses_long_cycle_and_shared_ip_pacing(self) -> None:
+    def test_updater_uses_ten_minute_cycle_and_shared_ip_pacing(self) -> None:
         from COGS.ServerAutoRolesRPA import AutoRoleUpdater
 
-        self.assertEqual(AutoRoleUpdater.UPDATE_INTERVAL_MINUTES, 30)
+        self.assertEqual(AutoRoleUpdater.UPDATE_INTERVAL_MINUTES, 10)
         self.assertEqual(AutoRoleUpdater.REQUEST_DELAY_SECONDS, 5.0)
-        self.assertEqual(AutoRoleUpdater.update_roles_task.minutes, 30.0)
+        self.assertEqual(AutoRoleUpdater.update_roles_task.minutes, 10.0)
 
     def test_rate_limit_uses_retry_after_header(self) -> None:
         from COGS.ServerAutoRolesRPA import AutoRoleUpdater

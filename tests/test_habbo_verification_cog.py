@@ -374,7 +374,11 @@ class HabboVerificationCogReactionRoleTests(unittest.IsolatedAsyncioTestCase):
     def _build_reaction_test_context(self) -> tuple[HabboVerificationCog, SimpleNamespace, SimpleNamespace, SimpleNamespace]:
         """Create a reusable, lightweight reaction-test context for cog listener checks."""
 
-        bot = SimpleNamespace()
+        bot = SimpleNamespace(
+            tree=SimpleNamespace(
+                fetch_commands=AsyncMock(return_value=[SimpleNamespace(name="verify", id=987654321)])
+            )
+        )
         cog = HabboVerificationCog.__new__(HabboVerificationCog)
         cog.bot = bot
         cog.server_config_store = SimpleNamespace(get_verification_reaction_message_id=lambda: 1481010999157981256)
@@ -423,11 +427,11 @@ class HabboVerificationCogReactionRoleTests(unittest.IsolatedAsyncioTestCase):
         sent_embed = verification_channel.send.await_args.kwargs["embed"]
         self.assertEqual(sent_embed.title, "Awaiting Verification")
         self.assertEqual(sent_embed.fields[0].name, "Step 1")
-        self.assertIn("run `/verify`", sent_embed.fields[0].value.lower())
+        self.assertIn("run </verify:987654321>", sent_embed.fields[0].value.lower())
         self.assertEqual(sent_embed.fields[1].name, "Step 2")
         self.assertIn("habbo motto", sent_embed.fields[1].value.lower())
         self.assertEqual(sent_embed.fields[2].name, "Step 3")
-        self.assertIn("/verify", sent_embed.fields[2].value)
+        self.assertIn("</verify:987654321>", sent_embed.fields[2].value)
         self.assertIn("again", sent_embed.fields[2].value.lower())
 
     async def test_reaction_add_skips_role_when_message_id_does_not_match(self) -> None:

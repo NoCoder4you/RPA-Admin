@@ -7,7 +7,8 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from habbo_verification_core import (
     BadgeRoleMapper,
@@ -20,7 +21,33 @@ from habbo_verification_core import (
     fetch_habbo_group_ids,
     fetch_habbo_profile,
     motto_contains_code,
+    resolve_slash_command_mention,
 )
+
+
+class SlashCommandMentionTests(unittest.IsolatedAsyncioTestCase):
+    """Validate clickable Discord command mention resolution and caching."""
+
+    async def test_resolves_and_caches_clickable_command_mention(self) -> None:
+        bot = SimpleNamespace(
+            tree=SimpleNamespace(
+                fetch_commands=AsyncMock(return_value=[SimpleNamespace(name="verify", id=123456789)])
+            )
+        )
+
+        first = await resolve_slash_command_mention(bot, "verify")
+        second = await resolve_slash_command_mention(bot, "verify")
+
+        self.assertEqual(first, "</verify:123456789>")
+        self.assertEqual(second, first)
+        bot.tree.fetch_commands.assert_awaited_once_with()
+
+    async def test_falls_back_to_readable_command_when_lookup_fails(self) -> None:
+        bot = SimpleNamespace(
+            tree=SimpleNamespace(fetch_commands=AsyncMock(side_effect=RuntimeError("Discord unavailable")))
+        )
+
+        self.assertEqual(await resolve_slash_command_mention(bot, "verify"), "`/verify`")
 
 
 class VerificationManagerTests(unittest.TestCase):

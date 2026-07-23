@@ -21,7 +21,10 @@ class AutoRoleUpdater(commands.Cog):
     # motto, and join-time API paths consistently.
     UPDATE_INTERVAL_MINUTES = 10
     MAX_HABBO_REQUESTS_PER_INTERVAL = 300
-    HABBO_REQUEST_INTERVAL_SECONDS = (UPDATE_INTERVAL_MINUTES * 60) / MAX_HABBO_REQUESTS_PER_INTERVAL
+    MIN_HABBO_REQUESTS_PER_INTERVAL = 60
+    SUCCESS_REQUESTS_BEFORE_INCREASE = 100
+    RECOVERY_REQUEST_STEP = 30
+    RATE_LIMIT_DECREASE_FACTOR = 0.5
     RATE_LIMIT_COOLDOWN_MINUTES = 30
 
     def __init__(self, bot):
@@ -43,6 +46,8 @@ class AutoRoleUpdater(commands.Cog):
         self._habbo_rate_limited_until = None
         self._habbo_request_lock = asyncio.Lock()
         self._last_habbo_request_started_at = None
+        self._habbo_request_target = self.MAX_HABBO_REQUESTS_PER_INTERVAL
+        self._successful_habbo_requests = 0
         self.update_roles_task.start()
 
     def cog_unload(self):
@@ -86,7 +91,12 @@ class AutoRoleUpdater(commands.Cog):
         )
 
     def _start_rate_limit_cooldown(self, response):
-        """Honor Retry-After when supplied, otherwise use a conservative fallback."""
+        """Reduce throughput and honor Retry-After after a Habbo HTTP 429."""
+
+        current_target = getattr(self, "_habbo_request_target", self.MAX_HABBO_REQUESTS_PER_INTERVAL)
+        reduced_target = int(current_target * self.RATE_LIMIT_DECREASE_FACTOR)
+        self._habbo_request_target = max(self.MIN_HABBO_REQUESTS_PER_INTERVAL, reduced_target)
+        self._successful_habbo_requests = 0
 
         retry_after = response.headers.get("Retry-After")
         try:
@@ -95,8 +105,31 @@ class AutoRoleUpdater(commands.Cog):
             seconds = self.RATE_LIMIT_COOLDOWN_MINUTES * 60
         self._habbo_rate_limited_until = datetime.now(timezone.utc) + timedelta(seconds=seconds)
 
+    def _record_habbo_request_success(self):
+        """Gradually restore throughput after sustained successful API responses."""
+
+        current_target = getattr(self, "_habbo_request_target", self.MAX_HABBO_REQUESTS_PER_INTERVAL)
+        if current_target >= self.MAX_HABBO_REQUESTS_PER_INTERVAL:
+            self._habbo_request_target = self.MAX_HABBO_REQUESTS_PER_INTERVAL
+            self._successful_habbo_requests = 0
+            return
+
+        self._successful_habbo_requests = getattr(self, "_successful_habbo_requests", 0) + 1
+        if self._successful_habbo_requests >= self.SUCCESS_REQUESTS_BEFORE_INCREASE:
+            self._habbo_request_target = min(
+                self.MAX_HABBO_REQUESTS_PER_INTERVAL,
+                current_target + self.RECOVERY_REQUEST_STEP,
+            )
+            self._successful_habbo_requests = 0
+
+    def _habbo_request_interval_seconds(self):
+        """Return spacing derived from the current adaptive request target."""
+
+        target = getattr(self, "_habbo_request_target", self.MAX_HABBO_REQUESTS_PER_INTERVAL)
+        return (self.UPDATE_INTERVAL_MINUTES * 60) / target
+
     async def _wait_for_habbo_request_slot(self):
-        """Serialize Habbo request starts at the configured 300-per-10-minute pace."""
+        """Serialize Habbo request starts using the current adaptive pace."""
 
         # Join-time syncs and the background loop can overlap, so they must share
         # one lock and timestamp instead of each independently consuming the limit.
@@ -105,7 +138,7 @@ class AutoRoleUpdater(commands.Cog):
             now = loop.time()
             if self._last_habbo_request_started_at is not None:
                 elapsed = now - self._last_habbo_request_started_at
-                delay = self.HABBO_REQUEST_INTERVAL_SECONDS - elapsed
+                delay = self._habbo_request_interval_seconds() - elapsed
                 if delay > 0:
                     await asyncio.sleep(delay)
             self._last_habbo_request_started_at = loop.time()
@@ -119,6 +152,7 @@ class AutoRoleUpdater(commands.Cog):
                 return None
             if response.status != 200:
                 return None
+            self._record_habbo_request_success()
             return await response.json()
 
     async def fetch_habbo_groups(self, session: aiohttp.ClientSession, habbo_id: str):
@@ -130,6 +164,7 @@ class AutoRoleUpdater(commands.Cog):
                 return []
             if response.status != 200:
                 return []
+            self._record_habbo_request_success()
             return await response.json()
 
     @tasks.loop(minutes=UPDATE_INTERVAL_MINUTES)

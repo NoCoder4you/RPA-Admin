@@ -70,17 +70,17 @@ class HabboVerificationCog(commands.Cog):
         verify_mention = await resolve_slash_command_mention(self.bot, "verify")
         embed.add_field(
             name="Step 1",
-            value=f"Run {verify_mention} with your Habbo username to get your verification code from the bot.",
+            value=f"Click here ---> {verify_mention} <--- and type in your username!",
             inline=False,
         )
         embed.add_field(
             name="Step 2",
-            value="Copy that code into your Habbo motto and save the change in Habbo.",
+            value="Copy the given code into your Habbo Motto",
             inline=False,
         )
         embed.add_field(
             name="Step 3",
-            value=f"Come back here and run {verify_mention} again so the bot can confirm the code in your motto.",
+            value=f"Repeat Step 1",
             inline=False,
         )
         embed.add_field(

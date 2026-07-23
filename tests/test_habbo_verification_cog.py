@@ -128,6 +128,7 @@ class HabboVerificationCommandTests(unittest.IsolatedAsyncioTestCase):
         cog.verified_store = SimpleNamespace(get_habbo_username=lambda discord_id: "Siren" if discord_id == "123" else None)
         cog._assign_roles_from_habbo_groups = AsyncMock(return_value=("No role changes were required.", [], []))
         cog._ensure_verified_role = AsyncMock(return_value=("No Verified role change was required.", []))
+        cog._sync_member_nickname = AsyncMock(return_value="Nickname updated to verified Habbo username.")
         cog._send_audit_log = AsyncMock()
 
         interaction = SimpleNamespace(
@@ -147,10 +148,46 @@ class HabboVerificationCommandTests(unittest.IsolatedAsyncioTestCase):
         interaction.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
         cog._assign_roles_from_habbo_groups.assert_awaited_once()
         cog._ensure_verified_role.assert_awaited_once_with(interaction)
+        cog._sync_member_nickname.assert_awaited_once_with(interaction, "Siren")
         cog._send_audit_log.assert_not_awaited()
         interaction.followup.send.assert_awaited_once()
         sent_embed = interaction.followup.send.await_args.kwargs["embed"]
         self.assertEqual(sent_embed.title, "Already Verified")
+        fields = {field.name: field.value for field in sent_embed.fields}
+        self.assertIn("Nickname updated to verified Habbo username.", fields["Verification Updates"])
+
+    async def test_already_verified_restores_nickname_and_verified_role_during_habbo_outage(self) -> None:
+        """Saved verification data should restore baseline access without waiting for Habbo."""
+
+        cog = HabboVerificationCog(bot=MagicMock())
+        cog.verified_store = SimpleNamespace(get_habbo_username=lambda _discord_id: "Siren")
+        cog._assign_roles_from_habbo_groups = AsyncMock()
+        cog._ensure_verified_role = AsyncMock(return_value=("Verified role added.", ["Verified"]))
+        cog._sync_member_nickname = AsyncMock(return_value="Nickname updated to verified Habbo username.")
+
+        interaction = SimpleNamespace(
+            user=SimpleNamespace(id=123, mention="<@123>"),
+            response=SimpleNamespace(defer=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+
+        from COGS import ServerVerifyRPA as verify_module
+        original_fetch = verify_module.fetch_habbo_profile
+        verify_module.fetch_habbo_profile = MagicMock(side_effect=verify_module.HabboApiError("HTTP Error 429"))
+        try:
+            await cog.verify.callback(cog, interaction, "IgnoredInput")
+        finally:
+            verify_module.fetch_habbo_profile = original_fetch
+
+        cog._ensure_verified_role.assert_awaited_once_with(interaction)
+        cog._sync_member_nickname.assert_awaited_once_with(interaction, "Siren")
+        cog._assign_roles_from_habbo_groups.assert_not_awaited()
+        sent_embed = interaction.followup.send.await_args.kwargs["embed"]
+        fields = {field.name: field.value for field in sent_embed.fields}
+        self.assertEqual(sent_embed.title, "Already Verified")
+        self.assertIn("Verified role added.", fields["Verification Updates"])
+        self.assertIn("Nickname updated to verified Habbo username.", fields["Verification Updates"])
+        self.assertIn("HTTP Error 429", fields["Verification Updates"])
 
     async def test_verify_success_syncs_nickname_and_removes_awaiting_role(self) -> None:
         """First-time verification should sync the nickname and remove the staging role via verified-role sync."""

@@ -1,3 +1,6 @@
+import asyncio
+from datetime import datetime, timedelta, timezone
+
 import discord
 import aiohttp
 import json
@@ -11,6 +14,14 @@ JSON_DIR = BASE_DIR / "JSON"
 
 
 class AutoRoleUpdater(commands.Cog):
+    """Synchronize roles while conservatively sharing Habbo API capacity."""
+
+    # The host may run another Habbo bot behind the same public IP. A longer cycle
+    # and per-member pause avoid sending large bursts from this updater.
+    UPDATE_INTERVAL_MINUTES = 30
+    REQUEST_DELAY_SECONDS = 5.0
+    RATE_LIMIT_COOLDOWN_MINUTES = 30
+
     def __init__(self, bot):
         self.bot = bot
         self.roles_file_path = JSON_DIR / "BadgesToRoles.json"
@@ -27,6 +38,7 @@ class AutoRoleUpdater(commands.Cog):
 
         self.rpa_employee_role_id = 1479388404260012092
 
+        self._habbo_rate_limited_until = None
         self.update_roles_task.start()
 
     def cog_unload(self):
@@ -61,9 +73,30 @@ class AutoRoleUpdater(commands.Cog):
                 continue
         return None
 
+    def _rate_limit_is_active(self):
+        """Return whether a previous HTTP 429 is still in its cooldown window."""
+
+        return (
+            self._habbo_rate_limited_until is not None
+            and datetime.now(timezone.utc) < self._habbo_rate_limited_until
+        )
+
+    def _start_rate_limit_cooldown(self, response):
+        """Honor Retry-After when supplied, otherwise use a conservative fallback."""
+
+        retry_after = response.headers.get("Retry-After")
+        try:
+            seconds = max(float(retry_after), 0.0)
+        except (TypeError, ValueError):
+            seconds = self.RATE_LIMIT_COOLDOWN_MINUTES * 60
+        self._habbo_rate_limited_until = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+
     async def fetch_habbo_user(self, session: aiohttp.ClientSession, habbo_name: str):
         url = f"https://www.habbo.com/api/public/users?name={habbo_name}"
         async with session.get(url) as response:
+            if response.status == 429:
+                self._start_rate_limit_cooldown(response)
+                return None
             if response.status != 200:
                 return None
             return await response.json()
@@ -71,11 +104,14 @@ class AutoRoleUpdater(commands.Cog):
     async def fetch_habbo_groups(self, session: aiohttp.ClientSession, habbo_id: str):
         url = f"https://www.habbo.com/api/public/users/{habbo_id}/groups"
         async with session.get(url) as response:
+            if response.status == 429:
+                self._start_rate_limit_cooldown(response)
+                return []
             if response.status != 200:
                 return []
             return await response.json()
 
-    @tasks.loop(minutes=10)
+    @tasks.loop(minutes=UPDATE_INTERVAL_MINUTES)
     async def update_roles_task(self):
         self.roles_data = self.load_roles_data()
         self.verified_users = self.load_server_data()
@@ -85,8 +121,16 @@ class AutoRoleUpdater(commands.Cog):
             print("Guild not found.")
             return
 
+        # Do not begin another batch while Habbo has asked this process to back off.
+        if self._rate_limit_is_active():
+            return
+
         async with aiohttp.ClientSession() as session:
+            requested_member_count = 0
             for user_data in self.verified_users:
+                # Stop the current batch immediately after either endpoint returns 429.
+                if self._rate_limit_is_active():
+                    break
                 try:
                     user_id = int(user_data["discord_id"])
                     habbo_name = user_data["habbo_username"]
@@ -97,6 +141,10 @@ class AutoRoleUpdater(commands.Cog):
                 if not member:
                     continue
 
+                if requested_member_count:
+                    await asyncio.sleep(self.REQUEST_DELAY_SECONDS)
+                requested_member_count += 1
+
                 user_json = await self.fetch_habbo_user(session, habbo_name)
                 if not user_json:
                     continue
@@ -106,6 +154,10 @@ class AutoRoleUpdater(commands.Cog):
                     continue
 
                 groups_data = await self.fetch_habbo_groups(session, habbo_id)
+                # An empty list caused by 429 is not proof that the user left every
+                # group; abort before it can incorrectly remove their Discord roles.
+                if self._rate_limit_is_active():
+                    break
 
                 added_roles, removed_roles = await self.assign_roles(
                     member=member,

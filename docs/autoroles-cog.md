@@ -31,8 +31,10 @@ This means the cog acts as a **state reconciler**: Discord roles are treated as 
 
 The cog starts a background task as soon as it is loaded.
 
-- **Interval:** every 10 minutes.
+- **Interval:** every 30 minutes.
 - **Scope:** all saved verified users.
+- **Request pacing:** waits 5 seconds between verified members to avoid a burst of Habbo requests from a shared device/public IP.
+- **Rate-limit behavior:** stops the current batch on HTTP 429 and honors Habbo's `Retry-After` duration, falling back to a 30-minute cooldown.
 - **Startup behavior:** waits until the Discord bot cache is ready before the first run.
 
 If the cog unloads, the loop is cleanly cancelled so the bot does not leave a dangling task behind.

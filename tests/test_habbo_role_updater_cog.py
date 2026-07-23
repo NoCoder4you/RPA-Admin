@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 
 try:
     from COGS.ServerAutoRolesRPA import HabboApiError, HabboRoleUpdaterCog
-except ModuleNotFoundError as import_error:  # pragma: no cover - environment-dependent test skip
+except (ModuleNotFoundError, ImportError) as import_error:  # pragma: no cover - environment-dependent test skip
     HabboRoleUpdaterCog = None
     HabboApiError = RuntimeError
 
@@ -555,6 +555,29 @@ class HabboRoleUpdaterCogEmbedTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(summary, {"total_entries": 2, "updated": 0, "skipped": 2, "errors": 0})
         sleep_mock.assert_awaited_once_with(1.0)
+
+
+class AutoRoleUpdaterRateLimitTests(unittest.TestCase):
+    """Cover conservative pacing and Habbo HTTP 429 cooldown behavior."""
+
+    def test_updater_uses_ten_minute_cycle_and_shared_ip_pacing(self) -> None:
+        from COGS.ServerAutoRolesRPA import AutoRoleUpdater
+
+        self.assertEqual(AutoRoleUpdater.UPDATE_INTERVAL_MINUTES, 10)
+        self.assertEqual(AutoRoleUpdater.REQUEST_DELAY_SECONDS, 5.0)
+        self.assertEqual(AutoRoleUpdater.update_roles_task.minutes, 10.0)
+
+    def test_rate_limit_uses_retry_after_header(self) -> None:
+        from COGS.ServerAutoRolesRPA import AutoRoleUpdater
+
+        cog = AutoRoleUpdater.__new__(AutoRoleUpdater)
+        cog._habbo_rate_limited_until = None
+        before = datetime.now(timezone.utc)
+        cog._start_rate_limit_cooldown(SimpleNamespace(headers={"Retry-After": "120"}))
+
+        remaining = (cog._habbo_rate_limited_until - before).total_seconds()
+        self.assertGreaterEqual(remaining, 119)
+        self.assertLessEqual(remaining, 121)
 
 
 if __name__ == "__main__":

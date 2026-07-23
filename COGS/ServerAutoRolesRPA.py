@@ -16,14 +16,14 @@ JSON_DIR = BASE_DIR / "JSON"
 class AutoRoleUpdater(commands.Cog):
     """Synchronize roles while conservatively sharing Habbo API capacity."""
 
-    # Limit this cog to 300 Habbo request starts per 10 minutes. Pacing the
-    # requests themselves (rather than members) also covers the profile, group,
-    # motto, and join-time API paths consistently.
+    # Reserve most of the shared Habbo API capacity for the user-facing /verify
+    # command. Background and join-time role maintenance can safely run slower;
+    # verification cannot, because a challenge is both interactive and expiring.
     UPDATE_INTERVAL_MINUTES = 10
-    MAX_HABBO_REQUESTS_PER_INTERVAL = 300
-    MIN_HABBO_REQUESTS_PER_INTERVAL = 60
+    MAX_HABBO_REQUESTS_PER_INTERVAL = 60
+    MIN_HABBO_REQUESTS_PER_INTERVAL = 20
     SUCCESS_REQUESTS_BEFORE_INCREASE = 100
-    RECOVERY_REQUEST_STEP = 30
+    RECOVERY_REQUEST_STEP = 10
     RATE_LIMIT_DECREASE_FACTOR = 0.5
     RATE_LIMIT_COOLDOWN_MINUTES = 30
 
@@ -221,6 +221,9 @@ class AutoRoleUpdater(commands.Cog):
                     guild=guild,
                     habbo_name=habbo_name,
                     session=session,
+                    # Reuse the profile response instead of spending another
+                    # Habbo request solely to read the employee motto.
+                    profile_motto=str(user_json.get("motto", "")),
                 )
 
                 if added_roles is None and removed_roles is None:
@@ -250,7 +253,15 @@ class AutoRoleUpdater(commands.Cog):
 
                     await log_channel.send(embed=embed)
 
-    async def assign_roles(self, member, groups_data, guild, habbo_name=None, session=None):
+    async def assign_roles(
+        self,
+        member,
+        groups_data,
+        guild,
+        habbo_name=None,
+        session=None,
+        profile_motto=None,
+    ):
         added_roles = []
         removed_roles = []
 
@@ -305,8 +316,10 @@ class AutoRoleUpdater(commands.Cog):
         roles_to_remove = (current_roles - expected_roles) & valid_role_ids
         roles_to_remove -= roles_to_add
 
-        motto = ""
-        if habbo_name and session:
+        motto = str(profile_motto or "")
+        if profile_motto is None and habbo_name and session:
+            # Preserve compatibility for direct callers that do not already
+            # have a profile response, while normal syncs avoid this request.
             try:
                 user_json = await self.fetch_habbo_user(session, habbo_name)
                 if user_json:
@@ -385,6 +398,7 @@ class AutoRoleUpdater(commands.Cog):
                 guild=guild,
                 habbo_name=habbo_name,
                 session=session,
+                profile_motto=str(user_json.get("motto", "")),
             )
 
     @update_roles_task.before_loop

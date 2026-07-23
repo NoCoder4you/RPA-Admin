@@ -33,9 +33,21 @@ The cog starts a background task as soon as it is loaded.
 
 - **Interval:** every 10 minutes.
 - **Scope:** all saved verified users.
+- **Request pacing:** starts at most one Habbo request every 2 seconds, for a ceiling of 300 requests per 10 minutes from this cog.
+- **Rate-limit behavior:** stops the current batch on HTTP 429 and honors Habbo's `Retry-After` duration, falling back to a 30-minute cooldown.
 - **Startup behavior:** waits until the Discord bot cache is ready before the first run.
 
 If the cog unloads, the loop is cleanly cancelled so the bot does not leave a dangling task behind.
+
+### Ten-minute capacity calculation
+
+The request limiter spaces **every Habbo request** at least two seconds apart: `600 seconds / 300 requests = 2 seconds per request`. This gives the cog a theoretical ceiling of **300 Habbo request starts per 10 minutes** across both the background updater and overlapping join-time syncs.
+
+Each fully processed member currently needs up to **three Habbo requests**: one profile lookup, one groups lookup, and one additional profile lookup for the employee-motto safeguard. Consequently, 300 requests can fully check at most **100 members per 10 minutes** (`300 / 3 = 100`) when every lookup succeeds. Failed or partial profiles may use fewer requests, while API latency and Discord role writes can reduce completed throughput.
+
+This is a local pacing ceiling, not a guarantee that Habbo will accept 300 requests from the shared public IP. Requests made by another bot are outside this cog's limiter and add to the IP's combined traffic. Any HTTP 429 still stops the current batch and activates the documented cooldown.
+
+Discord does not impose a fixed "users per 10 minutes" figure for this workflow. Cached member and role lookups make no Discord HTTP request. A no-change member causes no Discord write, while a changed member causes one write for each role added or removed and one audit-message write. `discord.py` handles Discord's route-specific rate-limit responses, so Discord throughput depends on how many members actually need role changes.
 
 ## Manual slash command
 

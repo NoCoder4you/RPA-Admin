@@ -565,11 +565,11 @@ class AutoRoleUpdaterRateLimitTests(unittest.IsolatedAsyncioTestCase):
         from COGS.ServerAutoRolesRPA import AutoRoleUpdater
 
         self.assertEqual(AutoRoleUpdater.UPDATE_INTERVAL_MINUTES, 10)
-        self.assertEqual(AutoRoleUpdater.MAX_HABBO_REQUESTS_PER_INTERVAL, 300)
+        self.assertEqual(AutoRoleUpdater.MAX_HABBO_REQUESTS_PER_INTERVAL, 150)
         self.assertEqual(AutoRoleUpdater.MIN_HABBO_REQUESTS_PER_INTERVAL, 60)
         self.assertEqual(AutoRoleUpdater.update_roles_task.minutes, 10.0)
 
-    async def test_request_limiter_waits_for_two_second_spacing(self) -> None:
+    async def test_request_limiter_waits_for_four_second_spacing(self) -> None:
         """Concurrent API paths should share the same request-start spacing."""
 
         from COGS.ServerAutoRolesRPA import AutoRoleUpdater
@@ -577,8 +577,8 @@ class AutoRoleUpdaterRateLimitTests(unittest.IsolatedAsyncioTestCase):
         cog = AutoRoleUpdater.__new__(AutoRoleUpdater)
         cog._habbo_request_lock = asyncio.Lock()
         cog._last_habbo_request_started_at = 100.0
-        cog._habbo_request_target = 300
-        loop = SimpleNamespace(time=unittest.mock.MagicMock(side_effect=[101.0, 102.0]))
+        cog._habbo_request_target = 150
+        loop = SimpleNamespace(time=unittest.mock.MagicMock(side_effect=[101.0, 104.0]))
 
         with (
             unittest.mock.patch("COGS.ServerAutoRolesRPA.asyncio.get_running_loop", return_value=loop),
@@ -586,8 +586,37 @@ class AutoRoleUpdaterRateLimitTests(unittest.IsolatedAsyncioTestCase):
         ):
             await cog._wait_for_habbo_request_slot()
 
-        sleep_mock.assert_awaited_once_with(1.0)
-        self.assertEqual(cog._last_habbo_request_started_at, 102.0)
+        sleep_mock.assert_awaited_once_with(3.0)
+        self.assertEqual(cog._last_habbo_request_started_at, 104.0)
+
+    async def test_assign_roles_reuses_profile_motto_without_duplicate_request(self) -> None:
+        """Normal syncs should not fetch the same Habbo profile a second time for its motto."""
+
+        from COGS.ServerAutoRolesRPA import AutoRoleUpdater
+
+        cog = AutoRoleUpdater.__new__(AutoRoleUpdater)
+        cog.roles_data = {
+            "EmployeeRoles": [],
+            "SpecialUnits": [],
+            "MiscRoles": [],
+            "Donators": [],
+        }
+        cog.rpa_employee_role_id = 123
+        cog.fetch_habbo_user = AsyncMock()
+        member = SimpleNamespace(roles=[])
+        guild = SimpleNamespace(get_role=lambda _role_id: None)
+
+        result = await cog.assign_roles(
+            member=member,
+            groups_data=[],
+            guild=guild,
+            habbo_name="Siren",
+            session=object(),
+            profile_motto="RPA employee",
+        )
+
+        self.assertEqual(result, (None, None))
+        cog.fetch_habbo_user.assert_not_awaited()
 
     def test_rate_limit_halves_request_target(self) -> None:
         """HTTP 429 should immediately make subsequent requests more conservative."""
@@ -596,26 +625,26 @@ class AutoRoleUpdaterRateLimitTests(unittest.IsolatedAsyncioTestCase):
 
         cog = AutoRoleUpdater.__new__(AutoRoleUpdater)
         cog._habbo_rate_limited_until = None
-        cog._habbo_request_target = 300
+        cog._habbo_request_target = 150
         cog._successful_habbo_requests = 75
         cog._start_rate_limit_cooldown(SimpleNamespace(headers={"Retry-After": "120"}))
 
-        self.assertEqual(cog._habbo_request_target, 150)
+        self.assertEqual(cog._habbo_request_target, 75)
         self.assertEqual(cog._successful_habbo_requests, 0)
-        self.assertEqual(cog._habbo_request_interval_seconds(), 4.0)
+        self.assertEqual(cog._habbo_request_interval_seconds(), 8.0)
 
     def test_successful_requests_gradually_restore_target(self) -> None:
-        """A stable API should recover in small steps without exceeding 300 requests."""
+        """A stable API should recover in small steps without exceeding 150 requests."""
 
         from COGS.ServerAutoRolesRPA import AutoRoleUpdater
 
         cog = AutoRoleUpdater.__new__(AutoRoleUpdater)
-        cog._habbo_request_target = 150
+        cog._habbo_request_target = 75
         cog._successful_habbo_requests = 99
 
         cog._record_habbo_request_success()
 
-        self.assertEqual(cog._habbo_request_target, 180)
+        self.assertEqual(cog._habbo_request_target, 90)
         self.assertEqual(cog._successful_habbo_requests, 0)
 
     def test_rate_limit_uses_retry_after_header(self) -> None:

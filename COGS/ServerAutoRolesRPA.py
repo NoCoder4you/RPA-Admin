@@ -20,10 +20,13 @@ class AutoRoleUpdater(commands.Cog):
     # command. Background and join-time role maintenance can safely run slower;
     # verification cannot, because a challenge is both interactive and expiring.
     UPDATE_INTERVAL_MINUTES = 10
-    MAX_HABBO_REQUESTS_PER_INTERVAL = 60
-    MIN_HABBO_REQUESTS_PER_INTERVAL = 20
+    # A 150-request ceiling is a moderate reduction from the old 300-request
+    # limit. Combined with profile-response reuse below, it retains capacity to
+    # fully sync up to 75 members per cycle while leaving room for /verify.
+    MAX_HABBO_REQUESTS_PER_INTERVAL = 150
+    MIN_HABBO_REQUESTS_PER_INTERVAL = 60
     SUCCESS_REQUESTS_BEFORE_INCREASE = 100
-    RECOVERY_REQUEST_STEP = 10
+    RECOVERY_REQUEST_STEP = 15
     RATE_LIMIT_DECREASE_FACTOR = 0.5
     RATE_LIMIT_COOLDOWN_MINUTES = 30
 

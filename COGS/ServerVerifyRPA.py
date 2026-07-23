@@ -114,6 +114,12 @@ class HabboVerificationCog(commands.Cog):
         # Security: if already verified, always use the stored Habbo account for role sync.
         stored_habbo_name = self.verified_store.get_habbo_username(discord_id)
         if stored_habbo_name:
+            # Baseline Discord access and the nickname depend only on the verified mapping we
+            # already trust. Apply them before calling Habbo so a temporary API outage or rate
+            # limit cannot leave an already-verified member stuck in the onboarding state.
+            verified_role_status, verified_role_names = await self._ensure_verified_role(interaction)
+            nickname_status = await self._sync_member_nickname(interaction, stored_habbo_name)
+
             try:
                 stored_profile = fetch_habbo_profile(stored_habbo_name)
             except HabboApiError as exc:
@@ -121,20 +127,24 @@ class HabboVerificationCog(commands.Cog):
                     embed=self._build_embed(
                         title="Already Verified",
                         description=(
-                            "You are already verified, but I could not refresh your stored Habbo profile "
-                            "for role sync right now. Please try again in a moment."
+                            "You are already verified. I restored your Verified role and nickname from "
+                            "your saved account, but I could not refresh Habbo group roles right now. "
+                            "Please try again in a moment."
                         ),
                         challenge_code="N/A",
                         expires_at=datetime.now(timezone.utc),
                         color=discord.Color.orange(),
-                        extra_field=("Error", str(exc)),
+                        extra_field=(
+                            "Verification Updates",
+                            f"Verified Role: {verified_role_status}\nNickname: {nickname_status}\n"
+                            f"Habbo Group Roles: Failed ({exc})",
+                        ),
                     ),
                     ephemeral=True,
                 )
                 return
 
             role_status, added_role_names, removed_role_names = await self._assign_roles_from_habbo_groups(interaction, stored_profile)
-            verified_role_status, verified_role_names = await self._ensure_verified_role(interaction)
             if verified_role_status != "No Verified role change was required.":
                 # Surface the baseline Verified-role sync result alongside mapped Habbo roles so
                 # staff can immediately see whether core verification access was restored.
@@ -153,7 +163,10 @@ class HabboVerificationCog(commands.Cog):
                     challenge_code="N/A",
                     expires_at=datetime.now(timezone.utc),
                     color=discord.Color.blue(),
-                    extra_field=("Role Sync", role_status),
+                    extra_field=(
+                        "Verification Updates",
+                        f"Role Sync: {role_status}\nNickname: {nickname_status}",
+                    ),
                     thumbnail_url=self._build_avatar_thumbnail_url(stored_profile),
                 ),
                 ephemeral=True,

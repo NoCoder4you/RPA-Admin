@@ -230,6 +230,7 @@ class RulesRegulationsCogTests(unittest.IsolatedAsyncioTestCase):
         """Send onboarding instructions even when staff or another cog adds the staging role directly."""
 
         bot = MagicMock()
+        bot.tree.fetch_commands = AsyncMock(return_value=[SimpleNamespace(name="verify", id=987654321)])
         cog = RulesRegulationsCog(bot=bot)
         cog.server_config_store = MagicMock(
             get_awaiting_verification_role_id=MagicMock(return_value=AWAITING_VERIFICATION_ROLE_ID),
@@ -251,6 +252,9 @@ class RulesRegulationsCogTests(unittest.IsolatedAsyncioTestCase):
         guild.get_role.assert_called_once_with(AWAITING_VERIFICATION_ROLE_ID)
         verification_channel.send.assert_awaited_once()
         self.assertEqual(verification_channel.send.await_args.kwargs["content"], after.mention)
+        sent_embed = verification_channel.send.await_args.kwargs["embed"]
+        self.assertIn("</verify:987654321>", sent_embed.fields[0].value)
+        self.assertIn("</verify:987654321>", sent_embed.fields[2].value)
 
     async def test_send_awaiting_verification_embed_fetches_channel_when_not_cached(self) -> None:
         """Fall back to guild.fetch_channel so uncached destination channels still receive the embed."""

@@ -18,6 +18,38 @@ from urllib.error import HTTPError, URLError
 from common_paths import json_file
 
 
+async def resolve_slash_command_mention(bot: object, command_name: str) -> str:
+    """Return Discord's clickable mention for a global slash command.
+
+    Application command IDs are assigned by Discord, so they cannot be safely
+    hard-coded. Cache the ID after the first API lookup to avoid an extra
+    request for every onboarding message.
+    """
+
+    cache = getattr(bot, "_slash_command_mentions", None)
+    if not isinstance(cache, dict):
+        cache = {}
+        setattr(bot, "_slash_command_mentions", cache)
+
+    cached_mention = cache.get(command_name)
+    if cached_mention:
+        return cached_mention
+
+    try:
+        commands = await bot.tree.fetch_commands()
+    except Exception:
+        # Keep instructions readable during a transient Discord API error.
+        return f"`/{command_name}`"
+
+    for command in commands:
+        if getattr(command, "name", None) == command_name and getattr(command, "id", None):
+            mention = f"</{command_name}:{command.id}>"
+            cache[command_name] = mention
+            return mention
+
+    return f"`/{command_name}`"
+
+
 class HabboApiError(RuntimeError):
     """Raised when the Habbo API cannot be reached or returns invalid data."""
 

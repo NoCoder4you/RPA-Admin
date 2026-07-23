@@ -20,6 +20,7 @@ from habbo_verification_core import (
     fetch_habbo_group_ids,
     fetch_habbo_profile,
     motto_contains_code,
+    resolve_slash_command_mention,
 )
 
 
@@ -65,9 +66,11 @@ class HabboVerificationCog(commands.Cog):
             ),
             color=discord.Color.gold(),
         )
+        # Discord renders this command mention as a clickable /verify shortcut.
+        verify_mention = await resolve_slash_command_mention(self.bot, "verify")
         embed.add_field(
             name="Step 1",
-            value="Run `/verify` with your Habbo username to get your verification code from the bot.",
+            value=f"Run {verify_mention} with your Habbo username to get your verification code from the bot.",
             inline=False,
         )
         embed.add_field(
@@ -77,7 +80,7 @@ class HabboVerificationCog(commands.Cog):
         )
         embed.add_field(
             name="Step 3",
-            value="Come back here and run `/verify` again so the bot can confirm the code in your motto.",
+            value=f"Come back here and run {verify_mention} again so the bot can confirm the code in your motto.",
             inline=False,
         )
         embed.add_field(

@@ -4,7 +4,7 @@ import asyncio
 import discord
 from discord.ext import commands
 
-from habbo_verification_core import ServerConfigStore, VerifiedUserStore
+from habbo_verification_core import ServerConfigStore, VerifiedUserStore, resolve_slash_command_mention
 
 WHITE_CHECK_MARK_EMOJI = "✅"
 AWAITING_VERIFICATION_CHANNEL_ID = 1479391662076723224
@@ -185,9 +185,11 @@ class RulesRegulationsCog(commands.Cog):
             ),
             color=discord.Color.gold(),
         )
+        # Discord renders this command mention as a clickable /verify shortcut.
+        verify_mention = await resolve_slash_command_mention(self.bot, "verify")
         embed.add_field(
             name="Step 1",
-            value="Run `/verify` with your Habbo username to get your verification code from the bot.",
+            value=f"Run {verify_mention} with your Habbo username to get your verification code from the bot.",
             inline=False,
         )
         embed.add_field(
@@ -197,7 +199,7 @@ class RulesRegulationsCog(commands.Cog):
         )
         embed.add_field(
             name="Step 3",
-            value="Come back here and run `/verify` again so the bot can confirm the code in your motto.",
+            value=f"Come back here and run {verify_mention} again so the bot can confirm the code in your motto.",
             inline=False,
         )
         embed.add_field(

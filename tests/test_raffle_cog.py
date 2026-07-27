@@ -65,7 +65,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
             }
         }
         member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
-        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock(), defer=AsyncMock())
         member = self._member(55)
         guild = SimpleNamespace(
             id=999,
@@ -83,6 +83,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
 
         await self.cog.raffle_add.callback(self.cog, interaction, "ABC12345", "55", 1)
 
+        response.defer.assert_awaited_once_with(ephemeral=False)
         embed = response.send_message.await_args.kwargs["embed"]
         self.assertEqual(embed.title, "Entry Exists")
 
@@ -105,7 +106,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
             }
         }
         member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
-        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock(), defer=AsyncMock())
         member = self._member(55)
         member.send = AsyncMock(side_effect=discord.Forbidden(MagicMock(), "closed"))
         guild = SimpleNamespace(
@@ -149,7 +150,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
             }
         }
         member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
-        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock(), defer=AsyncMock())
         member = self._member(55)
         guild = SimpleNamespace(
             id=999,
@@ -197,7 +198,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
             }
         }
         member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
-        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock(), defer=AsyncMock())
         member = self._member(55)
         guild = SimpleNamespace(
             id=999,
@@ -245,7 +246,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
             }
         }
         member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
-        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock(), defer=AsyncMock())
         member = self._member(55)
         member.display_name = "PlayerOne"
         member.name = "PlayerOne"
@@ -292,7 +293,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
             }
         }
         member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
-        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock(), defer=AsyncMock())
         guild = SimpleNamespace(
             id=999,
             name="Guild",
@@ -337,7 +338,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
             }
         }
         member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
-        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock(), defer=AsyncMock())
         member = self._member(55)
         audit_channel = MagicMock(spec=discord.TextChannel)
         audit_channel.send = AsyncMock()
@@ -388,7 +389,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
             }
         }
         member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
-        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock(), defer=AsyncMock())
         member = self._member(55)
         guild = SimpleNamespace(
             id=999,
@@ -420,7 +421,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_permissions_do_not_mirror_to_raffle_channel(self) -> None:
         member_permissions = SimpleNamespace(manage_guild=False, administrator=False)
-        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock(), defer=AsyncMock())
         interaction = SimpleNamespace(
             guild=SimpleNamespace(id=999, name="Guild"),
             channel=SimpleNamespace(id=111, mention="#general"),
@@ -439,7 +440,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_raffle_not_found_does_not_mirror_to_raffle_channel(self) -> None:
         member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
-        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock(), defer=AsyncMock())
         member = self._member(55)
         guild = SimpleNamespace(
             id=999,
@@ -482,7 +483,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
             }
         }
         member_permissions = SimpleNamespace(manage_guild=True, administrator=False)
-        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock())
+        response = SimpleNamespace(is_done=lambda: False, send_message=AsyncMock(), defer=AsyncMock())
         member = self._member(55)
         guild = SimpleNamespace(
             id=999,

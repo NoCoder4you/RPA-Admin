@@ -314,6 +314,14 @@ class RaffleCog(commands.Cog):
         else:
             await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
 
+    async def _defer_public_response(self, interaction: discord.Interaction) -> None:
+        """Acknowledge a potentially slow command while preserving a public final response."""
+        if not interaction.response.is_done():
+            # Discord invalidates an unacknowledged interaction after roughly three
+            # seconds. Defer before file, API, DM, and audit-log work so the eventual
+            # response can safely be delivered through the interaction follow-up.
+            await interaction.response.defer(ephemeral=False)
+
     def _build_embed(self, title: str, description: str, *, color: discord.Color | None = None) -> discord.Embed:
         return discord.Embed(title=title, description=description, color=color or discord.Color.blurple(), timestamp=self._utcnow())
 
@@ -710,6 +718,7 @@ class RaffleCog(commands.Cog):
         user: str,
         entries: app_commands.Range[int, 1] = 1,
     ) -> None:
+        await self._defer_public_response(interaction)
         if not await self._check_permissions(interaction):
             return
         if interaction.guild is None:

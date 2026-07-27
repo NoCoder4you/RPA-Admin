@@ -722,7 +722,6 @@ class RaffleCog(commands.Cog):
         user: str,
         entries: app_commands.Range[int, 1] = 1,
     ) -> None:
-        await self._defer_public_response(interaction)
         if not await self._check_permissions(interaction):
             return
         if interaction.guild is None:
@@ -771,6 +770,11 @@ class RaffleCog(commands.Cog):
                 )
                 return
             new_count = 1
+
+        # Keep all validation errors as immediate ephemeral responses. Only defer
+        # publicly once the request is known to be valid and the slower storage,
+        # user lookup, DM, and audit-log operations are about to begin.
+        await self._defer_public_response(interaction)
 
         raffle["entrants"][user_key] = {
             "username": entrant_label,

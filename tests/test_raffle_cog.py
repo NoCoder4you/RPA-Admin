@@ -98,9 +98,10 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
 
         await self.cog.raffle_add.callback(self.cog, interaction, "ABC12345", "55", 1)
 
-        response.defer.assert_awaited_once_with(ephemeral=False)
+        response.defer.assert_not_awaited()
         embed = response.send_message.await_args.kwargs["embed"]
         self.assertEqual(embed.title, "Entry Exists")
+        self.assertTrue(response.send_message.await_args.kwargs["ephemeral"])
 
     async def test_add_allows_multiple_entries_and_reports_dm_failure(self) -> None:
         self.cog._raffles = {
@@ -140,6 +141,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
 
         await self.cog.raffle_add.callback(self.cog, interaction, "ABC12345", "55", 3)
 
+        response.defer.assert_awaited_once_with(ephemeral=False)
         self.assertEqual(self.cog._raffles["ABC12345"]["entrants"]["55"]["entries"], 4)
         embed = response.send_message.await_args.kwargs["embed"]
         self.assertNotIn("<@55>", embed.description)
@@ -189,6 +191,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.cog, "_send_entry_dm", AsyncMock(return_value=True)) as mock_dm:
             await self.cog.raffle_add.callback(self.cog, interaction, "ABC12345", "55", 1)
 
+        response.defer.assert_awaited_once_with(ephemeral=False)
         mock_dm.assert_not_awaited()
         embed = response.send_message.await_args.kwargs["embed"]
         self.assertNotIn("<@55>", embed.description)
@@ -449,6 +452,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
 
         await self.cog.raffle_list.callback(self.cog, interaction)
 
+        response.defer.assert_not_awaited()
         embed = response.send_message.await_args.kwargs["embed"]
         self.assertEqual(embed.title, "Missing Permissions")
         log_channel.send.assert_not_awaited()
@@ -475,6 +479,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
 
         await self.cog.raffle_add.callback(self.cog, interaction, "MISSING", "55", 1)
 
+        response.defer.assert_not_awaited()
         embed = response.send_message.await_args.kwargs["embed"]
         self.assertEqual(embed.title, "Raffle Not Found")
         log_channel.send.assert_not_awaited()

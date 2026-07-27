@@ -18,6 +18,7 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_STORAGE_PATH = Path(__file__).resolve().parent.parent / "JSON" / "raffles.json"
 MAX_ENTRIES_DISPLAY = 20
 RAFFLE_LOG_CHANNEL_ID = 1485484040055427132
+RAFFLE_MANAGER_ROLE_NAME = "Rank Seller"
 
 
 async def raffle_id_autocomplete(
@@ -291,17 +292,20 @@ class RaffleCog(commands.Cog):
             return
         await self._mirror_embed_to_log_channel(embed, channel_id=channel_id)
 
-    def _has_manage_permissions(self, interaction: discord.Interaction) -> bool:
-        perms = getattr(interaction.user, "guild_permissions", None)
-        return bool(perms and (perms.manage_guild or perms.administrator))
+    def _has_raffle_manager_role(self, interaction: discord.Interaction) -> bool:
+        """Return whether the command user has the configured raffle staff role."""
+        roles = getattr(interaction.user, "roles", ())
+        # Match the exact Discord role name so unrelated management permissions do
+        # not implicitly grant access to staff raffle operations.
+        return any(getattr(role, "name", None) == RAFFLE_MANAGER_ROLE_NAME for role in roles)
 
     async def _check_permissions(self, interaction: discord.Interaction) -> bool:
-        if self._has_manage_permissions(interaction):
+        if self._has_raffle_manager_role(interaction):
             return True
 
         embed = self._build_embed(
             title="Missing Permissions",
-            description="You need **Manage Server** or **Administrator** permissions to manage raffles.",
+            description=f"You need the **{RAFFLE_MANAGER_ROLE_NAME}** role to manage raffles.",
             color=discord.Color.red(),
         )
         await self._respond_and_log(interaction, embed=embed, ephemeral=True)
@@ -767,6 +771,11 @@ class RaffleCog(commands.Cog):
                 )
                 return
             new_count = 1
+
+        # Keep all validation errors as immediate ephemeral responses. Only defer
+        # publicly once the request is known to be valid and the slower storage,
+        # user lookup, DM, and audit-log operations are about to begin.
+        await self._defer_public_response(interaction)
 
         raffle["entrants"][user_key] = {
             "username": entrant_label,

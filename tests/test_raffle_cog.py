@@ -30,6 +30,21 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
+    def test_rank_seller_role_grants_raffle_access(self) -> None:
+        interaction = SimpleNamespace(user=SimpleNamespace(roles=[SimpleNamespace(name="Rank Seller")]))
+
+        self.assertTrue(self.cog._has_raffle_manager_role(interaction))
+
+    def test_administrator_without_rank_seller_role_is_denied(self) -> None:
+        interaction = SimpleNamespace(
+            user=SimpleNamespace(
+                roles=[SimpleNamespace(name="Administrator")],
+                guild_permissions=SimpleNamespace(administrator=True, manage_guild=True),
+            )
+        )
+
+        self.assertFalse(self.cog._has_raffle_manager_role(interaction))
+
     @staticmethod
     def _member(member_id: int) -> SimpleNamespace:
         """Build a lightweight member-like object with a stable display string for embeds."""
@@ -76,16 +91,17 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         interaction = SimpleNamespace(
             guild=guild,
             channel=SimpleNamespace(id=111, mention="#general"),
-            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
 
         await self.cog.raffle_add.callback(self.cog, interaction, "ABC12345", "55", 1)
 
-        response.defer.assert_awaited_once_with(ephemeral=False)
+        response.defer.assert_not_awaited()
         embed = response.send_message.await_args.kwargs["embed"]
         self.assertEqual(embed.title, "Entry Exists")
+        self.assertTrue(response.send_message.await_args.kwargs["ephemeral"])
 
     async def test_add_allows_multiple_entries_and_reports_dm_failure(self) -> None:
         self.cog._raffles = {
@@ -118,13 +134,14 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         interaction = SimpleNamespace(
             guild=guild,
             channel=SimpleNamespace(id=111, mention="#general"),
-            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
 
         await self.cog.raffle_add.callback(self.cog, interaction, "ABC12345", "55", 3)
 
+        response.defer.assert_awaited_once_with(ephemeral=False)
         self.assertEqual(self.cog._raffles["ABC12345"]["entrants"]["55"]["entries"], 4)
         embed = response.send_message.await_args.kwargs["embed"]
         self.assertNotIn("<@55>", embed.description)
@@ -161,7 +178,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         interaction = SimpleNamespace(
             guild=guild,
             channel=SimpleNamespace(id=111, mention="#general"),
-            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
@@ -174,6 +191,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.cog, "_send_entry_dm", AsyncMock(return_value=True)) as mock_dm:
             await self.cog.raffle_add.callback(self.cog, interaction, "ABC12345", "55", 1)
 
+        response.defer.assert_awaited_once_with(ephemeral=False)
         mock_dm.assert_not_awaited()
         embed = response.send_message.await_args.kwargs["embed"]
         self.assertNotIn("<@55>", embed.description)
@@ -209,7 +227,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         interaction = SimpleNamespace(
             guild=guild,
             channel=SimpleNamespace(id=111, mention="#general"),
-            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
@@ -260,7 +278,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         interaction = SimpleNamespace(
             guild=guild,
             channel=SimpleNamespace(id=111, mention="#general"),
-            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
@@ -304,7 +322,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         interaction = SimpleNamespace(
             guild=guild,
             channel=SimpleNamespace(id=111, mention="#general"),
-            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
@@ -352,7 +370,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         interaction = SimpleNamespace(
             guild=guild,
             channel=SimpleNamespace(id=111, mention="#general"),
-            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
@@ -400,7 +418,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         interaction = SimpleNamespace(
             guild=guild,
             channel=SimpleNamespace(id=111, mention="#general"),
-            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
@@ -425,7 +443,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         interaction = SimpleNamespace(
             guild=SimpleNamespace(id=999, name="Guild"),
             channel=SimpleNamespace(id=111, mention="#general"),
-            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, roles=[SimpleNamespace(name="Member")], mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
@@ -434,6 +452,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
 
         await self.cog.raffle_list.callback(self.cog, interaction)
 
+        response.defer.assert_not_awaited()
         embed = response.send_message.await_args.kwargs["embed"]
         self.assertEqual(embed.title, "Missing Permissions")
         log_channel.send.assert_not_awaited()
@@ -451,7 +470,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         interaction = SimpleNamespace(
             guild=guild,
             channel=SimpleNamespace(id=111, mention="#general"),
-            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
@@ -460,6 +479,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
 
         await self.cog.raffle_add.callback(self.cog, interaction, "MISSING", "55", 1)
 
+        response.defer.assert_not_awaited()
         embed = response.send_message.await_args.kwargs["embed"]
         self.assertEqual(embed.title, "Raffle Not Found")
         log_channel.send.assert_not_awaited()
@@ -494,7 +514,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         interaction = SimpleNamespace(
             guild=guild,
             channel=SimpleNamespace(id=111, mention="#general"),
-            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
@@ -528,7 +548,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         interaction = SimpleNamespace(
             guild=SimpleNamespace(id=999, name="Guild"),
             channel=SimpleNamespace(id=111, mention="#general"),
-            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
@@ -569,7 +589,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         interaction = SimpleNamespace(
             guild=SimpleNamespace(id=999, name="Guild"),
             channel=SimpleNamespace(id=111, mention="#general"),
-            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
@@ -602,7 +622,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         interaction = SimpleNamespace(
             guild=SimpleNamespace(id=999, name="Guild"),
             channel=SimpleNamespace(id=111, mention="#general"),
-            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
@@ -639,7 +659,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         interaction = SimpleNamespace(
             guild=SimpleNamespace(id=999, name="Guild"),
             channel=SimpleNamespace(id=RAFFLE_LOG_CHANNEL_ID, mention="#raffles"),
-            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
@@ -674,7 +694,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         interaction = SimpleNamespace(
             guild=SimpleNamespace(id=999, name="Guild"),
             channel=SimpleNamespace(id=111, mention="#general"),
-            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
@@ -728,7 +748,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         interaction = SimpleNamespace(
             guild=SimpleNamespace(id=999, name="Guild"),
             channel=SimpleNamespace(id=111, mention="#general"),
-            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
@@ -873,7 +893,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         interaction = SimpleNamespace(
             guild=guild,
             channel=SimpleNamespace(id=111, mention="#general"),
-            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
@@ -938,7 +958,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         interaction = SimpleNamespace(
             guild=guild,
             channel=SimpleNamespace(id=111, mention="#general"),
-            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
@@ -1036,7 +1056,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         interaction = SimpleNamespace(
             guild=SimpleNamespace(id=999, name="Guild"),
             channel=SimpleNamespace(id=111, mention="#general"),
-            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
@@ -1052,7 +1072,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         interaction = SimpleNamespace(
             guild=SimpleNamespace(id=999, name="Guild"),
             channel=SimpleNamespace(id=111, mention="#audit-log"),
-            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
@@ -1076,7 +1096,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         interaction = SimpleNamespace(
             guild=SimpleNamespace(id=999, name="Guild"),
             channel=SimpleNamespace(id=RAFFLE_LOG_CHANNEL_ID, mention="#raffle"),
-            user=SimpleNamespace(id=1, guild_permissions=member_permissions, mention="<@1>"),
+            user=SimpleNamespace(id=1, guild_permissions=member_permissions, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
             response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )

@@ -185,7 +185,6 @@ class AutoRoleUpdater(commands.Cog):
             return
 
         async with aiohttp.ClientSession() as session:
-            requested_member_count = 0
             for user_data in self.verified_users:
                 # Stop the current batch immediately after either endpoint returns 429.
                 if self._rate_limit_is_active():
@@ -200,10 +199,8 @@ class AutoRoleUpdater(commands.Cog):
                 if not member:
                     continue
 
-                if requested_member_count:
-                    await asyncio.sleep(self.REQUEST_DELAY_SECONDS)
-                requested_member_count += 1
-
+                # Each Habbo endpoint already passes through the shared adaptive
+                # request limiter, so no separate per-member delay is needed.
                 user_json = await self.fetch_habbo_user(session, habbo_name)
                 if not user_json:
                     continue

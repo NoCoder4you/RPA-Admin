@@ -569,6 +569,44 @@ class AutoRoleUpdaterRateLimitTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(AutoRoleUpdater.MIN_HABBO_REQUESTS_PER_INTERVAL, 60)
         self.assertEqual(AutoRoleUpdater.update_roles_task.minutes, 10.0)
 
+    async def test_update_loop_relies_on_shared_request_limiter_between_members(self) -> None:
+        """Multiple members should sync without a removed per-member delay setting."""
+
+        from COGS.ServerAutoRolesRPA import AutoRoleUpdater
+
+        cog = AutoRoleUpdater.__new__(AutoRoleUpdater)
+        cog.bot = SimpleNamespace(
+            get_guild=lambda _guild_id: SimpleNamespace(
+                get_member=lambda member_id: SimpleNamespace(id=member_id, mention=f"<@{member_id}>"),
+                get_channel=lambda _channel_id: None,
+            )
+        )
+        cog.guild_id = 1
+        cog.log_channel_id = 2
+        cog.load_roles_data = unittest.mock.MagicMock(return_value={})
+        cog.load_server_data = unittest.mock.MagicMock(
+            return_value=[
+                {"discord_id": "10", "habbo_username": "One"},
+                {"discord_id": "20", "habbo_username": "Two"},
+            ]
+        )
+        cog._rate_limit_is_active = unittest.mock.MagicMock(return_value=False)
+        cog.fetch_habbo_user = AsyncMock(
+            side_effect=[
+                {"uniqueId": "habbo-10", "motto": ""},
+                {"uniqueId": "habbo-20", "motto": ""},
+            ]
+        )
+        cog.fetch_habbo_groups = AsyncMock(return_value=[])
+        cog.assign_roles = AsyncMock(return_value=(None, None))
+
+        # Call the task coroutine directly so the test does not start a scheduler.
+        await AutoRoleUpdater.update_roles_task.coro(cog)
+
+        self.assertEqual(cog.fetch_habbo_user.await_count, 2)
+        self.assertEqual(cog.fetch_habbo_groups.await_count, 2)
+        self.assertEqual(cog.assign_roles.await_count, 2)
+
     async def test_request_limiter_waits_for_four_second_spacing(self) -> None:
         """Concurrent API paths should share the same request-start spacing."""
 

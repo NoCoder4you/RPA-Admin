@@ -722,6 +722,7 @@ class RaffleCog(commands.Cog):
         user: str,
         entries: app_commands.Range[int, 1] = 1,
     ) -> None:
+        await self._defer_public_response(interaction)
         if not await self._check_permissions(interaction):
             return
         if interaction.guild is None:

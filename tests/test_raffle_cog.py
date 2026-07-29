@@ -1032,8 +1032,8 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(winners, [1, 3])
         self.assertEqual(len(set(winners)), 2)
 
-    async def test_entries_preview_limits_large_raffles(self) -> None:
-        entrants = {str(i): {"username": f"User{i}", "entries": 1} for i in range(25)}
+    async def test_entries_uses_continuation_embeds_for_large_raffles(self) -> None:
+        entrants = {str(i): {"username": f"User{i}", "entries": 1} for i in range(45)}
         self.cog._raffles = {
             "ABC12345": {
                 "raffle_id": "ABC12345",
@@ -1063,8 +1063,17 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
 
         await self.cog.raffle_entries.callback(self.cog, interaction, "ABC12345")
 
-        embed = response.send_message.await_args.kwargs["embed"]
-        self.assertIn("and 5 more user(s)", embed.fields[-1].value)
+        first_embed = response.send_message.await_args.kwargs["embed"]
+        continuation_embeds = [call.kwargs["embed"] for call in interaction.followup.send.await_args_list]
+
+        self.assertEqual(len(first_embed.fields[-1].value.splitlines()), 20)
+        self.assertEqual([embed.title for embed in continuation_embeds], ["Entries for Big Event — Part 2", "Entries for Big Event — Part 3"])
+        self.assertEqual([len(embed.fields[-1].value.splitlines()) for embed in continuation_embeds], [20, 5])
+
+        # Every entrant is present exactly once across the complete page set.
+        displayed_entries = "\n".join(embed.fields[-1].value for embed in [first_embed, *continuation_embeds])
+        for user_id in entrants:
+            self.assertEqual(displayed_entries.count(f"<@{user_id}> —"), 1)
 
     async def test_create_sends_log_embed_and_stores_message_id(self) -> None:
         member_permissions = SimpleNamespace(manage_guild=True, administrator=False)

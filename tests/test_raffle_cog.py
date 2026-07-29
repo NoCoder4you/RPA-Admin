@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import tempfile
 import unittest
@@ -719,6 +720,68 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(restored_entry, original_entry)
         persisted = json.loads(self.storage_path.read_text(encoding="utf-8"))
         self.assertEqual(persisted["raffles"]["ABC12345"]["entrants"]["text:external player"], original_entry)
+
+    async def test_failed_remove_does_not_overwrite_concurrent_add(self) -> None:
+        self.cog._raffles = {
+            "ABC12345": {
+                "raffle_id": "ABC12345",
+                "name": "Spring Event",
+                "description": None,
+                "guild_id": 999,
+                "channel_id": 111,
+                "created_by": 10,
+                "created_at": "2026-03-23T00:00:00+00:00",
+                "active": True,
+                "allow_multiple_entries": True,
+                "entrants": {"text:external player": {"username": "External Player", "entries": 3}},
+                "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
+            }
+        }
+        response_started = asyncio.Event()
+        release_failed_response = asyncio.Event()
+        response_error = discord.HTTPException(MagicMock(status=500, reason="error"), "response failed")
+
+        async def fail_after_concurrent_command_starts(**kwargs: object) -> None:
+            response_started.set()
+            await release_failed_response.wait()
+            raise response_error
+
+        common_interaction = {
+            "guild": SimpleNamespace(id=999, name="Guild"),
+            "channel": SimpleNamespace(id=111, mention="#general"),
+            "user": SimpleNamespace(id=1, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
+            "followup": SimpleNamespace(send=AsyncMock()),
+        }
+        remove_interaction = SimpleNamespace(
+            **common_interaction,
+            response=SimpleNamespace(is_done=lambda: False, send_message=AsyncMock(side_effect=fail_after_concurrent_command_starts)),
+        )
+        add_interaction = SimpleNamespace(
+            **common_interaction,
+            response=SimpleNamespace(is_done=lambda: False, send_message=AsyncMock(), defer=AsyncMock()),
+        )
+
+        remove_task = asyncio.create_task(
+            self.cog.raffle_remove.callback(self.cog, remove_interaction, "ABC12345", "External Player", 2)
+        )
+        await response_started.wait()
+        add_task = asyncio.create_task(
+            self.cog.raffle_add.callback(self.cog, add_interaction, "ABC12345", "External Player", 2)
+        )
+        await asyncio.sleep(0)
+
+        # The add must wait while the failed removal owns the raffle transaction.
+        self.assertEqual(self.cog._raffles["ABC12345"]["entrants"]["text:external player"]["entries"], 1)
+        release_failed_response.set()
+        results = await asyncio.gather(remove_task, add_task, return_exceptions=True)
+
+        self.assertIsInstance(results[0], discord.HTTPException)
+        self.assertIsNone(results[1])
+        self.assertEqual(self.cog._raffles["ABC12345"]["entrants"]["text:external player"]["entries"], 5)
+        persisted = json.loads(self.storage_path.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["raffles"]["ABC12345"]["entrants"]["text:external player"]["entries"], 5)
 
     async def test_remove_rejects_empty_user_text(self) -> None:
         self.cog._raffles = {

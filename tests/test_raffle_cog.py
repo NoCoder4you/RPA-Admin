@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -147,6 +148,87 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("<@55>", embed.description)
         self.assertEqual(embed.fields[0].name, "Raffle ID")
         self.assertEqual(embed.fields[1].name, "User Total Entries")
+
+    async def test_add_rolls_back_new_entry_when_interaction_response_fails(self) -> None:
+        self.cog._raffles = {
+            "ABC12345": {
+                "raffle_id": "ABC12345",
+                "name": "Spring Event",
+                "description": None,
+                "guild_id": 999,
+                "channel_id": 111,
+                "created_by": 10,
+                "created_at": "2026-03-23T00:00:00+00:00",
+                "active": True,
+                "allow_multiple_entries": True,
+                "entrants": {},
+                "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
+            }
+        }
+        response_error = discord.HTTPException(MagicMock(status=500, reason="error"), "response failed")
+        response = SimpleNamespace(
+            is_done=lambda: False,
+            send_message=AsyncMock(side_effect=response_error),
+            defer=AsyncMock(),
+        )
+        interaction = SimpleNamespace(
+            guild=SimpleNamespace(id=999, name="Guild"),
+            channel=SimpleNamespace(id=111, mention="#general"),
+            user=SimpleNamespace(id=1, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
+            response=response,
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+
+        with patch.object(self.cog, "_send_entry_audit_log", AsyncMock()) as audit_log:
+            with self.assertRaises(discord.HTTPException):
+                await self.cog.raffle_add.callback(self.cog, interaction, "ABC12345", "External Player", 2)
+
+        self.assertEqual(self.cog._raffles["ABC12345"]["entrants"], {})
+        persisted = json.loads(self.storage_path.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["raffles"]["ABC12345"]["entrants"], {})
+        audit_log.assert_not_awaited()
+
+    async def test_add_restores_existing_entry_when_interaction_response_fails(self) -> None:
+        original_entry = {"username": "External Player", "entries": 2}
+        self.cog._raffles = {
+            "ABC12345": {
+                "raffle_id": "ABC12345",
+                "name": "Spring Event",
+                "description": None,
+                "guild_id": 999,
+                "channel_id": 111,
+                "created_by": 10,
+                "created_at": "2026-03-23T00:00:00+00:00",
+                "active": True,
+                "allow_multiple_entries": True,
+                "entrants": {"text:external player": original_entry},
+                "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
+            }
+        }
+        response_error = discord.HTTPException(MagicMock(status=500, reason="error"), "response failed")
+        interaction = SimpleNamespace(
+            guild=SimpleNamespace(id=999, name="Guild"),
+            channel=SimpleNamespace(id=111, mention="#general"),
+            user=SimpleNamespace(id=1, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
+            response=SimpleNamespace(
+                is_done=lambda: False,
+                send_message=AsyncMock(side_effect=response_error),
+                defer=AsyncMock(),
+            ),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+
+        with self.assertRaises(discord.HTTPException):
+            await self.cog.raffle_add.callback(self.cog, interaction, "ABC12345", "External Player", 3)
+
+        restored_entry = self.cog._raffles["ABC12345"]["entrants"]["text:external player"]
+        self.assertEqual(restored_entry, original_entry)
+        persisted = json.loads(self.storage_path.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["raffles"]["ABC12345"]["entrants"]["text:external player"], original_entry)
 
     async def test_add_skips_dm_for_unverified_user(self) -> None:
         self.cog._raffles = {

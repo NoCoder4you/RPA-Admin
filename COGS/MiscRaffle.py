@@ -819,6 +819,9 @@ class RaffleCog(commands.Cog):
         # user lookup, DM, and audit-log operations are about to begin.
         await self._defer_public_response(interaction)
 
+        # Retain the complete previous value so a failed Discord interaction can
+        # restore both new and existing entrants without losing their label.
+        previous_entry = dict(existing_entry) if existing_entry is not None else None
         raffle["entrants"][user_key] = {
             "username": entrant_label,
             "entries": new_count,
@@ -837,15 +840,6 @@ class RaffleCog(commands.Cog):
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                     entrant_user = None
 
-        if entrant_user is not None:
-            dm_sent = await self._send_entry_dm(
-                entrant_user,
-                raffle_name=raffle["name"],
-                guild_name=interaction.guild.name if interaction.guild else "Unknown Server",
-                added_by=interaction.user,
-                entry_count=new_count,
-            )
-
         embed = self._build_embed(
             "Entry Added",
             f"Added {entries if raffle['allow_multiple_entries'] else 1} entrie(s) for **{entrant_label}** in **{raffle['name']}**.",
@@ -859,8 +853,43 @@ class RaffleCog(commands.Cog):
         embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
         embed.add_field(name="User Total Entries", value=str(new_count), inline=True)
 
+        # Confirm that Discord accepted the interaction before sending DMs or audit
+        # notices. If the interaction token expired (or Discord otherwise rejects
+        # the reply), roll back the persisted entry so a failed command has no effect.
+        try:
+            await self._respond_and_log(
+                interaction,
+                embed=embed,
+                ephemeral=True,
+                channel_id=raffle["log_channel_id"],
+                public_response=True,
+                mirror_to_log=True,
+            )
+        except discord.HTTPException:
+            if previous_entry is None:
+                raffle["entrants"].pop(user_key, None)
+            else:
+                raffle["entrants"][user_key] = previous_entry
+            await self._save_raffles()
+            LOGGER.exception(
+                "Rolled back raffle %s entry for %s after the interaction response failed",
+                raffle["raffle_id"],
+                user_key,
+            )
+            raise
+
         # Keep the public/staff-facing raffle embed concise by removing DM status details.
-        # The delivery outcome is still captured in the dedicated audit-log channel.
+        # The delivery outcome is still captured in the dedicated audit-log channel,
+        # and both side effects happen only after a successful interaction response.
+        if entrant_user is not None:
+            dm_sent = await self._send_entry_dm(
+                entrant_user,
+                raffle_name=raffle["name"],
+                guild_name=interaction.guild.name if interaction.guild else "Unknown Server",
+                added_by=interaction.user,
+                entry_count=new_count,
+            )
+
         await self._send_entry_audit_log(
             interaction=interaction,
             raffle=raffle,
@@ -871,7 +900,6 @@ class RaffleCog(commands.Cog):
             is_verified_user=is_verified_user,
             dm_sent=dm_sent if entrant_user is not None else False,
         )
-        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True, mirror_to_log=True)
 
     @raffle.command(name="remove", description="Remove one or more entries from a raffle member.")
     @app_commands.describe(

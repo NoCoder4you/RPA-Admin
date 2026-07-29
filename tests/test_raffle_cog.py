@@ -145,6 +145,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
 
         response.defer.assert_awaited_once_with(ephemeral=False)
         self.assertEqual(self.cog._raffles["ABC12345"]["entrants"]["55"]["entries"], 4)
+        self.assertEqual(self.cog._raffles["ABC12345"]["last_entry_inputted_by"], 1)
         embed = response.send_message.await_args.kwargs["embed"]
         self.assertNotIn("<@55>", embed.description)
         self.assertEqual(embed.fields[0].name, "Raffle ID")
@@ -206,6 +207,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
                 "allow_multiple_entries": True,
                 "entrants": {"text:external player": original_entry},
                 "winners": [],
+                "last_entry_inputted_by": 99,
                 "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
                 "log_message_id": None,
             }
@@ -228,8 +230,10 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
 
         restored_entry = self.cog._raffles["ABC12345"]["entrants"]["text:external player"]
         self.assertEqual(restored_entry, original_entry)
+        self.assertEqual(self.cog._raffles["ABC12345"]["last_entry_inputted_by"], 99)
         persisted = json.loads(self.storage_path.read_text(encoding="utf-8"))
         self.assertEqual(persisted["raffles"]["ABC12345"]["entrants"]["text:external player"], original_entry)
+        self.assertEqual(persisted["raffles"]["ABC12345"]["last_entry_inputted_by"], 99)
 
     async def test_add_skips_dm_for_unverified_user(self) -> None:
         self.cog._raffles = {
@@ -1282,6 +1286,7 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
                 "allow_multiple_entries": True,
                 "entrants": entrants,
                 "winners": [],
+                "last_entry_inputted_by": 42,
                 "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
                 "log_message_id": None,
             }
@@ -1301,6 +1306,8 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         first_embed = response.send_message.await_args.kwargs["embed"]
         continuation_embeds = [call.kwargs["embed"] for call in interaction.followup.send.await_args_list]
 
+        self.assertEqual(first_embed.description, "Last Entry Inputted by <@42>")
+        self.assertTrue(all(embed.description == "Last Entry Inputted by <@42>" for embed in continuation_embeds))
         self.assertEqual(len(first_embed.fields[-1].value.splitlines()), 20)
         self.assertEqual([embed.title for embed in continuation_embeds], ["Entries for Big Event — Part 2", "Entries for Big Event — Part 3"])
         self.assertEqual([len(embed.fields[-1].value.splitlines()) for embed in continuation_embeds], [20, 5])

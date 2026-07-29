@@ -427,12 +427,12 @@ class RaffleCog(commands.Cog):
 
     @staticmethod
     def _display_entrant_label(entrant_key: str, entrant: dict[str, Any]) -> str:
-        """Format entrant labels without allowing stored names to apply Markdown styling."""
+        """Format free-text entrant names as inline code while preserving mentions."""
         if entrant_key.isdigit():
             return f"<@{entrant_key}>"
-        # Numeric keys intentionally remain real Discord mentions, while free-text
-        # names are escaped so characters such as *, _, and ~ display literally.
-        return discord.utils.escape_markdown(str(entrant.get("username", entrant_key)))
+        # Keep the stored name unchanged so all special characters remain allowed;
+        # surrounding backticks make Discord display the name as a single code label.
+        return f"`{entrant.get('username', entrant_key)}`"
 
     def _total_entries(self, raffle: dict[str, Any]) -> int:
         return sum(entrant["entries"] for entrant in raffle["entrants"].values())

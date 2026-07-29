@@ -1032,12 +1032,14 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(winners, [1, 3])
         self.assertEqual(len(set(winners)), 2)
 
-    def test_display_entrant_label_escapes_discord_markdown_in_names(self) -> None:
+    def test_display_entrant_label_wraps_special_character_names_in_backticks(self) -> None:
         entrant = {"username": "**Bold** _Italic_ ~~Strike~~", "entries": 1}
 
         label = self.cog._display_entrant_label("text:styled user", entrant)
 
-        self.assertEqual(label, r"\*\*Bold\*\* \_Italic\_ \~\~Strike\~\~")
+        # Preserve every character in the stored name and add the requested inline
+        # code delimiters instead of altering the name with Markdown escapes.
+        self.assertEqual(label, "`**Bold** _Italic_ ~~Strike~~`")
 
     def test_display_entrant_label_preserves_discord_mentions(self) -> None:
         entrant = {"username": "**Stored Name**", "entries": 1}

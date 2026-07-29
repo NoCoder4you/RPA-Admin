@@ -199,6 +199,10 @@ class RaffleCog(commands.Cog):
         normalized["raffle_id"] = raffle_id
         normalized["entrants"] = entrants
         normalized["winners"] = winners
+        # Older raffle records predate entry attribution. Keep them loadable while
+        # validating any attribution value that is present in newer records.
+        last_entry_inputted_by = raffle_data.get("last_entry_inputted_by")
+        normalized["last_entry_inputted_by"] = last_entry_inputted_by if isinstance(last_entry_inputted_by, int) else None
         return normalized
 
     async def _fetch_log_channel(self, channel_id: int = RAFFLE_LOG_CHANNEL_ID) -> discord.TextChannel | None:
@@ -469,7 +473,11 @@ class RaffleCog(commands.Cog):
 
             embed = self._build_embed(
                 title,
-                raffle.get("description") or "No description provided.",
+                (
+                    f"Last Entry Inputted by <@{raffle['last_entry_inputted_by']}>"
+                    if raffle.get("last_entry_inputted_by") is not None
+                    else "No entries have been inputted yet."
+                ),
             )
             if page_number == 1:
                 # Summary fields only need to appear on the first page; subsequent
@@ -729,6 +737,7 @@ class RaffleCog(commands.Cog):
             "allow_multiple_entries": allow_multiple_entries,
             "entrants": {},
             "winners": [],
+            "last_entry_inputted_by": None,
             "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
             "log_message_id": None,
         }
@@ -831,12 +840,15 @@ class RaffleCog(commands.Cog):
             await self._defer_public_response(interaction)
 
             # Retain the complete previous value so a failed Discord interaction can
-            # restore both new and existing entrants without losing their label.
+            # restore both new and existing entrants without losing their label or
+            # incorrectly crediting an entry that Discord never confirmed.
             previous_entry = dict(existing_entry) if existing_entry is not None else None
+            previous_last_entry_inputted_by = raffle.get("last_entry_inputted_by")
             raffle["entrants"][user_key] = {
                 "username": entrant_label,
                 "entries": new_count,
             }
+            raffle["last_entry_inputted_by"] = interaction.user.id
             await self._save_raffles()
             # Only DM players who are present in VerifiedUsers.json.
             # Unverified free-text entrants are accepted but will not receive entry DMs.
@@ -881,6 +893,7 @@ class RaffleCog(commands.Cog):
                     raffle["entrants"].pop(user_key, None)
                 else:
                     raffle["entrants"][user_key] = previous_entry
+                raffle["last_entry_inputted_by"] = previous_last_entry_inputted_by
                 await self._save_raffles()
                 LOGGER.exception(
                     "Rolled back raffle %s entry for %s after the interaction response failed",

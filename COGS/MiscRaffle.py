@@ -969,6 +969,10 @@ class RaffleCog(commands.Cog):
             )
             return
 
+        # Preserve the full entrant record before changing it. Discord can reject
+        # an expired or otherwise invalid interaction after the storage write, and
+        # in that case the removal must be reversible without losing its label.
+        previous_entry = dict(entrant)
         removed_entries = entrant["entries"] if not raffle["allow_multiple_entries"] else min(entries, entrant["entries"])
         remaining_entries = entrant["entries"] - removed_entries
         if remaining_entries <= 0 or not raffle["allow_multiple_entries"]:
@@ -986,7 +990,26 @@ class RaffleCog(commands.Cog):
         )
         embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
         embed.add_field(name="User Total Entries", value=str(remaining_entries), inline=True)
-        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True, mirror_to_log=True)
+        try:
+            await self._respond_and_log(
+                interaction,
+                embed=embed,
+                ephemeral=True,
+                channel_id=raffle["log_channel_id"],
+                public_response=True,
+                mirror_to_log=True,
+            )
+        except discord.HTTPException:
+            # Restore partial and complete removals alike, then persist the rollback
+            # so a failed `/raffle remove` leaves no change after a bot restart.
+            raffle["entrants"][user_key] = previous_entry
+            await self._save_raffles()
+            LOGGER.exception(
+                "Rolled back raffle %s entry removal for %s after the interaction response failed",
+                raffle["raffle_id"],
+                user_key,
+            )
+            raise
 
     @raffle.command(name="entries", description="View entries for a raffle.")
     @app_commands.describe(raffle_id="The raffle ID to inspect.")

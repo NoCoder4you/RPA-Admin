@@ -648,6 +648,78 @@ class RaffleCogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(embed.fields[0].name, "Raffle ID")
         self.assertEqual(embed.fields[1].name, "User Total Entries")
 
+    async def test_remove_restores_partially_removed_entry_when_interaction_response_fails(self) -> None:
+        original_entry = {"username": "External Player", "entries": 3}
+        self.cog._raffles = {
+            "ABC12345": {
+                "raffle_id": "ABC12345",
+                "name": "Spring Event",
+                "description": None,
+                "guild_id": 999,
+                "channel_id": 111,
+                "created_by": 10,
+                "created_at": "2026-03-23T00:00:00+00:00",
+                "active": True,
+                "allow_multiple_entries": True,
+                "entrants": {"text:external player": dict(original_entry)},
+                "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
+            }
+        }
+        response_error = discord.HTTPException(MagicMock(status=500, reason="error"), "response failed")
+        interaction = SimpleNamespace(
+            guild=SimpleNamespace(id=999, name="Guild"),
+            channel=SimpleNamespace(id=111, mention="#general"),
+            user=SimpleNamespace(id=1, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
+            response=SimpleNamespace(is_done=lambda: False, send_message=AsyncMock(side_effect=response_error)),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+
+        with self.assertRaises(discord.HTTPException):
+            await self.cog.raffle_remove.callback(self.cog, interaction, "ABC12345", "External Player", 2)
+
+        restored_entry = self.cog._raffles["ABC12345"]["entrants"]["text:external player"]
+        self.assertEqual(restored_entry, original_entry)
+        persisted = json.loads(self.storage_path.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["raffles"]["ABC12345"]["entrants"]["text:external player"], original_entry)
+
+    async def test_remove_restores_fully_removed_entry_when_interaction_response_fails(self) -> None:
+        original_entry = {"username": "External Player", "entries": 1}
+        self.cog._raffles = {
+            "ABC12345": {
+                "raffle_id": "ABC12345",
+                "name": "Spring Event",
+                "description": None,
+                "guild_id": 999,
+                "channel_id": 111,
+                "created_by": 10,
+                "created_at": "2026-03-23T00:00:00+00:00",
+                "active": True,
+                "allow_multiple_entries": True,
+                "entrants": {"text:external player": original_entry},
+                "winners": [],
+                "log_channel_id": RAFFLE_LOG_CHANNEL_ID,
+                "log_message_id": None,
+            }
+        }
+        response_error = discord.HTTPException(MagicMock(status=500, reason="error"), "response failed")
+        interaction = SimpleNamespace(
+            guild=SimpleNamespace(id=999, name="Guild"),
+            channel=SimpleNamespace(id=111, mention="#general"),
+            user=SimpleNamespace(id=1, roles=[SimpleNamespace(name="Rank Seller")], mention="<@1>"),
+            response=SimpleNamespace(is_done=lambda: False, send_message=AsyncMock(side_effect=response_error)),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+
+        with self.assertRaises(discord.HTTPException):
+            await self.cog.raffle_remove.callback(self.cog, interaction, "ABC12345", "External Player", 1)
+
+        restored_entry = self.cog._raffles["ABC12345"]["entrants"]["text:external player"]
+        self.assertEqual(restored_entry, original_entry)
+        persisted = json.loads(self.storage_path.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["raffles"]["ABC12345"]["entrants"]["text:external player"], original_entry)
+
     async def test_remove_rejects_empty_user_text(self) -> None:
         self.cog._raffles = {
             "ABC12345": {

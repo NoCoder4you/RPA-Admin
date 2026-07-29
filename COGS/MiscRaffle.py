@@ -427,13 +427,55 @@ class RaffleCog(commands.Cog):
 
     @staticmethod
     def _display_entrant_label(entrant_key: str, entrant: dict[str, Any]) -> str:
-        """Format entrant labels without assuming every key maps to a Discord mention."""
+        """Format entrant labels without allowing stored names to apply Markdown styling."""
         if entrant_key.isdigit():
             return f"<@{entrant_key}>"
-        return str(entrant.get("username", entrant_key))
+        # Numeric keys intentionally remain real Discord mentions, while free-text
+        # names are escaped so characters such as *, _, and ~ display literally.
+        return discord.utils.escape_markdown(str(entrant.get("username", entrant_key)))
 
     def _total_entries(self, raffle: dict[str, Any]) -> int:
         return sum(entrant["entries"] for entrant in raffle["entrants"].values())
+
+    def _build_entries_embeds(self, raffle: dict[str, Any]) -> list[discord.Embed]:
+        """Build enough embeds to show every entrant without truncating the list."""
+        entrant_lines = [
+            f"{self._display_entrant_label(user_id, entrant)} — **{entrant['entries']}** entrie(s)"
+            for user_id, entrant in sorted(
+                raffle["entrants"].items(),
+                key=lambda item: (-item[1]["entries"], item[1]["username"].lower()),
+            )
+        ]
+        # Keep each entrants field comfortably below Discord's embed field limit,
+        # and create continuation pages rather than hiding the remaining users.
+        entrant_pages = [
+            entrant_lines[index : index + MAX_ENTRIES_DISPLAY]
+            for index in range(0, len(entrant_lines), MAX_ENTRIES_DISPLAY)
+        ] or [[]]
+
+        embeds: list[discord.Embed] = []
+        for page_number, entrant_page in enumerate(entrant_pages, start=1):
+            title = f"Entries for {raffle['name']}"
+            if page_number > 1:
+                title += f" — Part {page_number}"
+
+            embed = self._build_embed(
+                title,
+                raffle.get("description") or "No description provided.",
+            )
+            if page_number == 1:
+                # Summary fields only need to appear on the first page; subsequent
+                # embeds are clearly titled continuations of the same raffle.
+                embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
+                embed.add_field(name="Status", value="Active" if raffle["active"] else "Inactive", inline=True)
+                embed.add_field(name="Unique Users", value=str(len(raffle["entrants"])), inline=True)
+                embed.add_field(name="Total Entries", value=str(self._total_entries(raffle)), inline=True)
+                embed.add_field(name="Multiple Entries", value="Enabled" if raffle["allow_multiple_entries"] else "Disabled", inline=True)
+
+            entrants_value = "\n".join(entrant_page) if entrant_page else "No entries have been added yet."
+            embed.add_field(name="Entrants", value=entrants_value, inline=False)
+            embeds.append(embed)
+        return embeds
 
     def _build_raffle_list_value(self, raffle: dict[str, Any]) -> str:
         """Format a raffle summary so the ID and raffle name each appear in their own subheading-style block."""
@@ -929,29 +971,15 @@ class RaffleCog(commands.Cog):
             await self._respond_and_log(interaction, embed=self._build_embed("Raffle Not Found", "That raffle ID does not exist in this server.", color=discord.Color.red()), ephemeral=True)
             return
 
-        embed = self._build_embed(
-            f"Entries for {raffle['name']}",
-            raffle.get("description") or "No description provided.",
-        )
-        embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
-        embed.add_field(name="Status", value="Active" if raffle["active"] else "Inactive", inline=True)
-        embed.add_field(name="Unique Users", value=str(len(raffle["entrants"])), inline=True)
-        embed.add_field(name="Total Entries", value=str(self._total_entries(raffle)), inline=True)
-        embed.add_field(name="Multiple Entries", value="Enabled" if raffle["allow_multiple_entries"] else "Disabled", inline=True)
+        embeds = self._build_entries_embeds(raffle)
+        await self._respond_and_log(interaction, embed=embeds[0], ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True, mirror_to_log=True)
 
-        if not raffle["entrants"]:
-            embed.add_field(name="Entrants", value="No entries have been added yet.", inline=False)
-        else:
-            entrant_lines = []
-            for user_id, entrant in sorted(raffle["entrants"].items(), key=lambda item: (-item[1]["entries"], item[1]["username"].lower())):
-                entrant_lines.append(f"{self._display_entrant_label(user_id, entrant)} — **{entrant['entries']}** entrie(s)")
-            if len(entrant_lines) <= MAX_ENTRIES_DISPLAY:
-                embed.add_field(name="Entrants", value="\n".join(entrant_lines), inline=False)
-            else:
-                preview = "\n".join(entrant_lines[:MAX_ENTRIES_DISPLAY])
-                embed.add_field(name="Entrants", value=f"{preview}\n...and {len(entrant_lines) - MAX_ENTRIES_DISPLAY} more user(s).", inline=False)
-
-        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True, mirror_to_log=True)
+        for continuation_embed in embeds[1:]:
+            # Once the first interaction response is sent, Discord requires all
+            # continuation pages to use the follow-up webhook.
+            await interaction.followup.send(embed=continuation_embed, ephemeral=False)
+            if not self._is_same_channel_as_log(interaction, raffle["log_channel_id"]):
+                await self._mirror_embed_to_log_channel(continuation_embed, channel_id=raffle["log_channel_id"])
 
     @raffle.command(name="draw", description="Draw one or more unique winners from a raffle.")
     @app_commands.describe(

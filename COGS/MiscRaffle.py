@@ -79,6 +79,10 @@ class RaffleCog(commands.Cog):
         self.bot = bot
         self.storage_path = storage_path or DEFAULT_STORAGE_PATH
         self._storage_lock = asyncio.Lock()
+        # Serialize entrant mutations per raffle. A rollback must finish before a
+        # second command reads or changes the same raffle, otherwise restoring an
+        # old snapshot could overwrite the newer command's successful update.
+        self._entrant_mutation_locks: dict[str, asyncio.Lock] = {}
         self._raffles: dict[str, dict[str, Any]] = {}
         self.verified_store = VerifiedUserStore()
         # Reuse the shared server configuration store so raffle audit notices
@@ -98,6 +102,10 @@ class RaffleCog(commands.Cog):
             raffle_id = uuid4().hex[:8].upper()
             if raffle_id not in self._raffles:
                 return raffle_id
+
+    def _get_entrant_mutation_lock(self, raffle_id: str) -> asyncio.Lock:
+        """Return the lock that serializes add/remove transactions for one raffle."""
+        return self._entrant_mutation_locks.setdefault(raffle_id, asyncio.Lock())
 
     def _default_payload(self) -> dict[str, Any]:
         return {"raffles": {}}
@@ -798,45 +806,92 @@ class RaffleCog(commands.Cog):
 
         verified_discord_id = self._find_verified_discord_id(entrant_label)
         user_key = self._build_entrant_key(entrant_label, verified_discord_id)
-        existing_entry = raffle["entrants"].get(user_key)
-        current_count = existing_entry["entries"] if existing_entry else 0
+        # Hold this lock through persistence and the Discord response so a rollback
+        # cannot restore a snapshot over another command's successful mutation.
+        async with self._get_entrant_mutation_lock(raffle["raffle_id"]):
+            existing_entry = raffle["entrants"].get(user_key)
+            current_count = existing_entry["entries"] if existing_entry else 0
 
-        if raffle["allow_multiple_entries"]:
-            new_count = current_count + entries
-        else:
-            if current_count >= 1:
+            if raffle["allow_multiple_entries"]:
+                new_count = current_count + entries
+            else:
+                if current_count >= 1:
+                    await self._respond_and_log(
+                        interaction,
+                        embed=self._build_embed("Entry Exists", f"**{entrant_label}** already has their single allowed entry in this raffle.", color=discord.Color.orange()),
+                        ephemeral=True,
+                        channel_id=raffle["log_channel_id"],
+                    )
+                    return
+                new_count = 1
+
+            # Keep all validation errors as immediate ephemeral responses. Only defer
+            # publicly once the request is known to be valid and the slower storage,
+            # user lookup, DM, and audit-log operations are about to begin.
+            await self._defer_public_response(interaction)
+
+            # Retain the complete previous value so a failed Discord interaction can
+            # restore both new and existing entrants without losing their label.
+            previous_entry = dict(existing_entry) if existing_entry is not None else None
+            raffle["entrants"][user_key] = {
+                "username": entrant_label,
+                "entries": new_count,
+            }
+            await self._save_raffles()
+            # Only DM players who are present in VerifiedUsers.json.
+            # Unverified free-text entrants are accepted but will not receive entry DMs.
+            is_verified_user = verified_discord_id is not None
+            dm_sent = False
+            entrant_user: discord.abc.User | None = None
+            if is_verified_user and verified_discord_id is not None:
+                entrant_user = self.bot.get_user(verified_discord_id)
+                if entrant_user is None:
+                    try:
+                        entrant_user = await self.bot.fetch_user(verified_discord_id)
+                    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                        entrant_user = None
+
+            embed = self._build_embed(
+                "Entry Added",
+                f"Added {entries if raffle['allow_multiple_entries'] else 1} entrie(s) for **{entrant_label}** in **{raffle['name']}**.",
+                color=discord.Color.green(),
+            )
+            # Reuse the verified Habbo avatar on the staff-facing confirmation embed so
+            # moderators can immediately identify which player the entry update belongs to.
+            thumbnail_url = self._get_habbo_thumbnail_url(verified_discord_id) if verified_discord_id is not None else None
+            if thumbnail_url:
+                embed.set_thumbnail(url=thumbnail_url)
+            embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
+            embed.add_field(name="User Total Entries", value=str(new_count), inline=True)
+
+            # Confirm that Discord accepted the interaction before sending DMs or audit
+            # notices. If the interaction token expired (or Discord otherwise rejects
+            # the reply), roll back the persisted entry so a failed command has no effect.
+            try:
                 await self._respond_and_log(
                     interaction,
-                    embed=self._build_embed("Entry Exists", f"**{entrant_label}** already has their single allowed entry in this raffle.", color=discord.Color.orange()),
+                    embed=embed,
                     ephemeral=True,
                     channel_id=raffle["log_channel_id"],
+                    public_response=True,
+                    mirror_to_log=True,
                 )
-                return
-            new_count = 1
+            except discord.HTTPException:
+                if previous_entry is None:
+                    raffle["entrants"].pop(user_key, None)
+                else:
+                    raffle["entrants"][user_key] = previous_entry
+                await self._save_raffles()
+                LOGGER.exception(
+                    "Rolled back raffle %s entry for %s after the interaction response failed",
+                    raffle["raffle_id"],
+                    user_key,
+                )
+                raise
 
-        # Keep all validation errors as immediate ephemeral responses. Only defer
-        # publicly once the request is known to be valid and the slower storage,
-        # user lookup, DM, and audit-log operations are about to begin.
-        await self._defer_public_response(interaction)
-
-        raffle["entrants"][user_key] = {
-            "username": entrant_label,
-            "entries": new_count,
-        }
-        await self._save_raffles()
-        # Only DM players who are present in VerifiedUsers.json.
-        # Unverified free-text entrants are accepted but will not receive entry DMs.
-        is_verified_user = verified_discord_id is not None
-        dm_sent = False
-        entrant_user: discord.abc.User | None = None
-        if is_verified_user and verified_discord_id is not None:
-            entrant_user = self.bot.get_user(verified_discord_id)
-            if entrant_user is None:
-                try:
-                    entrant_user = await self.bot.fetch_user(verified_discord_id)
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    entrant_user = None
-
+        # Keep the public/staff-facing raffle embed concise by removing DM status details.
+        # The delivery outcome is still captured in the dedicated audit-log channel,
+        # and both side effects happen only after a successful interaction response.
         if entrant_user is not None:
             dm_sent = await self._send_entry_dm(
                 entrant_user,
@@ -846,21 +901,6 @@ class RaffleCog(commands.Cog):
                 entry_count=new_count,
             )
 
-        embed = self._build_embed(
-            "Entry Added",
-            f"Added {entries if raffle['allow_multiple_entries'] else 1} entrie(s) for **{entrant_label}** in **{raffle['name']}**.",
-            color=discord.Color.green(),
-        )
-        # Reuse the verified Habbo avatar on the staff-facing confirmation embed so
-        # moderators can immediately identify which player the entry update belongs to.
-        thumbnail_url = self._get_habbo_thumbnail_url(verified_discord_id) if verified_discord_id is not None else None
-        if thumbnail_url:
-            embed.set_thumbnail(url=thumbnail_url)
-        embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
-        embed.add_field(name="User Total Entries", value=str(new_count), inline=True)
-
-        # Keep the public/staff-facing raffle embed concise by removing DM status details.
-        # The delivery outcome is still captured in the dedicated audit-log channel.
         await self._send_entry_audit_log(
             interaction=interaction,
             raffle=raffle,
@@ -871,7 +911,6 @@ class RaffleCog(commands.Cog):
             is_verified_user=is_verified_user,
             dm_sent=dm_sent if entrant_user is not None else False,
         )
-        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True, mirror_to_log=True)
 
     @raffle.command(name="remove", description="Remove one or more entries from a raffle member.")
     @app_commands.describe(
@@ -920,45 +959,71 @@ class RaffleCog(commands.Cog):
 
         verified_discord_id = self._find_verified_discord_id(entrant_label)
         user_key = self._build_entrant_key(entrant_label, verified_discord_id)
-        entrant = raffle["entrants"].get(user_key)
-        # Keep legacy numeric-ID entries removable for staff even if they were
-        # stored before free-text entrant keys were introduced.
-        if entrant is None and verified_discord_id is None:
-            parsed_discord_id = self._parse_discord_id_from_text(entrant_label)
-            if parsed_discord_id is not None:
-                user_key = str(parsed_discord_id)
-                entrant = raffle["entrants"].get(user_key)
-        if entrant is None:
-            await self._respond_and_log(
-                interaction,
-                embed=self._build_embed(
-                    "User Not Entered",
-                    f"**{entrant_label}** does not have any entries in this raffle.",
-                    color=discord.Color.orange(),
-                ),
-                ephemeral=True,
-                channel_id=raffle["log_channel_id"],
+        # Use the same per-raffle transaction boundary as `/raffle add` so
+        # concurrent removals and additions cannot be lost during rollback.
+        async with self._get_entrant_mutation_lock(raffle["raffle_id"]):
+            entrant = raffle["entrants"].get(user_key)
+            # Keep legacy numeric-ID entries removable for staff even if they were
+            # stored before free-text entrant keys were introduced.
+            if entrant is None and verified_discord_id is None:
+                parsed_discord_id = self._parse_discord_id_from_text(entrant_label)
+                if parsed_discord_id is not None:
+                    user_key = str(parsed_discord_id)
+                    entrant = raffle["entrants"].get(user_key)
+            if entrant is None:
+                await self._respond_and_log(
+                    interaction,
+                    embed=self._build_embed(
+                        "User Not Entered",
+                        f"**{entrant_label}** does not have any entries in this raffle.",
+                        color=discord.Color.orange(),
+                    ),
+                    ephemeral=True,
+                    channel_id=raffle["log_channel_id"],
+                )
+                return
+
+            # Preserve the full entrant record before changing it. Discord can reject
+            # an expired or otherwise invalid interaction after the storage write, and
+            # in that case the removal must be reversible without losing its label.
+            previous_entry = dict(entrant)
+            removed_entries = entrant["entries"] if not raffle["allow_multiple_entries"] else min(entries, entrant["entries"])
+            remaining_entries = entrant["entries"] - removed_entries
+            if remaining_entries <= 0 or not raffle["allow_multiple_entries"]:
+                raffle["entrants"].pop(user_key, None)
+                remaining_entries = 0
+            else:
+                entrant["entries"] = remaining_entries
+                entrant["username"] = entrant_label
+
+            await self._save_raffles()
+            embed = self._build_embed(
+                "Entries Removed",
+                f"Removed {removed_entries} entrie(s) for **{entrant_label}** in **{raffle['name']}**.",
+                color=discord.Color.green(),
             )
-            return
-
-        removed_entries = entrant["entries"] if not raffle["allow_multiple_entries"] else min(entries, entrant["entries"])
-        remaining_entries = entrant["entries"] - removed_entries
-        if remaining_entries <= 0 or not raffle["allow_multiple_entries"]:
-            raffle["entrants"].pop(user_key, None)
-            remaining_entries = 0
-        else:
-            entrant["entries"] = remaining_entries
-            entrant["username"] = entrant_label
-
-        await self._save_raffles()
-        embed = self._build_embed(
-            "Entries Removed",
-            f"Removed {removed_entries} entrie(s) for **{entrant_label}** in **{raffle['name']}**.",
-            color=discord.Color.green(),
-        )
-        embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
-        embed.add_field(name="User Total Entries", value=str(remaining_entries), inline=True)
-        await self._respond_and_log(interaction, embed=embed, ephemeral=True, channel_id=raffle["log_channel_id"], public_response=True, mirror_to_log=True)
+            embed.add_field(name="Raffle ID", value=raffle["raffle_id"], inline=True)
+            embed.add_field(name="User Total Entries", value=str(remaining_entries), inline=True)
+            try:
+                await self._respond_and_log(
+                    interaction,
+                    embed=embed,
+                    ephemeral=True,
+                    channel_id=raffle["log_channel_id"],
+                    public_response=True,
+                    mirror_to_log=True,
+                )
+            except discord.HTTPException:
+                # Restore partial and complete removals alike, then persist the rollback
+                # so a failed `/raffle remove` leaves no change after a bot restart.
+                raffle["entrants"][user_key] = previous_entry
+                await self._save_raffles()
+                LOGGER.exception(
+                    "Rolled back raffle %s entry removal for %s after the interaction response failed",
+                    raffle["raffle_id"],
+                    user_key,
+                )
+                raise
 
     @raffle.command(name="entries", description="View entries for a raffle.")
     @app_commands.describe(raffle_id="The raffle ID to inspect.")
